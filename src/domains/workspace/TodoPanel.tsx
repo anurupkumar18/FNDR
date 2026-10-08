@@ -108,7 +108,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
             {
                 id: "briefing-request",
                 label: "Generating daily briefing",
-                actor: "Local briefing model",
+                actor: "Written from your captures, no model",
                 status: "running",
                 evidence: "ipc-boundary",
                 atMs: startedAtMs,
@@ -128,7 +128,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 setBriefingActivity(recordActivityStep(startedTrace, {
                     id: "briefing-request",
                     label: briefing ? "Daily briefing ready" : "Daily briefing checked",
-                    actor: "Local briefing model",
+                    actor: "Written from your captures, no model",
                     status: briefing ? "completed" : "degraded",
                     evidence: "result-metadata",
                     atMs: finishedAtMs,
@@ -146,7 +146,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 setBriefingActivity(recordActivityStep(startedTrace, {
                     id: "briefing-request",
                     label: "Daily briefing unavailable",
-                    actor: "Local briefing model",
+                    actor: "Written from your captures, no model",
                     status: "failed",
                     evidence: "ipc-boundary",
                     atMs: finishedAtMs,

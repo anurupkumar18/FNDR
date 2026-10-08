@@ -2021,65 +2021,11 @@ pub async fn generate_daily_briefing(
     mode: Option<String>,
 ) -> Result<String, String> {
     // The part of the day decides the briefing, unless the caller names one.
+    // It is written without a model: see `briefing.rs` for why.
     let now = chrono::Local::now();
     let resolved_mode =
         mode.unwrap_or_else(|| crate::briefing::mode_for_hour(now.hour()).to_string());
-
-    // Activity from that window only: today for a recap, since yesterday
-    // for a morning briefing. Never simply the last few captures.
-    let results = state
-        .store
-        .get_search_results_in_range(
-            crate::briefing::window_start_ms(&resolved_mode, now),
-            now.timestamp_millis(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut results = super::stats::surfaceable_daily_records(results);
-    results.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
-
-    let mut cards: Vec<MemoryCard> = results
-        .into_iter()
-        .take(10)
-        .map(memory_card_from_result)
-        .collect();
-    refine_memory_card_titles(&mut cards);
-    let activity: Vec<(String, String, String)> = cards
-        .into_iter()
-        .map(|card| (card.app_name, card.title, card.summary))
-        .collect();
-
-    // What the person has open, so the briefing can name it.
-    let open_tasks: Vec<String> =
-        crate::tasks::suggest::open_commitments(state.store.list_tasks().await.unwrap_or_default())
-            .into_iter()
-            .map(|task| task.title)
-            .collect();
-
-    // Too little to say means no briefing, not a restated capture.
-    let Some(card_lines) = crate::briefing::briefing_lines(&activity, &open_tasks) else {
-        return Ok(String::new());
-    };
-
-    // Grab inference engine
-    let engine = {
-        let guard = state.inference.read();
-        guard.as_ref().map(Arc::clone)
-    };
-
-    // No model, no answer, or the notes handed straight back: say it plainly.
-    let briefing = match engine {
-        Some(engine) => {
-            engine
-                .generate_daily_briefing(&card_lines, &resolved_mode)
-                .await
-        }
-        None => String::new(),
-    };
-    if briefing.trim().is_empty() {
-        return Ok(crate::briefing::plain_briefing(&activity, &open_tasks));
-    }
-    Ok(briefing)
+    Ok(crate::briefing::briefing_for(&state, &resolved_mode, now).await)
 }
 
 #[tauri::command]

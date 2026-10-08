@@ -1,9 +1,9 @@
-//! What the daily briefing is given: the right part of the day, activity
-//! from that window only, the person's open tasks, and nothing at all when
-//! there is too little to say.
+//! The daily briefing is written without a model: the right part of the
+//! day, activity from that window only, each piece of work said once, the
+//! person's open tasks, and nothing at all when there is too little to say.
 
 use chrono::{Local, TimeZone};
-use fndr_lib::briefing::{briefing_lines, mode_for_hour, window_start_ms, MIN_ACTIVITY_LINES};
+use fndr_lib::briefing::{mode_for_hour, plain_briefing, window_start_ms, MIN_ACTIVITY_LINES};
 
 #[test]
 fn before_noon_looks_ahead_and_from_noon_looks_back_on_today() {
@@ -29,51 +29,91 @@ fn a_recap_covers_today_and_a_morning_briefing_reaches_back_one_day() {
     assert_eq!(window_start_ms("morning", now), yesterday);
 }
 
-fn activity(count: usize) -> Vec<(String, String, String)> {
-    (0..count)
-        .map(|n| {
-            (
-                "Mail".to_string(),
-                format!("Thread {n}"),
-                format!("Replied to thread {n}."),
-            )
-        })
-        .collect()
+fn note(app: &str, title: &str, summary: &str) -> (String, String, String) {
+    (app.to_string(), title.to_string(), summary.to_string())
+}
+
+/// Newest first, as the store returns them.
+fn a_day() -> Vec<(String, String, String)> {
+    vec![
+        note("Mail", "Inbox", "Replied to the lab report thread."),
+        note(
+            "Google Chrome",
+            "Gamete Chromosome Count",
+            "Answered questions on meiosis and gamete chromosome counts",
+        ),
+        note(
+            "UserNotificationCenter",
+            "Notification",
+            "A banner appeared.",
+        ),
+        note(
+            "Claude",
+            "FNDR",
+            "Reviewed the app's development status, including commits and UI rendering.",
+        ),
+        note(
+            "Claude",
+            "FNDR",
+            "Completed a repair of the FNDR database and verified the result.",
+        ),
+    ]
 }
 
 #[test]
 fn too_little_activity_means_no_briefing() {
-    assert!(briefing_lines(&activity(MIN_ACTIVITY_LINES - 1), &[]).is_none());
-    assert!(briefing_lines(&activity(MIN_ACTIVITY_LINES), &[]).is_some());
+    let day = a_day();
+    assert_eq!(plain_briefing(&day[..1], &[]), "");
+    assert_eq!(MIN_ACTIVITY_LINES, 3);
+    // Two captures of one thing and a notification banner are one piece of work.
+    let thin = vec![day[4].clone(), day[4].clone(), day[2].clone()];
+    assert_eq!(plain_briefing(&thin, &[]), "");
 }
 
 #[test]
-fn open_tasks_lead_and_system_processes_are_left_out() {
-    let mut cards = activity(3);
-    cards.push((
-        "UserNotificationCenter".to_string(),
-        "Notification".to_string(),
-        "A banner appeared.".to_string(),
-    ));
-    let tasks = vec![
-        "Send Priya the draft report".to_string(),
-        "Book the conference room".to_string(),
-        "Renew the lease".to_string(),
-        "Pay the invoice".to_string(),
-    ];
-    let lines = briefing_lines(&cards, &tasks).expect("enough activity");
-    assert_eq!(lines[0], "- Open task: Send Priya the draft report");
+fn the_briefing_tells_the_day_in_order_one_sentence_per_piece_of_work() {
     assert_eq!(
-        lines
-            .iter()
-            .filter(|line| line.starts_with("- Open task:"))
-            .count(),
-        3
+        plain_briefing(&a_day(), &[]),
+        // The two Claude captures are one piece of work; its latest state is told.
+        "Reviewed the app's development status, including commits and UI rendering. \
+         Answered questions on meiosis and gamete chromosome counts. \
+         Replied to the lab report thread."
     );
-    assert!(lines
-        .iter()
-        .all(|line| !line.contains("UserNotificationCenter")));
-    assert!(lines
-        .iter()
-        .any(|line| line == "- Thread 0: Replied to thread 0. (in Mail)"));
+}
+
+#[test]
+fn open_tasks_close_the_briefing_and_the_rest_are_counted() {
+    let one = vec!["Submit the peer review".to_string()];
+    assert!(plain_briefing(&a_day(), &one)
+        .ends_with("Replied to the lab report thread. Still open: Submit the peer review."));
+    let three = vec![
+        "Submit the peer review.".to_string(),
+        "Book the room".to_string(),
+        "Renew the lease".to_string(),
+    ];
+    assert!(plain_briefing(&a_day(), &three)
+        .ends_with("Still open: Submit the peer review, and 2 more."));
+}
+
+#[test]
+fn a_narrated_or_placeholder_summary_is_never_quoted() {
+    let mut day = a_day();
+    day[0] = note("Mail", "Inbox", "The user is viewing the inbox.");
+    day[1] = note(
+        "Google Chrome",
+        "Canvas",
+        "Screen capture (visual): Google_Chrome_1790643908348.png",
+    );
+    day.push(note(
+        "Notes",
+        "Ideas",
+        "Listed demo ideas for the capstone.",
+    ));
+    let briefing = plain_briefing(&day, &[]);
+    assert!(!briefing.to_lowercase().contains("the user"), "{briefing}");
+    assert!(!briefing.contains("Screen capture"), "{briefing}");
+    assert!(
+        briefing.contains("Listed demo ideas for the capstone."),
+        "{briefing}"
+    );
 }

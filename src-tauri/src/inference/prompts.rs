@@ -285,42 +285,6 @@ TRANSCRIPT:\n{transcript}"
     )
 }
 
-/// `daily_briefing`: `evening` recaps the day, anything else looks ahead.
-/// Returns the system prompt and the closing task line for the user message.
-pub(crate) fn daily_briefing(mode: &str) -> (String, &'static str) {
-    if mode == "evening" {
-        (
-            format!(
-                "You write a concise end-of-day briefing from today's memory notes.\n\
-                RULES:\n\
-                - Write 1 to 3 sentences in plain English.\n\
-                - Say what was worked on today, naming the specific things in the notes.\n\
-                - If a note is marked as an open task, or says something was left unfinished, say so. Otherwise say nothing about tomorrow.\n\
-                - Never give advice, a lesson or a takeaway. Report only what the notes say happened.\n\
-                - The app named at the end of a note is where it happened, not who did it. Never write that an app did the work.\n\
-                {VOICE_RULES}\n\
-                {EVIDENCE_RULES}"
-            ),
-            "Based on today's activity below, write the end-of-day briefing paragraph.\nReturn only the paragraph, nothing else.",
-        )
-    } else {
-        (
-            format!(
-                "You write a concise morning briefing from recent memory notes.\n\
-                RULES:\n\
-                - Write 1 to 3 sentences in plain English.\n\
-                - Say what was in progress most recently, naming the specific things in the notes.\n\
-                - If a note is marked as an open task, or says something was left unfinished, say so. Otherwise do not suggest what to do.\n\
-                - Never give advice, a lesson or a takeaway. Report only what the notes say happened.\n\
-                - The app named at the end of a note is where it happened, not who did it. Never write that an app did the work.\n\
-                {VOICE_RULES}\n\
-                {EVIDENCE_RULES}"
-            ),
-            "Based on recent activity below, write the morning briefing paragraph.\nReturn only the paragraph, nothing else.",
-        )
-    }
-}
-
 // ============================================================================
 // Evals
 // ============================================================================
@@ -387,8 +351,6 @@ mod tests {
 
     /// Every prompt a production path sends, by task id.
     fn live_prompts() -> Vec<(&'static str, String)> {
-        let (evening, _) = daily_briefing("evening");
-        let (morning, _) = daily_briefing("morning");
         vec![
             ("memory_extraction", MEMORY_EXTRACTION_SYSTEM.to_string()),
             ("memory_snippet", memory_snippet_system()),
@@ -411,15 +373,16 @@ mod tests {
                 "meeting_breakdown",
                 format!("{MEETING_BREAKDOWN_SYSTEM}\n{}", meeting_breakdown_user("")),
             ),
-            ("daily_briefing_evening", evening),
-            ("daily_briefing_morning", morning),
             ("operator_plan", OPERATOR_PLANNER_SYSTEM.to_string()),
             ("operator_step", OPERATOR_STEP_SYSTEM.to_string()),
             ("hermes_memory_context", HERMES_MEMORY_PREAMBLE.to_string()),
             ("hermes_chat", HERMES_CHAT_INSTRUCTIONS.to_string()),
             ("hermes_identity", HERMES_IDENTITY.to_string()),
             ("hermes_operating_notes", HERMES_OPERATING_NOTES.to_string()),
-            ("hermes_attached_memories", HERMES_ATTACHED_MEMORIES_HEADER.to_string()),
+            (
+                "hermes_attached_memories",
+                HERMES_ATTACHED_MEMORIES_HEADER.to_string(),
+            ),
         ]
     }
 
@@ -437,8 +400,6 @@ mod tests {
         ("todo_extraction", 0xc07a95f3b2b771ba),
         ("task_suggestion", 0x77de0f208306860c),
         ("meeting_breakdown", 0x2151d54fcb2190a3),
-        ("daily_briefing_evening", 0xe899fbb7c2f990b8),
-        ("daily_briefing_morning", 0x7df3c1d4dc4c24d5),
         ("operator_plan", 0x278df4e24a6da082),
         ("operator_step", 0x8450c23b4a601c54),
         ("hermes_memory_context", 0x6a6ecf6986fe9ea6),

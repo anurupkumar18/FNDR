@@ -35,8 +35,6 @@ const APP_SWITCH_WINDOW: usize = 15;
 const APP_SWITCH_RECENT_CAPACITY: usize = 20;
 const APP_SWITCH_THRESHOLD: usize = 8;
 const APP_SWITCH_UNIQUE_THRESHOLD: usize = 6;
-const BRIEFING_MIN_MEMORIES: usize = 3;
-const BRIEFING_MAX_CARD_LINES: usize = 20;
 const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
@@ -493,57 +491,27 @@ fn main() {
                             && ((8..=10).contains(&hour) || (18..=20).contains(&hour))
                         {
                             let mode = if hour < 12 { "morning" } else { "evening" };
-                            if let Some(engine) = notif_state.inference_engine() {
-                                // Gather today's memory snippets for briefing
-                                let start_of_day = now
-                                    .date_naive()
-                                    .and_hms_opt(0, 0, 0)
-                                    .map(|t| t.and_utc().timestamp_millis())
-                                    .unwrap_or(0);
-                                let now_ms = chrono::Utc::now().timestamp_millis();
-                                let memories = notif_state
-                                    .store
-                                    .get_memories_in_range(start_of_day, now_ms)
-                                    .await
-                                    .unwrap_or_default();
-
-                                if memories.len() >= BRIEFING_MIN_MEMORIES {
-                                    let card_lines: Vec<String> = memories
-                                        .iter()
-                                        .take(BRIEFING_MAX_CARD_LINES)
-                                        .map(|m| {
-                                            format!(
-                                                "[{}] {} — {}",
-                                                m.app_name, m.window_title, m.snippet
-                                            )
-                                        })
-                                        .collect();
-
-                                    let briefing = engine
-                                        .generate_daily_briefing(&card_lines, mode)
-                                        .await;
-
-                                    if !briefing.trim().is_empty() {
-                                        let title = if mode == "morning" {
-                                            "☀️ FNDR Morning Briefing"
-                                        } else {
-                                            "🌙 FNDR Evening Recap"
-                                        };
-                                        let _ = notif_handle.emit(
-                                            "fndr_notification",
-                                            serde_json::json!({
-                                                "title": title,
-                                                "body": briefing,
-                                                "kind": "briefing",
-                                            }),
-                                        );
-                                        tracing::info!(
-                                            "Sent {} briefing notification",
-                                            mode
-                                        );
-                                        briefing_sent_today = true;
-                                    }
-                                }
+                            // Written without a model, from the same code as
+                            // the To-dos briefing. Empty when the window holds
+                            // too little to say, and then nothing is sent.
+                            let briefing =
+                                fndr_lib::briefing::briefing_for(&notif_state, mode, now).await;
+                            if !briefing.trim().is_empty() {
+                                let title = if mode == "morning" {
+                                    "☀️ FNDR Morning Briefing"
+                                } else {
+                                    "🌙 FNDR Evening Recap"
+                                };
+                                let _ = notif_handle.emit(
+                                    "fndr_notification",
+                                    serde_json::json!({
+                                        "title": title,
+                                        "body": briefing,
+                                        "kind": "briefing",
+                                    }),
+                                );
+                                tracing::info!("Sent {} briefing notification", mode);
+                                briefing_sent_today = true;
                             }
                         }
 

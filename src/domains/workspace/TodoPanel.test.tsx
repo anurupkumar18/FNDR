@@ -54,7 +54,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TodoPanel", () => {
-    it("traces the daily briefing model request without exposing its text", async () => {
+    it("traces the daily briefing request without exposing its text", async () => {
         ipc.generateDailyBriefing.mockResolvedValueOnce("Prioritize the release checklist.");
         render(<TodoPanel isVisible onClose={vi.fn()} />);
 

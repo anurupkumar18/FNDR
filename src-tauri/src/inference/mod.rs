@@ -263,45 +263,6 @@ fn echoes_source_lines(output: &str, source: &str) -> bool {
             .all(|line| source.contains(line.trim_end_matches('.')))
 }
 
-/// A briefing is one short paragraph. The model tends to write several and
-/// then repeat itself until it runs out of tokens, so keep the first
-/// paragraph, at most three finished sentences.
-fn clean_briefing_output(raw: &str) -> String {
-    let first_paragraph = raw
-        .trim()
-        .trim_matches(|ch| ch == '"' || ch == '\'')
-        .split("\n\n")
-        .next()
-        .unwrap_or_default();
-    let kept =
-        crate::summariser::sentences::split_sentences(&normalize_whitespace(first_paragraph))
-            .into_iter()
-            .filter(|sentence| !is_briefing_advice(sentence))
-            .collect::<Vec<_>>()
-            .join(" ");
-    crate::summariser::sentences::complete_sentences(&kept, 3)
-}
-
-/// A sentence that tells the reader what to do or learn. The notes record
-/// what happened; they hold no advice, so the model made it up.
-fn is_briefing_advice(sentence: &str) -> bool {
-    let lower = sentence.to_lowercase();
-    [
-        "takeaway",
-        "it is important to",
-        "it's important to",
-        "be sure to",
-        "make sure to",
-        "remember to",
-        "ensuring that",
-        "should ensure",
-        "is to ensure",
-        "going forward",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
-
 fn is_usable_summary(summary: &str) -> bool {
     let trimmed = summary.trim();
     if trimmed.len() < 8 {
@@ -1644,37 +1605,6 @@ impl InferenceEngine {
         Some(draft)
     }
 
-    /// Generate a smart daily briefing paragraph from today's memory cards.
-    /// `mode` is either "morning" (actionable: what to work on) or "evening" (recap + tomorrow).
-    pub async fn generate_daily_briefing(&self, card_lines: &[String], mode: &str) -> String {
-        if card_lines.is_empty() {
-            return String::new();
-        }
-
-        let cards_block = card_lines.join("\n");
-
-        let (system_msg, task_instruction) = prompts::daily_briefing(mode);
-
-        let user_msg = format!(
-            "RECENT ACTIVITY:\n{}\n\n{}",
-            cards_block.chars().take(900).collect::<String>(),
-            task_instruction
-        );
-
-        let prompt = match self.build_prompt(&system_msg, &user_msg) {
-            Ok(p) => p,
-            Err(err) => {
-                tracing::error!("Daily briefing prompt build failed: {}", err);
-                return String::new();
-            }
-        };
-
-        tracing::debug!("Generating daily briefing (mode={})...", mode);
-        let raw = self.complete_task("daily_briefing", &prompt, 160).await;
-
-        clean_briefing_output(&raw)
-    }
-
     fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
         // Null bytes in input indicate a real upstream data issue (broken OCR,
         // bad decode) rather than something to silently paper over. Log and strip.
@@ -2168,24 +2098,6 @@ mod tests {
     }
 
     #[test]
-    fn briefing_drops_advice_the_notes_never_gave() {
-        let raw = "Repaired the FNDR database and verified the result. A key takeaway for tomorrow is ensuring that all database backups are properly stored. Studied meiosis and gamete chromosome counts in Chrome.";
-        assert_eq!(
-            clean_briefing_output(raw),
-            "Repaired the FNDR database and verified the result. Studied meiosis and gamete chromosome counts in Chrome."
-        );
-    }
-
-    #[test]
-    fn briefing_keeps_one_paragraph_of_finished_sentences() {
-        let raw = "Fixed the capture test. Reviewed the forecast. Carry forward the retune. A fourth point.\n\nFixed the capture test again and aga";
-        assert_eq!(
-            clean_briefing_output(raw),
-            "Fixed the capture test. Reviewed the forecast. Carry forward the retune."
-        );
-    }
-
-    #[test]
     fn summary_cleanup_removes_narrator_and_reader() {
         assert_eq!(
             clean_summary_output("The user reviewed the PR"),
@@ -2654,7 +2566,7 @@ mod tests {
         );
     }
 
-    /// Runs the memory-writing, card, answer and briefing prompts over the
+    /// Runs the memory-writing, card and answer prompts over the
     /// synthetic captures and prints each output with deterministic checks:
     /// no narrator, word budget, parseable JSON, and no obedience to an
     /// instruction planted in the captured text. Read the CHECK lines.
@@ -2690,7 +2602,6 @@ mod tests {
             println!("OUT {task:10} {name:22} [{words:>2}w] {output}");
         };
 
-        let mut briefing_lines = Vec::new();
         for (name, app, window, text) in &cases {
             let text = format!("{text}\n{PLANTED}");
             let snippet = engine.summarize_memory_node(app, window, &text).await;
@@ -2732,9 +2643,6 @@ mod tests {
                 }
                 None => check("card_sum", name, "", 8, 22),
             }
-            if !snippet.is_empty() {
-                briefing_lines.push(format!("[{app}] {window}: {snippet}"));
-            }
         }
 
         let grounded = engine
@@ -2752,11 +2660,6 @@ mod tests {
             .await;
         println!("OUT answer     not_in_snippets        {missing}");
         let not_found_ok = missing.trim() == prompts::ANSWER_NOT_FOUND;
-        for mode in ["evening", "morning"] {
-            let briefing = engine.generate_daily_briefing(&briefing_lines, mode).await;
-            check("briefing", mode, &briefing, 12, 80);
-        }
-
         println!(
             "CHECK outputs={total} narrator={narrator} obeyed_planted_instruction={obeyed} empty={empty} outside_word_budget={budget} not_found_reply_exact={not_found_ok}"
         );
