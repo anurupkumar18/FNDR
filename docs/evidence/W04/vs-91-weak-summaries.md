@@ -57,7 +57,23 @@ With FNDR closed and the database backed up, `repair_truncated_summaries --apply
 
 The last row is the strong-match rule (`strong-match.md`), not this repair.
 
+## Second review pass on the repaired copy, 2026-10-07
+
+`review_preview --limit 40 --quiet` on the copy that already had the second repair, with the on-device model. It picked 33 weak rows: 6 were rewritten, 12 were refused by the guards, and 15 were skipped because they have no text to review.
+
+| | Before | After |
+|---|---|---|
+| Narrated | 14 (9%) | 11 (7%) |
+| Placeholder | 19 (12%) | 17 (11%) |
+| Weak rows shown to the person | 18 | 14 |
+| Weak rows hidden as low signal | 15 | 14 |
+
+How the summaries a person sees open after the pass: 51 with a past-tense verb, 22 describe a thing ("The ...", "A ..."), 39 other, 14 placeholder or empty, 3 narrator, 2 with an -ing verb, 2 dangling.
+
+Reading: a review pass moves the numbers a little. The guards refuse twice as many rewrites as they let through, which is the intended direction, and the rows that are left have no text for the model to work from.
+
 ## Not done
 
-- The six reviewed placeholders need another review pass to pick up fix 2.
-- The visual-only rows belong to the VS-90 backlog work.
+- The second repair and this review pass are on a copy only. The real vault has the first repair.
+- The 15 rows with no text belong to the VS-90 backlog work.
+- 22 shown summaries describe a thing instead of stating what happened.

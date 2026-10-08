@@ -19,7 +19,7 @@ Every sentence FNDR shows is a finished, neutral, past-tense statement backed by
 
 ## Evening session, 2026-10-07 (after the first handoff)
 
-All committed. GitHub has everything; GitLab was behind at the time of writing because a teammate's merge touches `mcp/mod.rs`, which another session held uncommitted.
+All committed and on both remotes at `9b5f0b5`.
 
 - **Briefing: no model.** Three prompt versions were measured on the 2B model: invented advice, then a word-for-word copy of its notes, then a false statement that an open task had been submitted. `briefing::briefing_for` now composes it from summaries; the `daily_briefing` prompt and its cleanup are removed. To-dos and the startup notification share it.
 - **The summary written without a model** (`build_low_ram_semantic_fusion`) used to say "You were reviewing {a line of body text} on {app}" with activity "reviewing" and an invented intent. It now says "Viewed {title or files} in {app}".
@@ -37,7 +37,7 @@ All committed. GitHub has everything; GitLab was behind at the time of writing b
 1. The model picks `reviewing_agent_output` for 52 of 158 memories. The label is offered in the prompt and overused.
 2. 32 visible summaries still open with "The" or "A" and 35 with a title or noun phrase: the model's own sentences.
 3. Strong match: a time phrase counts as topic evidence; one fresh negative passed unexplained. Not touched tonight.
-4. Six reviewed placeholder summaries need another review pass.
+4. Done on a copy: a second review pass rewrote 6 rows, the guards refused 12, 15 had no text. Visible weak rows went 18 to 14 (`docs/evidence/W04/vs-91-weak-summaries.md`).
 5. `vault_qa` first-place counts move by one to three between runs under load; compare top-five and same-title figures.
 
 ## Shipped today, by area
