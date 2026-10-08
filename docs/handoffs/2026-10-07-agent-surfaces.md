@@ -6,6 +6,33 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
+## Update 3, 2026-10-07 (read this first)
+
+- **Pushed.** `main` was merged with upstream (Minh's reopen work) and pushed; local and both remotes are in sync. The "push is blocked" note in Update 2 is no longer true.
+- To merge, two files with another session's uncommitted edits were set aside and restored with the owner's approval: `src-tauri/src/mcp/mod.rs` and `src-tauri/src/context_runtime/mod.rs`. Both are back; the first now sits on top of upstream's changes to it.
+- Checks on the merged tree: typecheck clean, 260 front-end tests, 118 focused Rust tests.
+- The Codex session has its own stash in the list ("codex DEC-02 isolated worktree transfer"). Leave it alone.
+
+Left from the five-hour plan, in order:
+
+1. Tests for the stale-gateway kill (`reap_stale_hermes_gateway`) and the operate setter (`set_computer_use_enabled`). Same approach as `until_halted` and `unless_stopped`: pull the decision into a small function and test that.
+2. Ten fixture screens and the twenty-task Notch Do set (breakdown parts 0.3 and F1).
+3. The six live checks, approved by the owner (end of the phase 1 evidence file). Needs the pinned Hermes installed first.
+4. Fixes for what the live checks find.
+
+To make the product better for a person using it, after the checks pass (owner asked for this on 2026-10-07). Each is a small slice with a test:
+
+| Part | What the person gets |
+| --- | --- |
+| A11.1 | Agent replies render lists, code and links instead of plain text |
+| A11.5 | A `[2]` in a reply opens that memory |
+| A9.6 | The chat shows when Hermes searched memory, not only the final answer |
+| C11.1, C11.3 | Notch Do's result says which steps FNDR checked and which it took on the model's word, and what can be undone |
+| C13.3 | A list of past Notch Do runs with their outcome, reachable from Privacy |
+| A6.6 | Related memories skip excluded apps the same way Search does (confirm, then test) |
+| B7.5 | Screen Guide falls back to the local model when ChatGPT is signed out or over its limit, and says so |
+| C9.5 | A request in the never tier is refused at the plan card, not after steps have run |
+
 ## Update 2, 2026-10-07
 
 - Local `main` is ahead of `origin/main` by my commits `f45faa0`, `c156d93`, `055d36f` and the Agent stop test, plus another session's `98fe16e`; it is also behind by nine upstream commits (Minh's reopen merges).
