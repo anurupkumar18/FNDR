@@ -131,6 +131,22 @@ Decisions taken but not built yet: E6 (the transcript reaching the cloud before 
 
 To verify on a real run: that Hermes 0.18 at the pinned commit honors `platform_toolsets.api_server` and the MCP `tools.include` list the way 0.13 does (read from 0.13's source, the only complete copy on this Mac); that Notch Do still completes the Spotify and web-search example with the tighter browser rules.
 
+## Phase 5 progress (2026-10-07)
+
+Commit `f45faa0`. 116 Rust tests pass, run in the repo now that the shared test build is fixed; 260 front-end tests pass.
+
+| Part | What changed | Check |
+| --- | --- | --- |
+| C6.1 (E6) | The notch shows what it heard for 1.2 s before sending it to be planned; Cancel keeps it on the Mac; typed requests skip the wait | `NotchHud.test.tsx`, `doRun.test.ts` |
+| C3.1 | "Operate my Mac" is stored under `operator.enabled`, read once from the old Screen Guide key; `set_computer_use_enabled` turns it on or off and ends a run when turned off | `the_operate_opt_in_moves_out_of_screen_guide_and_keeps_its_value`; the setter itself has no test |
+| A6.7, A6.8 | Hermes's instruction strings live in `inference/prompts.rs` with fingerprints and catalog rows, and describe what Hermes can do now | `inference::prompts` tests |
+| E12 | Sidebar groups: Trust (Privacy Activity) and Labs (Hermes Agent, Screen Guide, Engine diagnostics). The full five destinations remain PX-01 | App tests |
+| E10 | The OpenClicky and Operate switches carry a Labs tag | Read |
+
+Lesson for shared files: staging by hunk with zero context put three type fields in the wrong interfaces in `ed175dd`; `f45faa0` corrects them. Stage a shared file whole once it holds only this lane's changes, or use hunks with context.
+
+Still open: E11 (waits for SK-01), tests for the half-second halt, backend Stop, the stale-gateway kill and the operate setter, the fixtures and task set, and the six live checks (owner approved 2026-10-07).
+
 ## Findings added since the PRD
 
 The second pass found these. They are not in the PRD yet and several are more

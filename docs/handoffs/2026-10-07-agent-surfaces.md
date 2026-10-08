@@ -2,6 +2,10 @@
 
 Date: 2026-10-07. Written at the owner's request when the session ran low on context.
 
+## Update, later on 2026-10-07
+
+The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
+
 ## Goal
 
 Take over Kunj's agent features, find what is unsafe or unclear, decide, fix,

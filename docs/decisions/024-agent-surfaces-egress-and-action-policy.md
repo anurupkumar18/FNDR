@@ -217,13 +217,13 @@ tests; see the breakdown's progress tables.
 | E3 | A plan starts by itself only when no step can need a yes | Built |
 | E4 | Hermes is an answering surface for Beta: a planning list and read-only memory search, no terminal, files, code, browser or schedules | Built against Hermes 0.13's config; to recheck at the pinned commit |
 | E5 | Approval is a tap or a key; speech can stop and decline | Built |
-| E6 | A transcript should not reach the cloud before the person sees it | Not built: the shortcut is designed to open Do and listen, so this needs a small design, not a one-line default |
+| E6 | A transcript should not reach the cloud before the person sees it | Built: what was heard shows for 1.2 s before it is sent |
 | E7 | Browsers confirm by default with a short run list; a link the person's words do not account for waits for a tap | Built |
 | E8 | FNDR keeps sharing the Codex sign-in and says so beside Sign out | Built |
 | E9 | No updating Hermes past the pin until a version is reviewed | Built: the control and its commands are removed |
-| E10 | OpenClicky bridge moves to Labs or goes | Not built |
+| E10 | OpenClicky bridge moves to Labs or goes | Built: tagged Labs |
 | E11 | Notch Do writes to the SK-01 journal | Waits for SK-01 |
-| E12 | Agent and Notch Do sit in Labs for Beta until the release gate passes | Not built |
+| E12 | Agent and Notch Do sit in Labs for Beta until the release gate passes | Built: a Labs group in the sidebar; the full regroup is PX-01 |
 | E13 | Which account QA spends | Owner's account, when the live checks run |
 | E14 | Provider keys stay in a file readable by the owner only; Keychain later | Built |
 
