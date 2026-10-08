@@ -1651,10 +1651,16 @@ pub async fn send_hermes_message(
     hermes_cancels()
         .lock()
         .insert(conversation_id.clone(), cancel.clone());
-    let result = tokio::select! {
-        result = deliver_hermes_message(state.inner(), conversation_id.clone(), input.clone(), memory_ids.clone()) => result,
-        _ = cancel.notified() => Err(HERMES_STOPPED.to_string()),
-    };
+    let result = unless_stopped(
+        deliver_hermes_message(
+            state.inner(),
+            conversation_id.clone(),
+            input.clone(),
+            memory_ids.clone(),
+        ),
+        &cancel,
+    )
+    .await;
     {
         let mut cancels = hermes_cancels().lock();
         if cancels
@@ -1690,6 +1696,18 @@ pub async fn send_hermes_message(
         }
     }
     result
+}
+
+/// Waits for a reply unless the person stops it first. Dropping the send
+/// closes its connection, so nothing arrives or is recorded afterward.
+async fn unless_stopped<T>(
+    send: impl std::future::Future<Output = Result<T, String>>,
+    cancel: &tokio::sync::Notify,
+) -> Result<T, String> {
+    tokio::select! {
+        result = send => result,
+        _ = cancel.notified() => Err(HERMES_STOPPED.to_string()),
+    }
 }
 
 /// Stops waiting for the reply to a chat's message in flight.
@@ -2134,6 +2152,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn stopping_ends_the_wait_for_a_reply_and_a_finished_reply_is_kept() {
+        let cancel = Arc::new(tokio::sync::Notify::new());
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            stop.notify_one();
+        });
+        let never = std::future::pending::<Result<String, String>>();
+        let stopped = tokio::time::timeout(Duration::from_secs(2), unless_stopped(never, &cancel))
+            .await
+            .expect("the wait ends");
+        assert_eq!(stopped, Err(HERMES_STOPPED.to_string()));
+
+        let fresh = tokio::sync::Notify::new();
+        let reply = unless_stopped(async { Ok("done".to_string()) }, &fresh).await;
+        assert_eq!(reply, Ok("done".to_string()));
+    }
 
     fn saved(provider: &str, base_url: Option<&str>, related_memories: bool) -> HermesSetupRecord {
         HermesSetupRecord {
