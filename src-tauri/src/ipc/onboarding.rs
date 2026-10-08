@@ -35,6 +35,10 @@ extern "C" {
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
 
+#[cfg(target_os = "macos")]
+#[link(name = "Speech", kind = "framework")]
+extern "C" {}
+
 use crate::{load_ai_engines, models, AppState};
 
 // ---------------------------------------------------------------------------
@@ -275,24 +279,50 @@ fn parse_biometric_helper_output(output: &str) -> Result<bool, String> {
 // Permission checks (macOS-specific)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionState {
+    NotDetermined,
+    Restricted,
+    Denied,
+    Granted,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PermissionsStatus {
-    pub screen_recording: bool,
-    pub accessibility: bool,
-    pub microphone: bool,
+    pub screen_recording: PermissionState,
+    pub accessibility: PermissionState,
+    pub microphone: PermissionState,
+    pub speech_recognition: PermissionState,
 }
 
 #[tauri::command]
 pub async fn check_permissions() -> Result<PermissionsStatus, String> {
-    let screen = check_screen_recording_permission();
-    let accessibility = check_accessibility_permission();
+    let screen = bool_permission_state(check_screen_recording_permission());
+    let accessibility = bool_permission_state(check_accessibility_permission());
     let microphone = check_microphone_permission();
+    let speech_recognition = check_speech_recognition_permission();
 
     Ok(PermissionsStatus {
         screen_recording: screen,
         accessibility,
         microphone,
+        speech_recognition,
     })
+}
+
+fn bool_permission_state(granted: bool) -> PermissionState {
+    if granted { PermissionState::Granted } else { PermissionState::Denied }
+}
+
+fn av_authorization_state(status: i64) -> PermissionState {
+    match status {
+        0 => PermissionState::NotDetermined,
+        1 => PermissionState::Restricted,
+        2 => PermissionState::Denied,
+        3 => PermissionState::Granted,
+        _ => PermissionState::Denied,
+    }
 }
 
 pub(crate) fn check_screen_recording_permission() -> bool {
@@ -324,7 +354,7 @@ fn check_accessibility_permission() -> bool {
     output.map(|o| o.status.success()).unwrap_or(false)
 }
 
-fn check_microphone_permission() -> bool {
+fn check_microphone_permission() -> PermissionState {
     // Call +[AVCaptureDevice authorizationStatusForMediaType:] via the ObjC runtime.
     // The AVFoundation framework is linked above.
     // AVAuthorizationStatus: notDetermined=0, restricted=1, denied=2, authorized=3.
@@ -336,7 +366,7 @@ fn check_microphone_permission() -> bool {
 
         let Some(cls) = AnyClass::get("AVCaptureDevice") else {
             // AVFoundation unavailable (very old macOS) — treat as unknown/false
-            return false;
+            return PermissionState::Denied;
         };
 
         // AVMediaTypeAudio constant value is the string literal "soun"
@@ -345,11 +375,28 @@ fn check_microphone_permission() -> bool {
         let status: i64 =
             unsafe { objc2::msg_send![cls, authorizationStatusForMediaType: media_type] };
 
-        status == 3 // AVAuthorizationStatusAuthorized
+        av_authorization_state(status)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        true
+        PermissionState::Granted
+    }
+}
+
+fn check_speech_recognition_permission() -> PermissionState {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::runtime::AnyClass;
+
+        let Some(cls) = AnyClass::get("SFSpeechRecognizer") else {
+            return PermissionState::Denied;
+        };
+        let status: i64 = unsafe { objc2::msg_send![cls, authorizationStatus] };
+        av_authorization_state(status)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionState::Granted
     }
 }
 

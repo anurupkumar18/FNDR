@@ -9,6 +9,7 @@ const downloadModel = vi.fn();
 const saveOnboardingState = vi.fn();
 const getOnboardingState = vi.fn();
 const checkPermissions = vi.fn();
+const openSystemSettings = vi.fn();
 const refreshAiModels = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
@@ -16,7 +17,7 @@ vi.mock("@/shared/ipc/onboarding", () => ({
     saveOnboardingState: (...args: unknown[]) => saveOnboardingState(...args),
     requestBiometricAuth: vi.fn(),
     checkPermissions: (...args: unknown[]) => checkPermissions(...args),
-    openSystemSettings: vi.fn(),
+    openSystemSettings: (...args: unknown[]) => openSystemSettings(...args),
     listAvailableModels: (...args: unknown[]) => listAvailableModels(...args),
     downloadModel: (...args: unknown[]) => downloadModel(...args),
     refreshAiModels: (...args: unknown[]) => refreshAiModels(...args),
@@ -60,9 +61,10 @@ beforeEach(() => {
         display_name: null,
     });
     checkPermissions.mockResolvedValue({
-        screen_recording: false,
-        accessibility: false,
-        microphone: false,
+        screen_recording: "not_determined",
+        accessibility: "not_determined",
+        microphone: "not_determined",
+        speech_recognition: "not_determined",
     });
     saveOnboardingState.mockResolvedValue(undefined);
     refreshAiModels.mockResolvedValue({ ai_model_available: true });
@@ -259,7 +261,7 @@ describe("Onboarding persistence", () => {
 
         render(<Onboarding onComplete={() => {}} />);
 
-        fireEvent.click((await screen.findAllByRole("button", { name: "Grant" }))[0]);
+        fireEvent.click((await screen.findAllByRole("button", { name: "Open Settings" }))[0]);
         const trace = await screen.findByRole("region", { name: "Permission check activity" });
         expect(trace).toHaveTextContent("System Settings opened");
         expect(trace).not.toHaveTextContent("Permission granted");
@@ -287,6 +289,40 @@ describe("Onboarding persistence", () => {
         );
         expect(screen.getByRole("heading", { name: "Grant a few permissions" })).toBeInTheDocument();
         expect(onComplete).not.toHaveBeenCalled();
+    });
+});
+
+describe("Onboarding permissions", () => {
+    it("shows granted, denied, and not-yet-granted states with the exact settings panes", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        checkPermissions.mockResolvedValue({
+            screen_recording: "granted",
+            accessibility: "denied",
+            microphone: "restricted",
+            speech_recognition: "not_determined",
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        await screen.findByRole("heading", { name: "Grant a few permissions" });
+        window.dispatchEvent(new Event("focus"));
+        await waitFor(() => expect(checkPermissions).toHaveBeenCalled());
+
+        expect(await screen.findByLabelText("Screen Recording: Granted")).toBeInTheDocument();
+        expect(screen.getByLabelText("Accessibility: Denied")).toBeInTheDocument();
+        expect(screen.getByLabelText("Microphone: Restricted")).toBeInTheDocument();
+        expect(screen.getByLabelText("Speech Recognition: Not granted yet")).toBeInTheDocument();
+
+        fireEvent.click(document.getElementById("ob-perm-accessibility")!);
+        expect(openSystemSettings).toHaveBeenCalledWith("accessibility");
     });
 });
 
