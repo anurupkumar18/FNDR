@@ -615,12 +615,14 @@ Files: `src/domains/workspace/AgentWorkspace.tsx`, `CodexAccountCard.tsx`,
 - Found: 2,092 lines mixing runtime install, gateway, chat, daily briefing and a greeting. (C)
 - Do: move `generate_daily_briefing` and `get_fun_greeting` out; no behavior change.
 - Done when: tests pass unchanged.
+- Status: done 2026-10-08. Both live in `ipc/commands/home.rs`.
 
 ### A12.4 Rewrite `docs/agent.md`
 - kind: doc   size: S
 - Found: describes a deterministic Ask, Plan, Act, Learn runner; the page is Hermes chat. The `agent/` Rust module still exists and is used by MCP `agent.run`. (C)
 - Do: describe the shipped page; move the older design to a section about the MCP agent tools; add the term "Agent" to `docs/CONTEXT.md`.
 - Done when: a reader can find every command the page calls.
+- Status: done 2026-10-08. `docs/CONTEXT.md` has "Agent page" and "Notch Do".
 
 ---
 
@@ -813,6 +815,7 @@ diagnostics. Parts below add to them and do not repeat them.
 - kind: doc   size: S   needs: B9.2, C3.1
 - Do: add the ChatGPT answer path, the screenshot staging exception, the OpenClicky bridge decision, and remove the operate switch from this feature's scope.
 - Done when: the PRD matches the panel.
+- Status: done 2026-10-08 (FR7, FR9a, FR28, FR29 and the non-goal note).
 
 ---
 
@@ -1234,6 +1237,7 @@ One part per rule family, so each can be reviewed and tested alone. All are in
 - kind: cleanup   size: S
 - Do: A6.7 plus a check that `OPERATOR_INSTRUCTIONS` and Hermes strings leave the catalog's "outside prompts.rs" list.
 - Done when: that list is empty or each remaining row has a reason.
+- Status: done 2026-10-08. Two rows remain, each with its reason (MCP server text, embedding prefixes).
 
 ### D5.1 Amend the command-surface contract
 - kind: doc   size: S   needs: E3, E5

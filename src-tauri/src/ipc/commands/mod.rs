@@ -50,6 +50,9 @@ pub use hermes_agent::*;
 mod agent_chats;
 pub use agent_chats::*;
 
+mod home;
+pub use home::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
 

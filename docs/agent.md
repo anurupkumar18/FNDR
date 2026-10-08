@@ -1,71 +1,113 @@
 # FNDR Agent
 
-FNDR Agent is the local control-plane layer over FNDR memory. It is not a generic chatbot: every run starts by building an `AgentContextPack`, applying privacy scope, and checking a mode-specific tool policy.
+"Agent" means two different things in this repo. This file covers both, the page first.
 
-## Architecture
+1. **The Agent page**: a chat with Hermes, an open-source agent FNDR runs as a child process. This is what a person sees.
+2. **The MCP agent tools** (`agent.*`): a deterministic, model-free runner that outside agents call over MCP. It has no page.
+
+Decisions behind the page: [ADR 020](decisions/020-chatgpt-plan-via-codex-app-server.md), [ADR 024](decisions/024-agent-surfaces-egress-and-action-policy.md). Product requirements: `docs/superpowers/specs/2026-10-07-agent-surfaces-prd.md`.
+
+## The Agent page (Hermes chat)
+
+### What it does
+
+A person picks a provider, sends a message, and gets an answer. They can attach up to 8 memories to a message. FNDR can also add up to 5 related memories on its own.
+
+Hermes answers only. Started by FNDR it has two kinds of tools and no others:
+
+- its own `todo` planning list
+- FNDR's read-only memory tools over MCP: `memory.search_full_context`, `memory.get_context_pack`, `memory.timeline`, `memory.source_evidence`
+
+It has no terminal, file, code, browser or schedule tools. The limit is written into the Hermes config FNDR generates (`hermes_codex.rs`: `HERMES_TOOLS_YAML`, `HERMES_MCP_TOOLS`) and was checked on a live gateway (`docs/evidence/W03/agent-surfaces-phase1.md`).
+
+### Providers
+
+| Provider | Where the message goes | Related memories sent |
+|---|---|---|
+| ChatGPT (Codex sign-in) | OpenAI, on the person's ChatGPT plan | only when turned on in setup |
+| OpenRouter | OpenRouter, with the person's key | only when turned on in setup |
+| Custom endpoint | the base URL the person typed | only when turned on, unless the host is this Mac |
+| Ollama | this Mac, or the base URL set for it | always when it is on this Mac |
+
+Memories a person attaches by hand are always sent, except ones from an app excluded since they were picked. Every request to a provider is listed in Privacy Activity with the feature, the host, the bytes and what kinds of content went along, never the content.
+
+### How a message travels
 
 ```text
-capture pipeline
-  -> memory records / graph / search
+AgentWorkspace.tsx
+  -> send_hermes_message (hermes_agent.rs)
+       -> attached memories by id, minus excluded apps (agent_chats.rs)
+       -> related memories from the shared Search path (operator/memory.rs), if allowed
+       -> POST /v1/responses on the local Hermes gateway (127.0.0.1:8742)
+            -> Hermes -> the chosen provider
+       -> answer, the memories FNDR added, and what Hermes did on the way
+  -> stored in agent-chats.json (owner-only file)
+```
+
+The gateway is a pinned Hermes (`hermes_codex::HERMES_PINNED_COMMIT`) installed into FNDR's app data on first use. FNDR starts it when a message needs it, restarts it once after a crash, stops it when FNDR quits, and stops one left running by a crash at the next start. There is no manual start, stop or update control.
+
+For ChatGPT, Hermes reuses the Codex sign-in on this Mac. The Codex app-server is the only thing that refreshes the login; Hermes's copy is emptied whenever the login rotates. Signing out on the Agent page signs Codex out on this Mac too.
+
+### Commands the page calls
+
+| Command | File | Purpose |
+|---|---|---|
+| `get_hermes_bridge_status` | `hermes_agent.rs` | provider, model, install and gateway state |
+| `install_hermes_bridge` | `hermes_agent.rs` | install the pinned Hermes |
+| `save_hermes_setup` | `hermes_agent.rs` | save provider, model, key and the related-memories choice |
+| `send_hermes_message` | `hermes_agent.rs` | send one message, return the answer |
+| `cancel_hermes_message` | `hermes_agent.rs` | Stop: drop the message in flight and hand it back |
+| `list_agent_chats`, `get_agent_chat`, `delete_agent_chat` | `agent_chats.rs` | chat history |
+| `search_memory_cards`, `list_memory_cards` | `search.rs` | the memory picker |
+| `reopen_memory` | `memory.rs` | open a cited or attached memory's source |
+| `codex_account_status`, `codex_login_start`, `codex_login_cancel`, `codex_logout` | `codex_account.rs` | the ChatGPT account card |
+
+Front end: `src/domains/workspace/AgentWorkspace.tsx`, `AgentReply.tsx` (renders answers: lists, code, emphasis, http links, and `[2]` citations that open the cited memory), `CodexAccountCard.tsx`.
+
+### Instructions Hermes is given
+
+All in `src-tauri/src/inference/prompts.rs`, fingerprinted: `HERMES_CHAT_INSTRUCTIONS`, `HERMES_IDENTITY`, `HERMES_OPERATING_NOTES`, `HERMES_MEMORY_PREAMBLE`, `HERMES_ATTACHED_MEMORIES_HEADER`. Memory text is framed as evidence, not instructions.
+
+### Not built
+
+- Hermes cannot act on the Mac. Acting is Notch Do's job, under its own per-call policy (`operator/policy.rs`).
+- Chat history has no size cap yet (waits on PD-09).
+- No streaming: an answer arrives whole.
+
+## The MCP agent tools
+
+Outside agents that connect to FNDR over MCP can call `agent.build_context_pack`, `agent.run`, `agent.privacy_status`, `agent.explain_retrieval`, `agent.rate_result`, `agent.list_prompts` and `agent.get_prompt`. These use the `src-tauri/src/agent/` module and load no model.
+
+```text
+memory records / graph / search
   -> context_runtime::ContextPack
   -> agent::AgentContextPack
   -> Ask / Plan / Act / Learn response
-  -> policy / persisted audit / feedback / skill + eval drafts
+  -> policy / persisted audit / feedback / skill and eval drafts
 ```
 
-Implemented code paths:
+- `agent/context.rs`: typed context pack and the deterministic Ask, Plan, Act, Learn runner.
+- `agent/policy.rs`, `agent/risk_policy.rs`: mode-based permission and risk policy.
+- `agent/audit.rs`: append-only JSONL audit and retrieval feedback ledger.
+- `agent/skills.rs`, `agent/evals.rs`: draft shapes a person reviews before anything is activated.
+- `agent/prompts.rs`: the MCP prompt registry.
+- `ipc/commands/agent.rs`: the same functions as Tauri commands. **No page calls them today**; they are reachable only over MCP.
 
-- `src-tauri/src/agent/context.rs`: typed context pack and deterministic local Ask/Plan/Act/Learn runner.
-- `src-tauri/src/agent/policy.rs`: mode-based permission and risk policy.
-- `src-tauri/src/agent/audit.rs`: append-only JSONL audit and retrieval feedback ledger.
-- `src-tauri/src/agent/skills.rs`: user-reviewed skill candidate shape and deterministic draft generator.
-- `src-tauri/src/agent/evals.rs`: local eval case shape and deterministic draft generator.
-- `src-tauri/src/agent/prompts.rs`: FNDR-specific MCP prompt registry.
-- `src-tauri/src/ipc/commands/agent.rs`: Tauri commands for UI access.
+### Modes
 
-## Modes
+- Ask: read-only memory and context. No file writes, commands or outside messages.
+- Plan: reads memory and project context and suggests next steps. No execution.
+- Act: builds context; every action needs approval first, including opening a link or a file.
+- Learn: describes skill and eval candidates; activation needs a person's review.
 
-- Ask: read-only memory/context. No file writes, commands, or external messages.
-- Plan: read memory and project context, suggest next steps, no execution.
-- Act: context building works, but actions are approval-gated. This slice does not execute actions.
-- Learn: can describe skill/eval candidates later; activation requires user review.
+### Safety and audit
 
-## Local Provider Strategy
+Tool policy sits outside any model. File writes, mutating commands, outside messages and credential access are denied or held for approval in code.
 
-The existing Hermes/Ollama UI remains the model runtime surface. The new Agent command box works without API keys because it returns deterministic context-grounded output even when Hermes/Ollama is offline.
+Every `agent.run` call tries to append an audit row under the app support `agent/` directory: run id, mode, goal, context pack id, memories used, policy decisions, approvals required, dropped or redacted context, confidence, output summary, status and any error. A failed audit write does not fail the response; the response carries a warning instead.
 
-8GB-safe defaults:
+### Feedback
 
-- no LLM is loaded to build an AgentContextPack beyond the existing retrieval path
-- raw evidence is off
-- context budget defaults to `900` tokens for Ask mode
-- visual models are not used by this Agent path
+Callers can rate a retrieval result as `useful`, `irrelevant`, `wrong`, `stale` or `missing_context`. Ratings are stored locally and attached to the run. They do not change ranking yet.
 
-## Safety
-
-Tool policy is external to the model. Dangerous scopes such as file writes, mutating commands, external messages, and credential access are denied or approval-gated in code before any runtime is involved.
-
-Future Act mode must append `AgentAuditRecord` entries before and after approved actions.
-
-## Audit Flow
-
-Every `agent.run` call attempts to append a local audit row under the app support `agent/` directory. Audit rows include run id, mode, goal, context pack id, memories used, policy decisions, approvals required, dropped/redacted context, confidence, output summary, status, and error message if available.
-
-Audit write failures do not crash successful agent responses; the response includes an audit warning. Failed context-pack builds still attempt to record a failed audit row before returning an error.
-
-## Inspectability
-
-The Agent page lists recent runs and can show:
-
-- selected memories
-- qualitative retrieval reasons
-- dropped/redacted context
-- allowed, blocked, and approval-required tools
-- retrieval feedback attached to the run
-- draft skill/eval proposals
-
-Exact semantic/vector fusion scores are not exposed yet by the current retrieval layer, so explanations are honest and qualitative where necessary.
-
-## Feedback Loop
-
-Users and MCP clients can rate retrieval results as `useful`, `irrelevant`, `wrong`, `stale`, or `missing_context`. Feedback is persisted locally and attached to run detail. It does not mutate ranking automatically yet.
+Defaults that keep this path light on an 8 GB Mac: no model is loaded to build a context pack, raw evidence is off, the Ask budget is 900 tokens, and no visual model is used.
