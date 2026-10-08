@@ -41,6 +41,7 @@ The first two boxes are complete. The third now has a validated backend boundary
 | `CARGO_BUILD_JOBS=1 cargo test --lib agent::delegation::tests::` | Red on the pending builder, then passed for alias resolution, current summary only, missing-source refusal, and a later blocklist exclusion. |
 | `npm test -- --run src/domains/workspace/PeerDirectory.test.tsx src/domains/workspace/AgentWorkspace.test.tsx` | 23 passed after the draft form. |
 | Playwright browser preview | Add synthetic peer, enter task and output goal, preview exact text and destination. No Send control exists. |
+| `FNDR_DATA_DIR=/tmp/fndr-codex-peer-qa.oAcl0j CARGO_BUILD_JOBS=1 npm run tauri dev` | Native app compiled and launched; log confirmed the disposable profile override. The computer-use inventory and macOS window listing exposed no FNDR window, so native UI/IPC interaction was not verified. Dev file changes from another session caused one rebuild. App was stopped. The disposable profile, which briefly held captures, was removed with a fixed-path, checked cleanup after a broad recursive shell command was rejected. |
 
 The MCP test starts a real localhost server with a disposable profile. It checks four-tool discovery, method and action refusals, current sharing consent, restart behavior, raw-evidence refusal, and the full-token path. This is not a full Hermes gateway or GUI test. No real owner vault contents were used.
 
