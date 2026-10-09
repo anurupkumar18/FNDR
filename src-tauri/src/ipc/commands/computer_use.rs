@@ -173,14 +173,16 @@ fn current_run() -> &'static Mutex<Option<RunHandle>> {
 
 // MARK: - Backends
 
-/// Shown when nothing FNDR can use is installed. The ChatGPT app's current
-/// Computer Use is one run-any-code tool, which FNDR cannot decide action by
-/// action, so FNDR does not attach it (ADR 026).
-const NO_HELPER: &str = "Notch Do has nothing to click and type with on this Mac. It works with open-computer-use; the ChatGPT app's Computer Use is not supported.";
+/// Shown when FNDR's own executor cannot start and no other helper is
+/// installed. The ChatGPT app's current Computer Use is one run-any-code tool,
+/// which FNDR cannot decide action by action, so FNDR does not attach it (ADR 026).
+const NO_HELPER: &str = "Notch Do could not start its own click-and-type tools and found no other helper. Reinstall FNDR, or install open-computer-use; the ChatGPT app's Computer Use is not supported.";
 
 /// Which computer-use MCP server the run attaches.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Backend {
+    /// FNDR's own binary, run as `fndr operator-mcp` (ADR 026).
+    Native(PathBuf),
     /// OpenAI's Computer Use plugin, installed with the ChatGPT/Codex app.
     CodexBundled(PathBuf),
     OpenComputerUse(PathBuf),
@@ -189,6 +191,7 @@ pub(crate) enum Backend {
 impl Backend {
     pub(crate) fn label(&self) -> &'static str {
         match self {
+            Backend::Native(_) => "fndr_native",
             Backend::CodexBundled(_) => "codex_computer_use",
             Backend::OpenComputerUse(_) => "open_computer_use",
         }
@@ -196,9 +199,24 @@ impl Backend {
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Backend::CodexBundled(path) | Backend::OpenComputerUse(path) => path,
+            Backend::Native(path)
+            | Backend::CodexBundled(path)
+            | Backend::OpenComputerUse(path) => path,
         }
     }
+
+    /// The argument that makes the program speak MCP on stdio.
+    pub(crate) fn mcp_arg(&self) -> &'static str {
+        match self {
+            Backend::Native(_) => "operator-mcp",
+            _ => "mcp",
+        }
+    }
+}
+
+/// FNDR's own executable, which serves the tools itself.
+fn detect_native() -> Option<PathBuf> {
+    std::env::current_exe().ok().filter(|path| path.is_file())
 }
 
 /// The newest installed `computer-use-client-launcher` under a Codex home.
@@ -249,23 +267,38 @@ static BUNDLED_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 const AUTOMATION_REFUSED: &str = "Computer Use was refused Automation access. Allow FNDR under System Settings > Privacy & Security > Automation, then try again; the next run uses open-computer-use if it is installed.";
 
-pub(crate) fn detect_backend() -> Option<Backend> {
-    // A fixed choice for diagnosis: `codex_computer_use` or `open_computer_use`.
-    match std::env::var("FNDR_COMPUTER_USE").ok().as_deref() {
-        Some("open_computer_use") => {
-            return detect_open_computer_use().map(Backend::OpenComputerUse)
-        }
-        Some("codex_computer_use") => {
-            return bundled_computer_use(&super::codex_account::codex_home_dir())
-                .map(Backend::CodexBundled)
-        }
+/// Picks the computer-use server. FNDR's own comes first; the third-party
+/// helpers stay as fallbacks until the twenty-task set passes (ADR 026, item 5).
+/// `forced` is `FNDR_COMPUTER_USE`, a fixed choice for diagnosis.
+fn choose_backend(
+    forced: Option<&str>,
+    native: Option<PathBuf>,
+    bundled: impl FnOnce() -> Option<PathBuf>,
+    open_computer_use: impl FnOnce() -> Option<PathBuf>,
+) -> Option<Backend> {
+    match forced {
+        Some("fndr_native") => return native.map(Backend::Native),
+        Some("open_computer_use") => return open_computer_use().map(Backend::OpenComputerUse),
+        Some("codex_computer_use") => return bundled().map(Backend::CodexBundled),
         _ => {}
     }
-    let bundled = (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
-        .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
-        .flatten()
-        .map(Backend::CodexBundled);
-    bundled.or_else(|| detect_open_computer_use().map(Backend::OpenComputerUse))
+    native
+        .map(Backend::Native)
+        .or_else(|| bundled().map(Backend::CodexBundled))
+        .or_else(|| open_computer_use().map(Backend::OpenComputerUse))
+}
+
+pub(crate) fn detect_backend() -> Option<Backend> {
+    choose_backend(
+        std::env::var("FNDR_COMPUTER_USE").ok().as_deref(),
+        detect_native(),
+        || {
+            (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
+                .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
+                .flatten()
+        },
+        detect_open_computer_use,
+    )
 }
 
 fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<String>, String> {
@@ -288,7 +321,10 @@ fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<St
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
         "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.args=[\"mcp\"]"),
+        format!(
+            "mcp_servers.{COMPUTER_SERVER}.args=[\"{}\"]",
+            backend.mcp_arg()
+        ),
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.default_tools_approval_mode=\"prompt\""),
     ]);
@@ -1582,8 +1618,17 @@ pub struct OperatorPermissions {
 /// list, which is what triggers and then proves its macOS permissions.
 async fn probe_backend(backend: &Backend) -> (bool, String) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    if matches!(backend, Backend::Native(_))
+        && !crate::accessibility::has_accessibility_permission()
+    {
+        return (
+            false,
+            "Allow FNDR under System Settings > Privacy & Security > Accessibility, then check again."
+                .to_string(),
+        );
+    }
     let spawned = tokio::process::Command::new(backend.path())
-        .arg("mcp")
+        .arg(backend.mcp_arg())
         .env("CODEX_HOME", super::codex_account::codex_home_dir())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1700,6 +1745,51 @@ mod tests {
         assert!(args
             .contains("mcp_servers.fndr_computer.command=\"/opt/homebrew/bin/open-computer-use\""));
         assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+    }
+
+    #[test]
+    fn fndrs_own_executor_is_attached_with_its_subcommand() {
+        let backend = Backend::Native(PathBuf::from("/Applications/FNDR.app/Contents/MacOS/fndr"));
+        assert_eq!(backend.label(), "fndr_native");
+        let args = session_args(&["computer-use".into()], &backend)
+            .unwrap()
+            .join(" ");
+        assert!(args.contains(
+            "mcp_servers.fndr_computer.command=\"/Applications/FNDR.app/Contents/MacOS/fndr\""
+        ));
+        assert!(args.contains("mcp_servers.fndr_computer.args=[\"operator-mcp\"]"));
+        assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+    }
+
+    #[test]
+    fn the_native_backend_wins_and_the_old_helpers_are_fallbacks() {
+        let at = |p: &str| Some(PathBuf::from(p));
+        let pick = |forced: Option<&str>, native: Option<PathBuf>, bundled, open| {
+            choose_backend(forced, native, move || bundled, move || open)
+        };
+        let all = |forced| pick(forced, at("/fndr"), at("/launcher"), at("/occ"));
+        assert_eq!(all(None), Some(Backend::Native("/fndr".into())));
+        assert_eq!(
+            all(Some("open_computer_use")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(
+            all(Some("codex_computer_use")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, at("/launcher"), at("/occ")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, None, at("/occ")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(pick(None, None, None, None), None);
+        assert_eq!(
+            pick(Some("fndr_native"), None, at("/launcher"), at("/occ")),
+            None
+        );
     }
 
     #[test]
