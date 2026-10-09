@@ -192,6 +192,9 @@ pub fn validate_card(card_url: &str, bytes: &[u8]) -> Result<ValidatedCard, Stri
     if output_modes.is_empty() || output_modes.iter().any(|mode| !mode.is_string()) {
         return Err("Agent Card needs valid output modes".into());
     }
+    if !output_modes.iter().any(|mode| mode == "text/plain") {
+        return Err("Peer does not offer text/plain outputs".into());
+    }
     let skills = card["skills"].as_array().ok_or("Agent Card needs skills")?;
     for skill in skills {
         required_text(skill, "id")?;
@@ -569,6 +572,13 @@ mod tests {
 
         value["securityRequirements"] = json!([{"bearer": []}, {}]);
         assert!(!check(&value).unwrap().requires_bearer);
+    }
+
+    #[test]
+    fn rejects_a_peer_that_only_returns_non_text_parts() {
+        let mut value = card();
+        value["defaultOutputModes"] = json!(["application/json"]);
+        assert!(check(&value).unwrap_err().contains("text/plain"));
     }
 
     #[test]
