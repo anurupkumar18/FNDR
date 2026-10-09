@@ -2194,6 +2194,57 @@ export async function codexLoginCancel(loginId: string): Promise<void> {
 
 export async function codexLogout(): Promise<CodexAccountStatus> {
     return invoke<CodexAccountStatus>("codex_logout");
+/** Why the ChatGPT plan's voice can or cannot speak now (ADR 028). */
+export type VoiceOutState =
+    | "ready"
+    | "not_installed"
+    | "broken"
+    | "signed_out"
+    | "unsupported"
+    | "near_limit"
+    | "over_limit"
+    | "private_mode";
+
+export interface VoiceOutStatus {
+    state: VoiceOutState;
+    detail: string | null;
+    /** The higher used share of the plan's two usage windows, 0 to 100. */
+    usedPercent: number | null;
+    /** Above this, FNDR speaks on the Mac instead. */
+    fallbackAbovePercent: number;
+    connected: boolean;
+}
+
+export interface VoiceOutVoices {
+    voices: string[];
+}
+
+export async function voiceOutStatus(): Promise<VoiceOutStatus> {
+    return invoke<VoiceOutStatus>("voice_out_status");
+}
+
+export async function voiceOutVoices(): Promise<VoiceOutVoices> {
+    return invoke<VoiceOutVoices>("voice_out_voices");
+}
+
+/** Sends the peer connection's SDP offer; resolves to Codex's SDP answer. */
+export async function voiceOutStart(sdpOffer: string, voice?: string): Promise<string> {
+    return invoke<string>("voice_out_start", { sdpOffer, voice: voice ?? null });
+}
+
+/** Hands FNDR-authored reply text to the connected voice. Never memory or screen text. */
+export async function voiceOutSpeak(text: string): Promise<void> {
+    return invoke<void>("voice_out_speak", { text });
+}
+
+export async function voiceOutCancel(): Promise<void> {
+    return invoke<void>("voice_out_cancel");
+}
+
+export async function voiceOutStop(): Promise<void> {
+    return invoke<void>("voice_out_stop");
+}
+
 }
 
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {

@@ -62,6 +62,9 @@ pub use proactive_signals::*;
 pub(crate) mod codex_account;
 pub use codex_account::*;
 
+mod speech_out;
+pub use speech_out::*;
+
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
 

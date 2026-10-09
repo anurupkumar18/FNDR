@@ -1602,6 +1602,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 return null;
             }
+            case "voice_out_status":
+                // The browser preview has no Codex; speech falls back to the Mac's voices.
+                return {
+                    state: "not_installed",
+                    detail: "The browser preview has no Codex.",
+                    usedPercent: null,
+                    fallbackAbovePercent: 95,
+                    connected: false,
+                };
+            case "voice_out_voices":
+                return { voices: [] };
+            case "voice_out_start":
+                throw new Error("The browser preview has no Codex.");
+            case "voice_out_speak":
+                throw new Error("The ChatGPT voice is not connected.");
+            case "voice_out_cancel":
+            case "voice_out_stop":
+                return null;
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);
