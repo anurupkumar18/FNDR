@@ -234,4 +234,91 @@ mod tests {
         );
         assert_eq!(time_filter("pull up the essay"), None);
     }
+
+    /// Read-only evaluation on a COPY of a profile. Refuses the real one.
+    /// `FNDR_WORKSET_EVAL_DIR=<copy> cargo test --lib work_set_eval -- --ignored --nocapture`
+    #[test]
+    #[ignore = "reads a copy of a real profile"]
+    fn work_set_eval_on_a_vault_copy() {
+        let Ok(dir) = std::env::var("FNDR_WORKSET_EVAL_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir).canonicalize().unwrap();
+        let real = dirs::data_dir().unwrap().join("com.fndr.app");
+        assert!(
+            !real.canonicalize().is_ok_and(|real| dir.starts_with(real)),
+            "refusing the real FNDR profile; pass a copy"
+        );
+        let store = std::sync::Arc::new(crate::storage::Store::new(&dir).unwrap());
+        let state_store = std::sync::Arc::new(crate::storage::StateStore::new(&dir).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let mut config = crate::config::Config::default();
+        config.search.semantic_timeout_ms = 10_000;
+        config.search.snippet_timeout_ms = 10_000;
+        config.search.keyword_timeout_ms = 10_000;
+        let state = AppState::new(dir.clone(), config, store, state_store, graph, None);
+        let queries: Vec<String> = std::env::var("FNDR_WORKSET_QUERIES")
+            .map(|q| q.split('|').map(str::to_string).collect())
+            .unwrap_or_default();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let now = chrono::Utc::now().timestamp_millis();
+            let week = state
+                .store
+                .get_memories_in_range(now - 7 * 24 * 3_600_000, now)
+                .await
+                .unwrap();
+            println!("memories in the last 7 days: {}", week.len());
+            let all = state.store.list_all_memories().await.unwrap();
+            let mut kinds = std::collections::BTreeMap::new();
+            for record in &all {
+                let kind = rank::item_of(record).map(|(_, item)| format!("{:?}", item.kind));
+                *kinds
+                    .entry(kind.unwrap_or_else(|| "none".into()))
+                    .or_insert(0) += 1;
+            }
+            println!("memories: {}; reopen items by kind: {kinds:?}", all.len());
+            if std::env::var("FNDR_WORKSET_LIST").is_ok() {
+                for record in &all {
+                    println!(
+                        "  row {} | {} | {} | project {:?} | session {}",
+                        &record.id[..8.min(record.id.len())],
+                        record.app_name,
+                        record.window_title.chars().take(70).collect::<String>(),
+                        record.project,
+                        record.session_key.chars().take(40).collect::<String>()
+                    );
+                }
+            }
+            for query in queries {
+                let started = std::time::Instant::now();
+                let resolution = resolve(&state, &query).await;
+                println!("\n### {query} ({} ms)", started.elapsed().as_millis());
+                let show = |set: &WorkSet| {
+                    println!(
+                        "- set \"{}\" score {:.3}: {}",
+                        set.title, set.score, set.reason
+                    );
+                    for item in &set.items {
+                        println!(
+                            "    - {:?} {} | {} | {} | rank {}",
+                            item.kind,
+                            item.label,
+                            item.app_name,
+                            item.host.as_deref().unwrap_or(""),
+                            item.reopen_rank
+                        );
+                    }
+                };
+                match &resolution {
+                    Resolution::Best(set) => show(set),
+                    Resolution::Ambiguous(sets) => {
+                        println!("AMBIGUOUS");
+                        sets.iter().for_each(show);
+                    }
+                    Resolution::None { why } => println!("NONE: {why}"),
+                }
+            }
+        });
+    }
 }
