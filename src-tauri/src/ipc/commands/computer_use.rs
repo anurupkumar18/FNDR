@@ -33,6 +33,7 @@ use crate::operator::journal::{redact, Journal, JournalEntry};
 use crate::operator::plan::{self, Plan, PlanStep, StepAction, StepCheck};
 use crate::operator::policy::{classify, Decision, Observed, Risk};
 use crate::operator::{memory, native};
+use crate::workset::{ItemOutcome, Resolution, WorkItem, WorkSet};
 use crate::AppState;
 
 pub const COMPUTER_USE_EVENT: &str = "computer-use://event";
@@ -56,6 +57,21 @@ pub struct StepView {
     pub label: String,
     pub action: StepAction,
     pub app: String,
+    /// What a `reopen_memory` step opens, for the card and the narration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<WorkItem>,
+}
+
+fn step_views(plan: &Plan) -> Vec<StepView> {
+    plan.steps
+        .iter()
+        .map(|step| StepView {
+            label: step.label.clone(),
+            action: step.action,
+            app: step.app.clone(),
+            item: step.item.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +90,12 @@ pub enum ComputerUseEvent {
         steps: Vec<StepView>,
         /// The plan may start by itself: no step in it can need a yes.
         auto_start: bool,
+    },
+    /// A work-set request matched more than one thread about equally; the
+    /// person picks one (ADR 027). The run ends here.
+    Choose {
+        run_id: String,
+        options: Vec<WorkSet>,
     },
     StepStarted {
         run_id: String,
@@ -936,8 +958,12 @@ struct RunContext {
     request: String,
 }
 
+/// A work set of more than this many reopens waits for Start (ADR 027).
+const MAX_AUTO_REOPENS: usize = 3;
+
 /// Whether every step is one that cannot need the person's yes: opening an
-/// app, opening a link their words account for, or playback in a media app.
+/// app, opening a link their words account for, playback in a media app, or
+/// a plan of at most three reopens FNDR resolved itself.
 fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
     plan.steps.iter().all(|step| match step.action {
         StepAction::OpenApp => {
@@ -953,6 +979,15 @@ fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
         StepAction::OpenUrl => plan::link_was_asked_for(&step.url, request),
         StepAction::Operate => {
             !(guards.off_limits)(&step.app) && crate::operator::policy::is_media_app(&step.app)
+        }
+        StepAction::ReopenMemory => {
+            plan.steps.len() <= MAX_AUTO_REOPENS
+                && plan
+                    .steps
+                    .iter()
+                    .all(|step| step.action == StepAction::ReopenMemory)
+                && step.item.is_some()
+                && !(guards.off_limits)(&step.app)
         }
     })
 }
@@ -1118,6 +1153,10 @@ async fn attempt_step(
             );
             Ok(verdict)
         }
+        StepAction::ReopenMemory => Ok(plan::Verdict {
+            ok: false,
+            detail: "A reopen runs only in a work set FNDR planned".to_string(),
+        }),
         StepAction::Operate => {
             let media_app = (step.check == StepCheck::MediaPlaying).then_some(step.app.as_str());
             let track_before = match media_app {
@@ -1198,12 +1237,148 @@ async fn run(
     commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
+    if plan::asks_for_work_set(&transcript) {
+        (ctx.emit)(ComputerUseEvent::Planning {
+            run_id: ctx.run_id.clone(),
+            used_memories: 0,
+        });
+        let resolution = crate::workset::resolve(&state, &transcript).await;
+        return run_work_set(ctx, resolution, commands, move |item| {
+            let state = state.clone();
+            async move {
+                let id = item.memory_id.clone();
+                crate::workset::open_items(&state, &[item])
+                    .await
+                    .pop()
+                    .unwrap_or(ItemOutcome {
+                        memory_id: id,
+                        label: String::new(),
+                        kind: None,
+                        ok: false,
+                        detail: "Nothing was opened".to_string(),
+                        outcome: None,
+                    })
+            }
+        })
+        .await;
+    }
     let snippets = if plan::refers_to_past(&transcript) {
         memory::snippets(&state, &transcript).await
     } else {
         Vec::new()
     };
     run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
+}
+
+/// A work-set request (ADR 027): resolved on this Mac, planned by code from
+/// what FNDR resolved, and opened through the reopen core. No Codex session
+/// and no cloud call. A failed item does not stop the others; Stop and a
+/// halt do.
+async fn run_work_set<F, Fut>(
+    ctx: RunContext,
+    resolution: Resolution,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    mut open: F,
+) -> Result<(), RunError>
+where
+    F: FnMut(WorkItem) -> Fut,
+    Fut: std::future::Future<Output = ItemOutcome>,
+{
+    let set = match resolution {
+        Resolution::Best(set) => set,
+        Resolution::Ambiguous(options) => {
+            (ctx.emit)(ComputerUseEvent::Choose {
+                run_id: ctx.run_id.clone(),
+                options,
+            });
+            return Ok(());
+        }
+        Resolution::None { why } => return Err(RunError::Failed(why)),
+    };
+    let plan = plan::from_work_set(&set);
+    (ctx.emit)(ComputerUseEvent::Planned {
+        run_id: ctx.run_id.clone(),
+        auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
+        steps: step_views(&plan),
+    });
+    wait_for_start(&mut commands).await?;
+
+    let mut opened = Vec::new();
+    let mut missed = Vec::new();
+    for (index, step) in plan.steps.iter().enumerate() {
+        if let Some(reason) = (ctx.guards.halt)() {
+            return Err(RunError::Failed(reason));
+        }
+        let Some(item) = step.item.clone() else {
+            continue;
+        };
+        (ctx.emit)(ComputerUseEvent::StepStarted {
+            run_id: ctx.run_id.clone(),
+            index,
+            attempt: 1,
+        });
+        let blocked = (ctx.guards.off_limits)(&step.app);
+        let outcome = if blocked {
+            ItemOutcome {
+                memory_id: item.memory_id.clone(),
+                label: item.label.clone(),
+                kind: Some(item.kind),
+                ok: false,
+                detail: format!("{} is off limits", step.app),
+                outcome: None,
+            }
+        } else {
+            open(item.clone()).await
+        };
+        let _ = ctx.journal.append(&JournalEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            run_id: ctx.run_id.clone(),
+            step: Some(index),
+            tool: "reopen_memory".to_string(),
+            args: redact(&json!({ "memory_id": item.memory_id })),
+            risk: Some(Risk::Runs),
+            outcome: if blocked {
+                "blocked"
+            } else if outcome.ok {
+                "ok"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            detail: Some(outcome.detail.clone()),
+        });
+        let verdict = plan::Verdict {
+            ok: outcome.ok,
+            detail: outcome.detail.clone(),
+        };
+        (ctx.emit)(ComputerUseEvent::StepDone {
+            run_id: ctx.run_id.clone(),
+            index,
+            ok: verdict.ok,
+            checked: plan::checked_by_fndr(step, &verdict),
+            detail: verdict.detail,
+        });
+        if outcome.ok {
+            opened.push(item.label);
+        } else {
+            missed.push(format!("{} ({})", item.label, outcome.detail));
+        }
+    }
+    let summary = match (opened.is_empty(), missed.is_empty()) {
+        (_, true) => format!("Opened: {}.", opened.join(", ")),
+        (true, false) => format!("Nothing opened: {}.", missed.join("; ")),
+        (false, false) => format!(
+            "Opened: {}. Not opened: {}.",
+            opened.join(", "),
+            missed.join("; ")
+        ),
+    };
+    (ctx.emit)(ComputerUseEvent::Finished {
+        run_id: ctx.run_id.clone(),
+        ok: missed.is_empty(),
+        summary,
+    });
+    Ok(())
 }
 
 /// Plans, waits for Start, then runs and checks every step. Everything after
@@ -1276,15 +1451,7 @@ async fn run_with_snippets(
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
-        steps: plan
-            .steps
-            .iter()
-            .map(|step| StepView {
-                label: step.label.clone(),
-                action: step.action,
-                app: step.app.clone(),
-            })
-            .collect(),
+        steps: step_views(&plan),
     });
 
     wait_for_start(&mut commands).await?;
@@ -1930,6 +2097,7 @@ mod tests {
             url: String::new(),
             goal: "play Blinding Lights".into(),
             check: StepCheck::MediaPlaying,
+            item: None,
         };
         assert_eq!(
             step_request_text(1, 3, &step, None),
