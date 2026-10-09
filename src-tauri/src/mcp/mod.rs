@@ -725,12 +725,13 @@ fn to_status(rt: &McpRuntime) -> McpServerStatus {
 // ---------------------------------------------------------------------------
 
 /// Where the discovery file and the bearer token live: `~/.fndr`. Tests get
-/// a folder of their own, so a test run never rewrites or removes the files
-/// of an FNDR that is running on the same machine.
+/// one fixed folder of their own, so a test run never rewrites or removes the
+/// files of an FNDR that is running on the same machine and leaves no new
+/// folder behind on each run.
 fn fndr_home() -> PathBuf {
     #[cfg(test)]
     {
-        std::env::temp_dir().join(format!("fndr-mcp-test-{}", std::process::id()))
+        std::env::temp_dir().join("fndr-mcp-test")
     }
     #[cfg(not(test))]
     {
