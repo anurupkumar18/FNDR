@@ -78,7 +78,9 @@ All workflows live under **`.agent-skills/portable-engineering/`** (plain Markdo
 | Challenge your own plan | `.agent-skills/portable-engineering/productivity/grill-me/SKILL.md` |
 | Write a new portable skill | `.agent-skills/portable-engineering/productivity/write-a-skill/SKILL.md` |
 
-When multiple rows apply, order matters: **zoom-out → grill-with-docs → to-prd / to-issues → tdd** for new work; **diagnose** supersedes generic implementation patterns for defects; **handoff** when stopping mid-flight. If the environment cannot open the tree, use `ALL_SKILLS_COMBINED.md` in the same folder as a single-file fallback.
+For an already scoped ticket or decided architecture, open the execution skill that matches the work. Reuse its ticket, decision and tests. Do not repeat discovery, write another plan, or open adjacent skills unless a new decision actually needs them.
+
+When discovery is needed, order matters: **zoom-out → grill-with-docs → to-prd / to-issues → tdd**. **Diagnose** supersedes generic implementation patterns for defects; **handoff** applies when stopping mid-flight. If the environment cannot open the tree, use `ALL_SKILLS_COMBINED.md` in the same folder as a single-file fallback.
 
 The skills are tool-neutral and name default folders. In this repo use these instead: decision records go in `docs/decisions/` (numbered, not `docs/adr/`), plans and specs in `docs/superpowers/plans/` and `docs/superpowers/specs/`, tickets in `docs/team/tickets/`, handoffs in `docs/handoffs/`.
 

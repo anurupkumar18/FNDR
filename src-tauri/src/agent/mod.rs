@@ -7,6 +7,7 @@ pub mod evals;
 pub mod execution;
 pub mod peer;
 pub mod peer_store;
+pub mod peer_runs;
 pub mod policy;
 pub mod prompts;
 pub mod risk_policy;

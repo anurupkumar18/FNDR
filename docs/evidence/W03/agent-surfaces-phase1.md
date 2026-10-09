@@ -278,3 +278,9 @@ Live: "search for running shoes on this page" and "summarize this article", with
 
 Also seen in that run: with no page to read, the model typed the words into Chrome's address bar and pressed Return. That is the "search typing runs" tier working as written, and it is not what "on this page" asks for. Open: an address bar is not a page's search box.
 
+### Later that evening: rechecked live
+
+- "Summarize this article", no app named: the run ended with "Done: ... Reported:" followed by a three-sentence summary of the window in front, cut at 400 characters. The app in front was not the one intended (another app had come forward before the run), which is the feature working: "this" means what is in front.
+- "Search for running shoes on this page": planned in Google Chrome. The model switched to the page's tab and did not use the address bar. It then tried a click that needs a yes, got a no, and stopped.
+- Policy: an address typed into a browser's address bar now waits for a tap; words typed there still run as a search. `operator_step` tells the model the address bar is not a page's search box. `LLM_PROMPT_VERSION` is v9.
+

@@ -7,8 +7,10 @@ import {
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     getPrivacyProof,
+    listPeerRuns,
     type ModelRequest,
     type OperatorRunSummary,
+    type PeerRunView,
     type PrivacyProof as PrivacyProofData,
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
@@ -24,6 +26,7 @@ interface Proof {
     egress_hosts: string[];
     model_requests?: ModelRequest[];
     operator_runs?: OperatorRunSummary[];
+    peer_runs?: PeerRunView[];
 }
 
 /** What became of a run's actions, leaving out the kinds that did not happen. */
@@ -68,6 +71,13 @@ function formatBytes(bytes: number): string {
     return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+function peerState(run: PeerRunView): string {
+    if (run.status === "uncertain") return "delivery uncertain";
+    if (run.status === "direct_reply") return "direct reply";
+    return run.remote_state?.replace(/^TASK_STATE_/, "").replace(/_/g, " ").toLowerCase()
+        ?? "acknowledged";
+}
+
 const REASON_LABELS: Record<string, string> = {
     self_app: "FNDR was open",
     blocklist: "Blocked app or site",
@@ -93,7 +103,7 @@ const label = (reason: string) => REASON_LABELS[reason] ?? reason.replace(/_/g, 
 export function PrivacyProof({ proof }: { proof: Proof }) {
     const reasons = Object.entries(proof.skipped_by_reason).filter(([, count]) => count > 0);
     return (
-        <section aria-label="Privacy activity for this app session" className="pipeline-panel-card">
+        <section aria-label="Privacy activity details" className="pipeline-panel-card">
             <div className="pipeline-engine-kv">
                 <span>Frames evaluated this app session</span>
                 <strong>{proof.evaluated}</strong>
@@ -154,6 +164,21 @@ export function PrivacyProof({ proof }: { proof: Proof }) {
                 </>
             )}
 
+            {proof.peer_runs && proof.peer_runs.length > 0 && (
+                <>
+                    <h4>Recent peer sends</h4>
+                    <ul className="pipeline-skip-reasons" aria-label="Peer sends">
+                        {proof.peer_runs.slice(-12).reverse().map((run) => (
+                            <li key={run.local_id}>
+                                <span>{run.host} · {requestTime(run.created_at_ms)} · {peerState(run)}</span>
+                                <strong>{formatBytes(run.payload_bytes)}</strong>
+                            </li>
+                        ))}
+                    </ul>
+                    <p className="pipeline-muted">Peer send records stay on this Mac after FNDR closes. Task text and peer output are not stored here.</p>
+                </>
+            )}
+
             {proof.egress_hosts.length > 0 && (
                 <p className="pipeline-egress-hosts">Recorded hosts: {proof.egress_hosts.join(", ")}</p>
             )}
@@ -175,8 +200,9 @@ interface PrivacyProofPanelProps {
 /** Self-fetching panel wrapper around {@link PrivacyProof}, following the same
  *  isVisible/onClose + polling contract as EngineMetricsPanel/EngineMetricsCard. */
 export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps) {
-    const [proof, setProof] = useState<PrivacyProofData | null>(null);
+    const [proof, setProof] = useState<(PrivacyProofData & { peer_runs?: PeerRunView[] }) | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [peerRunsUnavailable, setPeerRunsUnavailable] = useState(false);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -201,7 +227,9 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
 
         if (isMounted()) setActivityTrace(startedTrace);
         try {
-            const next = await getPrivacyProof();
+            const [proofResult, runsResult] = await Promise.allSettled([getPrivacyProof(), listPeerRuns()]);
+            if (proofResult.status === "rejected") throw proofResult.reason;
+            const next = proofResult.value;
             if (isMounted()) {
                 const completedAtMs = Date.now();
                 const skipped = Object.values(next.skipped_by_reason)
@@ -215,7 +243,8 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
                     atMs: completedAtMs,
                     durationMs: completedAtMs - startedAtMs,
                 });
-                setProof(next);
+                setProof({ ...next, peer_runs: runsResult.status === "fulfilled" ? runsResult.value ?? [] : [] });
+                setPeerRunsUnavailable(runsResult.status === "rejected");
                 setError(null);
                 setActivityTrace(recordActivityStep(requestCompletedTrace, {
                     id: "result",
@@ -265,7 +294,7 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
             <PanelHeader
                 title="Privacy activity"
                 titleId="privacy-activity-title"
-                subtitle="Capture outcomes and recorded network requests for the current app session."
+                subtitle="This session's capture and network activity, plus saved peer sends."
                 subtitleId="privacy-activity-description"
                 closeLabel="Close privacy activity"
                 closeRef={closeButtonRef}
@@ -280,6 +309,7 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
                     />
                 )}
                 {error && <div className="pipeline-error" role="alert">{error}</div>}
+                {peerRunsUnavailable && <p className="pipeline-muted">Peer send history could not be loaded.</p>}
                 {proof ? <PrivacyProof proof={proof} /> : null}
             </div>
         </div>

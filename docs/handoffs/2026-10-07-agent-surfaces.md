@@ -40,7 +40,7 @@ Everything below is on `main` and pushed to both remotes.
 
 1. **The helper sends a picture.** With Screen Recording granted, `open-computer-use` attaches a PNG of the operated app's window to every read. FNDR discloses and logs it and cannot stop it. Only the ADR 026 executor removes it.
 2. **"This page" now resolves to the app in front** (the planner is told its name). Checked live at the planning step only.
-3. **A read-only request now shows what was reported**, marked "Reported:". Unit test only; the live operate step could not read a Chrome window that evening.
+3. **A read-only request now shows what was reported**, marked "Reported:". Checked live.
 4. **Not checked in the running app:** quit and Stop during a Notch Do run, Agent Stop, quit with the Hermes gateway up, a Screen Guide ChatGPT answer.
 5. **Not measured:** the twenty-task set (`docs/evidence/W03/notch-do-task-set.md`), Agent latency, Spotify or Music playback.
 6. **Waiting on others:** Notch Do in the SK-01 journal (E11).
@@ -48,9 +48,8 @@ Everything below is on `main` and pushed to both remotes.
 
 ## Next, in order
 
-1. Recheck item 3 live, and stop the address bar counting as a page's search box (evidence file, last section).
-2. The ADR 026 executor. Start with `get_app_state` and `click` against `src-tauri/tests/fixtures/operator/pages/`; keep the tool names `operator/policy.rs` already classifies.
-3. The twenty-task set on the executor.
+1. The ADR 026 executor. Start with `get_app_state` and `click` against `src-tauri/tests/fixtures/operator/pages/`; keep the tool names `operator/policy.rs` already classifies.
+2. The twenty-task set on the executor.
 
 ## How to run a live Notch Do check
 

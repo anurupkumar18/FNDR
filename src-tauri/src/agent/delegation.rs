@@ -20,6 +20,207 @@ pub struct DelegationPreview {
     pub attachments: Vec<DelegationAttachment>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DelegationSendResult {
+    pub run: crate::agent::peer_runs::PeerRun,
+    pub output_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DelegationTaskResult {
+    pub run: crate::agent::peer_runs::PeerRunView,
+    pub output_text: Option<String>,
+}
+
+async fn ensure_run_sources_visible(state: &AppState, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let current = crate::context_runtime::context_source_memories(state, ids).await?;
+    if ids.iter().any(|id| !current.contains_key(id)) {
+        return Err("An attached memory is no longer permitted".into());
+    }
+    Ok(())
+}
+
+async fn checked_existing_run(
+    state: &AppState,
+    local_id: &str,
+) -> Result<
+    (
+        crate::agent::peer_runs::PeerRun,
+        crate::agent::peer::ValidatedCard,
+    ),
+    String,
+> {
+    if state.is_incognito.load(Ordering::SeqCst) {
+        return Err("Peer tasks are unavailable while incognito mode is on".into());
+    }
+    let run = crate::agent::peer_runs::list_runs(&state.state_store)?
+        .into_iter()
+        .find(|run| run.local_id == local_id)
+        .ok_or("Peer run was not found")?;
+    if run.remote_task_id.is_none() {
+        return Err("Peer did not return a task ID".into());
+    }
+    let saved = crate::agent::peer_store::list_peers(&state.state_store)?
+        .into_iter()
+        .find(|peer| peer.id == run.peer_id)
+        .ok_or("Saved peer was removed")?;
+    if reqwest::Url::parse(&saved.endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .as_deref()
+        != Some(run.host.as_str())
+    {
+        return Err("Peer destination changed since Send".into());
+    }
+    ensure_run_sources_visible(state, &run.attachment_ids).await?;
+    let checked = crate::agent::peer::inspect_configured_peer(&saved.card_url).await?;
+    if checked.endpoint.as_str() != saved.endpoint
+        || checked.endpoint.host_str() != Some(run.host.as_str())
+    {
+        return Err("Peer interface changed since Send".into());
+    }
+    ensure_run_sources_visible(state, &run.attachment_ids).await?;
+    Ok((run, checked))
+}
+
+pub async fn refresh_delegation(
+    state: &AppState,
+    local_id: &str,
+) -> Result<DelegationTaskResult, String> {
+    let (run, checked) = checked_existing_run(state, local_id).await?;
+    let remote_id = run.remote_task_id.as_deref().unwrap();
+    let task = crate::agent::peer::get_from_peer(&checked, remote_id).await?;
+    ensure_run_sources_visible(state, &run.attachment_ids).await?;
+    let updated = crate::agent::peer_runs::finish_send(
+        &state.state_store,
+        local_id,
+        &task.task_id,
+        &task.state,
+    )?;
+    Ok(DelegationTaskResult {
+        run: updated.into(),
+        output_text: task.output_text,
+    })
+}
+
+pub async fn cancel_delegation(
+    state: &AppState,
+    local_id: &str,
+) -> Result<DelegationTaskResult, String> {
+    let (run, checked) = checked_existing_run(state, local_id).await?;
+    if matches!(
+        run.remote_state.as_deref(),
+        Some(
+            "TASK_STATE_COMPLETED"
+                | "TASK_STATE_FAILED"
+                | "TASK_STATE_CANCELED"
+                | "TASK_STATE_REJECTED"
+        )
+    ) {
+        return Err("Peer task has already ended".into());
+    }
+    let remote_id = run.remote_task_id.as_deref().unwrap();
+    let task = crate::agent::peer::cancel_on_peer(&checked, remote_id).await?;
+    ensure_run_sources_visible(state, &run.attachment_ids).await?;
+    let updated = crate::agent::peer_runs::finish_send(
+        &state.state_store,
+        local_id,
+        &task.task_id,
+        &task.state,
+    )?;
+    Ok(DelegationTaskResult {
+        run: updated.into(),
+        output_text: task.output_text,
+    })
+}
+
+fn check_reviewed_preview(
+    current: &DelegationPreview,
+    reviewed_destination: &str,
+    reviewed_text: &str,
+) -> Result<(), String> {
+    if current.destination != reviewed_destination || current.message_text != reviewed_text {
+        return Err("Peer task or destination changed. Preview it again before sending".into());
+    }
+    Ok(())
+}
+
+pub async fn send_delegation(
+    state: &AppState,
+    peer_id: &str,
+    task: &str,
+    output_goal: &str,
+    memory_ids: &[String],
+    reviewed_destination: &str,
+    reviewed_text: &str,
+) -> Result<DelegationSendResult, String> {
+    let current = preview_delegation(state, peer_id, task, output_goal, memory_ids).await?;
+    check_reviewed_preview(&current, reviewed_destination, reviewed_text)?;
+    let saved = crate::agent::peer_store::list_peers(&state.state_store)?
+        .into_iter()
+        .find(|peer| peer.id == peer_id)
+        .ok_or("Saved peer was removed")?;
+    let checked = crate::agent::peer::inspect_configured_peer(&saved.card_url).await?;
+    if checked.endpoint.as_str() != saved.endpoint
+        || checked.endpoint.as_str() != reviewed_destination
+    {
+        return Err("Peer interface changed. Verify and preview it again".into());
+    }
+    if checked.requires_bearer {
+        return Err("Peer requires Bearer sign-in before delegation".into());
+    }
+    // The Card fetch awaited network I/O. Re-read current privacy policy and
+    // durable records immediately before writing the egress record and Send.
+    let current = preview_delegation(state, peer_id, task, output_goal, memory_ids).await?;
+    check_reviewed_preview(&current, reviewed_destination, reviewed_text)?;
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let payload_bytes = serde_json::to_vec(&crate::agent::peer::send_message_request(
+        &message_id,
+        &current.message_text,
+    ))
+    .map_err(|_| "Cannot prepare peer request".to_string())?
+    .len();
+    let ids = current
+        .attachments
+        .iter()
+        .map(|attachment| attachment.memory_id.clone())
+        .collect::<Vec<_>>();
+    let host = checked
+        .endpoint
+        .host_str()
+        .ok_or("Peer endpoint has no host")?;
+    let run = crate::agent::peer_runs::begin_send(
+        &state.state_store,
+        &message_id,
+        peer_id,
+        host,
+        &ids,
+        payload_bytes,
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let sent =
+        crate::agent::peer::send_to_peer(&checked, &message_id, &current.message_text).await?;
+    let run = crate::agent::peer_runs::finish_send(
+        &state.state_store,
+        &run.local_id,
+        &sent.task_id,
+        &sent.state,
+    )
+    .map_err(|error| {
+        format!(
+            "Peer replied with task ID {}, but FNDR could not save its status ({error}). Do not resend; the peer may be working",
+            sent.task_id
+        )
+    })?;
+    Ok(DelegationSendResult {
+        run,
+        output_text: sent.output_text,
+    })
+}
+
 fn shareable_summary(record: &MemoryRecord) -> Result<&str, String> {
     let summary = record.display_summary.trim();
     if summary.is_empty() {
@@ -145,6 +346,11 @@ mod tests {
             assert!(preview_delegation(&state, &peer.id, "Review the plan", "Brief report", &["missing".into()]).await.is_err());
             state.config.write().blocklist = vec!["editor".into()];
             assert!(preview_delegation(&state, &peer.id, "Review the plan", "Brief report", &["older".into()]).await.is_err());
+            let run = crate::agent::peer_runs::begin_send(
+                &state.state_store, "msg-1", &peer.id, "peer.example", &["current".into()], 250, 2,
+            ).unwrap();
+            crate::agent::peer_runs::finish_send(&state.state_store, &run.local_id, "remote-1", "TASK_STATE_WORKING").unwrap();
+            assert!(refresh_delegation(&state, &run.local_id).await.unwrap_err().contains("permitted"));
         });
     }
 
@@ -155,5 +361,24 @@ mod tests {
             ..Default::default()
         };
         assert!(shareable_summary(&record).is_err());
+    }
+
+    #[test]
+    fn send_requires_the_same_text_and_destination_that_were_reviewed() {
+        let preview = DelegationPreview {
+            peer_id: "peer-1".into(),
+            destination: "https://peer.example/a2a".into(),
+            message_text: "Task:\nReview".into(),
+            attachments: vec![],
+        };
+        assert!(
+            check_reviewed_preview(&preview, "https://peer.example/a2a", "Task:\nReview").is_ok()
+        );
+        assert!(
+            check_reviewed_preview(&preview, "https://other.example/a2a", "Task:\nReview").is_err()
+        );
+        assert!(
+            check_reviewed_preview(&preview, "https://peer.example/a2a", "Task:\nChanged").is_err()
+        );
     }
 }
