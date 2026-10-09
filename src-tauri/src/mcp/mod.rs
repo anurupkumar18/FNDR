@@ -724,11 +724,24 @@ fn to_status(rt: &McpRuntime) -> McpServerStatus {
 // Discovery file
 // ---------------------------------------------------------------------------
 
+/// Where the discovery file and the bearer token live: `~/.fndr`. Tests get
+/// a folder of their own, so a test run never rewrites or removes the files
+/// of an FNDR that is running on the same machine.
+fn fndr_home() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join(format!("fndr-mcp-test-{}", std::process::id()))
+    }
+    #[cfg(not(test))]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".fndr")
+    }
+}
+
 fn discovery_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".fndr")
-        .join("mcp.json")
+    fndr_home().join("mcp.json")
 }
 
 fn write_discovery(
@@ -7372,6 +7385,13 @@ mod tests {
             assert_eq!(hermes_read_token().as_deref(), Some(read_token.as_str()));
             let _ = stop().await;
         });
+    }
+
+    #[test]
+    fn tests_keep_the_discovery_file_and_token_out_of_the_real_home() {
+        let home = dirs::home_dir().expect("home directory").join(".fndr");
+        assert!(!discovery_path().starts_with(&home));
+        assert!(!token::token_path().starts_with(&home));
     }
 
     #[test]
