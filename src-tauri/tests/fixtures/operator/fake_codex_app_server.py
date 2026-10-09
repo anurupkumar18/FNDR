@@ -99,6 +99,15 @@ while True:
             ask(970, thread, turn, "get_app_state", {"app": "Spotify"}, "May fndr_computer proceed?")
             complete(thread, turn, json.dumps({"done": False, "detail": "refused"}))
             continue
+        if "PERSISTS_AFTER_NO" in text:
+            # After a no, the model tries other routes to the same end
+            # (seen live on 2026-10-08: letter keys, then set_value).
+            allow = 'Allow the fndr_computer MCP server to run tool "%s"?'
+            ask(980, thread, turn, "type_text", {"app": "Notes", "text": "hello"}, allow % "type_text")
+            ask(981, thread, turn, "press_key", {"app": "Notes", "key": "h"}, allow % "press_key")
+            ask(982, thread, turn, "set_value", {"app": "Notes", "element_index": "4", "value": "hello"}, allow % "set_value")
+            complete(thread, turn, json.dumps({"done": False, "detail": "declined"}))
+            continue
         if "AUTOMATION_DENIED" in text:
             # The bundled Computer Use without Automation permission.
             send({"id": 950, "method": "mcpServer/elicitation/request", "params": {

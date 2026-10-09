@@ -21,6 +21,8 @@ What was found on the owner's Mac on 2026-10-08:
 
 Two findings from Phase 1 also come from the helper being someone else's process: FNDR classifies a click from a cached label and cannot be sure which element the helper then acts on (C8.9), and typing can land in a field other than the one FNDR classified (N14).
 
+Added the same day, after the owner installed `open-computer-use` 0.3.6 and Notch Do ran: with Screen Recording granted, the helper attaches a picture of the operated app's window to every read, and Codex passes it to the model. It has no switch for this. FNDR now says so and counts it in Privacy Activity, but cannot stop it (`docs/evidence/W03/agent-surfaces-phase1.md`, "Notch Do live runs").
+
 ## Options
 
 | | A. Attach the new `js` tool | B. Depend on `open-computer-use` | C. FNDR acts itself |

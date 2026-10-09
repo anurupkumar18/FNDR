@@ -6,7 +6,16 @@ Date: 2026-10-07. Written at the owner's request when the session ran low on con
 
 The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
 
-## Update 9, 2026-10-08 (read this first)
+## Update 10, 2026-10-08 (read this first)
+
+Notch Do runs on the owner's Mac now. The owner installed `open-computer-use` 0.3.6 and granted it Accessibility and Screen Recording. Results and six findings are in `docs/evidence/W03/agent-surfaces-phase1.md`, "Notch Do live runs".
+
+- Fixed from the live runs: Codex exiting on an unknown `--disable` flag (this also broke Screen Guide's ChatGPT answers), turns running on a model the plan does not include, exits with no reason, `%20` search links held for a tap, a no being asked again, a finished run not saying what it left out, and the journal's risk column.
+- The helper sends a picture of the app's window with every read. Disclosed and logged; only ADR 026's executor removes it.
+- Open, next in this lane: tell the planner the name of the app in front; show the answer of a read-only request ("summarize this"); then the executor.
+- To rerun a live check: open a fixture page, then `FNDR_LIVE_REQUEST="in Google Chrome, ... on the page that is open" cargo test --lib live_notch_do -- --ignored --nocapture`. `FNDR_CODEX_TRACE=1` prints what Codex sends.
+
+## Update 9, 2026-10-08
 
 The owner delegated product and architecture decisions. Three were taken and recorded in `docs/team/decision-log.md`:
 

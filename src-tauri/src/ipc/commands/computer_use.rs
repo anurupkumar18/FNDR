@@ -440,6 +440,8 @@ pub(crate) struct Session {
     next_id: u64,
     planner_thread: String,
     operator_thread: String,
+    /// The person said no to an action during the turn in progress.
+    declined: bool,
 }
 
 impl Session {
@@ -499,6 +501,7 @@ impl Session {
             operator_thread: id(operator)?,
             server,
             next_id: 1_000,
+            declined: false,
         })
     }
 
@@ -550,6 +553,7 @@ impl Session {
                 command = ctx.commands.recv() => match command {
                     Some(RunCommand::Respond { request_key, approve }) => {
                         if let Some(approval) = pending.remove(&request_key) {
+                            self.declined |= !approve;
                             self.answer(approval.request_id, approve).await?;
                             journal(ctx, &approval.tool, &approval.args, Some(approval.risk), if approve { "approved" } else { "declined" }, None);
                             (ctx.emit)(ComputerUseEvent::ApprovalResolved { run_id: ctx.run_id.to_string(), request_key });
@@ -613,6 +617,12 @@ impl Session {
                                     self.answer(request_id, false).await?;
                                     journal(ctx, &tool, &args, Some(risk), "blocked", Some(reason.clone()));
                                     (ctx.emit)(ComputerUseEvent::Blocked { run_id: ctx.run_id.to_string(), index, tool, summary, reason });
+                                }
+                                Risk::Confirm if asks_no_more(self.declined) => {
+                                    // After a no the model tries other routes to the same
+                                    // end (letter keys, set_value). One no covers them all.
+                                    self.answer(request_id, false).await?;
+                                    journal(ctx, &tool, &args, Some(risk), "declined", Some(NO_COVERS_THE_STEP.to_string()));
                                 }
                                 Risk::Confirm => {
                                     let request_key = uuid::Uuid::new_v4().to_string();
@@ -780,6 +790,9 @@ fn record_tool_result(
     image_bytes: usize,
 ) {
     let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
+    // The risk the call was decided at, before this result changes what
+    // FNDR knows about focus.
+    let risk = classify(tool, args, ctx.observed).risk;
     if ok && tool == "get_app_state" && !app.is_empty() {
         ctx.observed.observe_tree(app, result_text);
     }
@@ -806,7 +819,6 @@ fn record_tool_result(
             sent_kinds(result_text, image_bytes),
         );
     }
-    let risk = classify(tool, args, ctx.observed).risk;
     let detail = (!ok).then(|| truncate(result_text, 200));
     journal(
         ctx,
@@ -926,10 +938,18 @@ async fn wait_for_start(
     }
 }
 
+const NO_COVERS_THE_STEP: &str = "the person already said no in this step";
+
+/// Whether to stop asking for the rest of a step: once the person has said
+/// no, nothing else in it that needs a yes is put to them.
+fn asks_no_more(declined_in_this_step: bool) -> bool {
+    declined_in_this_step
+}
+
 /// Whether a failed step gets its second attempt. Asking again after the
 /// person declined would put the same question to them twice.
 fn worth_retrying(verdict: &plan::Verdict) -> bool {
-    !verdict.ok && verdict.detail != plan::LINK_DECLINED
+    !verdict.ok && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
 }
 
 /// One attempt at one step; returns what FNDR saw afterward.
@@ -1052,6 +1072,7 @@ async fn attempt_step(
                 text.len(),
             );
             let operator_thread = session.operator_thread.clone();
+            session.declined = false;
             let mut turn = TurnContext {
                 run_id: &ctx.run_id,
                 step: Some(index),
@@ -1089,7 +1110,14 @@ async fn attempt_step(
             }
             seen.media_track_before = track_before;
             seen.reported_done = reported_done;
-            Ok(plan::verify(step, &seen))
+            let verdict = plan::verify(step, &seen);
+            if !verdict.ok && session.declined {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: plan::ACTION_DECLINED.to_string(),
+                });
+            }
+            Ok(verdict)
         }
     }
 }
@@ -1247,7 +1275,7 @@ async fn run_with_snippets(
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: format!("Done: {}.", done.join(", ")),
+        summary: plan::with_left_out_note(format!("Done: {}.", done.join(", ")), &ctx.request),
     });
     session.server.shutdown().await;
     Ok(())
@@ -1736,6 +1764,7 @@ mod tests {
             detail: detail.to_string(),
         };
         assert!(!worth_retrying(&verdict(false, plan::LINK_DECLINED)));
+        assert!(!worth_retrying(&verdict(false, plan::ACTION_DECLINED)));
         assert!(worth_retrying(&verdict(false, "Spotify is not in front")));
         assert!(!worth_retrying(&verdict(true, "")));
     }
@@ -2189,6 +2218,59 @@ mod tests {
             .await;
         assert_eq!(result, Err(RunError::Failed(ACTIONS_OFF.to_string())));
         assert!(journal_lines(&journal_path).is_empty());
+        session.server.shutdown().await;
+    }
+
+    /// One no covers the step: the routes the model tries next are declined
+    /// without putting each to the person.
+    #[tokio::test]
+    async fn after_a_no_nothing_else_in_the_step_is_put_to_the_person() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorded = asked.clone();
+        let emit = move |event: ComputerUseEvent| {
+            if let ComputerUseEvent::Approval { request_key, tool, .. } = &event {
+                recorded.lock().unwrap().push(tool.clone());
+                commands
+                    .send(RunCommand::Respond {
+                        request_key: request_key.clone(),
+                        approve: false,
+                    })
+                    .unwrap();
+            }
+        };
+        let journal_path = dir.path().join("journal.jsonl");
+        let journal = Journal::new(journal_path.clone());
+        let mut observed = Observed::default();
+        let guards = Guards::open();
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r8",
+            step: Some(0),
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Notes. Goal: PERSISTS_AFTER_NO.",
+                plan::step_report_schema(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(*asked.lock().unwrap(), ["type_text"], "asked once");
+        assert!(session.declined);
+        let declined = journal_lines(&journal_path)
+            .iter()
+            .filter(|line| line["outcome"] == "declined")
+            .count();
+        assert_eq!(declined, 3, "all three were declined and journaled");
         session.server.shutdown().await;
     }
 

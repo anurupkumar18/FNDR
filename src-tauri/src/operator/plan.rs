@@ -94,13 +94,8 @@ pub fn step_report_schema() -> Value {
 /// written is refused here, before anything touches the Mac.
 const NOTHING_TO_DO: &str = "Nothing to do in that request.";
 
-/// Says why a request came back with no steps. The planner leaves out
-/// what Notch Do never does, so a request that was only that comes back
-/// empty; the person should hear the reason, not "nothing to do".
-pub fn explain_empty_plan(error: String, request: &str) -> String {
-    if error != NOTHING_TO_DO {
-        return error;
-    }
+/// Whether the request's words ask for something Notch Do never does.
+fn asks_for_something_never_done(request: &str) -> bool {
     static NEVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let never = NEVER.get_or_init(|| {
         regex::Regex::new(
@@ -108,7 +103,30 @@ pub fn explain_empty_plan(error: String, request: &str) -> String {
         )
         .expect("never-tier pattern compiles")
     });
-    if never.is_match(request) {
+    never.is_match(request)
+}
+
+/// What a finished run adds when the request also asked for something Notch
+/// Do never does. The planner leaves that part out, so without this a run
+/// for "buy it" would end in a plain "Done".
+pub const LEFT_OUT: &str = "Left out: Notch Do does not send, delete, buy, enter passwords or change settings.";
+
+pub fn with_left_out_note(summary: String, request: &str) -> String {
+    if asks_for_something_never_done(request) {
+        format!("{summary} {LEFT_OUT}")
+    } else {
+        summary
+    }
+}
+
+/// Says why a request came back with no steps. The planner leaves out
+/// what Notch Do never does, so a request that was only that comes back
+/// empty; the person should hear the reason, not "nothing to do".
+pub fn explain_empty_plan(error: String, request: &str) -> String {
+    if error != NOTHING_TO_DO {
+        return error;
+    }
+    if asks_for_something_never_done(request) {
         "Notch Do does not send, delete, buy, enter passwords or change settings, so there was nothing it could do for that.".to_string()
     } else {
         error
@@ -241,6 +259,9 @@ fn query_words(url: &str) -> Vec<String> {
 }
 
 const SEARCH_HOSTS: &[&str] = &["google.com", "bing.com", "duckduckgo.com"];
+
+/// What an operate step reports when the person said no to an action in it.
+pub const ACTION_DECLINED: &str = "You said no, so this was not done";
 
 /// What a link step reports when the person said no to opening it.
 pub const LINK_DECLINED: &str = "The link was not opened";
@@ -442,6 +463,17 @@ mod tests {
             detail: "Nothing is playing".to_string(),
         };
         assert!(!checked_by_fndr(&step("media_playing"), &failed));
+    }
+
+    #[test]
+    fn a_finished_run_says_what_it_left_out() {
+        // Live run, 2026-10-08: "buy it" planned only "Open Google Chrome".
+        let done = "Done: Open Google Chrome.".to_string();
+        assert_eq!(
+            with_left_out_note(done.clone(), "in Chrome, buy it on the page that is open"),
+            format!("{done} {LEFT_OUT}")
+        );
+        assert_eq!(with_left_out_note(done.clone(), "open Chrome"), done);
     }
 
     #[test]
