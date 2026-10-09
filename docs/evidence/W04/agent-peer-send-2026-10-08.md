@@ -21,6 +21,8 @@ A second ignored live Rust test fetched [AgentNative Data Exchange's public Card
 
 Ledger capacity check: a focused regression first showed that the 101st Send discarded the oldest run even when it was still working. The ledger now retains uncertain and active runs, reuses a completed run's slot when available, and refuses a new Send before egress when all 100 slots are unfinished. The test checks both preservation and reuse at the real StateStore boundary. The isolated `agent::peer_runs::tests::` run passed 2 tests after the fix.
 
+Card output compatibility: FNDR requests and displays `text/plain`, but the validator previously accepted a Card offering only `application/json` output. The regression failed on that Card before the change. The validator now requires default `text/plain` output. The final isolated peer binary passed 18 local tests with 2 external tests ignored. Current Emissar and AgentNative Cards both advertise text output; this read-only check does not prove a native UI flow.
+
 ## Acceptance still open
 
 - Native reviewed-text and ledger verification for the real peer path. The two live transport tests check synthetic questions and relevant replies; the local fixture checks the exact JSONRPC request body. Bearer credential binding is still absent.
