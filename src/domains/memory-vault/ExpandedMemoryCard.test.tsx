@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
 import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
@@ -123,6 +123,31 @@ describe("ExpandedMemoryCard", () => {
         expect(await screen.findByText("Related memories unavailable.")).toBeTruthy();
         expect(await screen.findByText("Graph context unavailable.")).toBeTruthy();
         expect(screen.queryByText(/loading subgraph/i)).toBeNull();
+    });
+
+    it("keeps Tab inside the card and closes on Escape", async () => {
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
+        const onClose = vi.fn();
+        render(
+            <>
+                <button type="button">Behind the card</button>
+                <ExpandedMemoryCard card={card} onClose={onClose} />
+            </>,
+        );
+        const dialog = screen.getByRole("dialog", { name: "Expanded memory: Primary memory" });
+        const close = screen.getByRole("button", { name: "Close memory details" });
+        await waitFor(() => expect(close).toHaveFocus());
+
+        const focusable = within(dialog).getAllByRole("button").filter((button) => !button.hasAttribute("disabled"));
+        const last = focusable[focusable.length - 1];
+        last.focus();
+        fireEvent.keyDown(last, { key: "Tab" });
+        // Tab from the last control wraps to the first instead of leaving for the page behind.
+        expect(close).toHaveFocus();
+
+        fireEvent.keyDown(close, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("renders related memories as named actions", async () => {
