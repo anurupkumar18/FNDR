@@ -390,6 +390,29 @@ fn is_search_field(description: &str) -> bool {
     field && has_word(description, SEARCH_WORDS)
 }
 
+/// A browser's address bar: a search field that also goes wherever it is told.
+fn is_address_field(description: &str) -> bool {
+    is_search_field(description) && has_word(description, &["address", "url", "location"])
+}
+
+/// Whether typed text is an address and not words to search for. A link the
+/// person did not ask for waits for a tap (ADR 024), and typing one into the
+/// address bar is the same thing by another route.
+fn looks_like_address(text: &str) -> bool {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return false;
+    }
+    let scheme = text
+        .split_once(':')
+        .is_some_and(|(scheme, _)| !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic()));
+    let host = text
+        .split(['/', '?', '#'])
+        .next()
+        .is_some_and(|host| host.contains('.') && !host.starts_with('.') && !host.ends_with('.'));
+    scheme || host || text.starts_with("localhost")
+}
+
 fn decision(risk: Risk, reason: impl Into<String>) -> Decision {
     Decision {
         risk,
@@ -494,6 +517,12 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
             match target.as_deref() {
                 Some(field) if is_secure(field) => {
                     decision(Risk::Never, "credentials are never entered")
+                }
+                Some(field)
+                    if is_address_field(field)
+                        && looks_like_address(text(if tool == "set_value" { "value" } else { "text" })) =>
+                {
+                    decision(Risk::Confirm, "goes to an address typed into the address bar")
                 }
                 Some(field) if is_search_field(field) => {
                     decision(Risk::Runs, "types into a search field")
@@ -656,6 +685,33 @@ Window: \"Shop\", App: Google Chrome.\n\
         ] {
             assert_eq!(key(name), Risk::Confirm, "{name}");
         }
+    }
+
+    #[test]
+    fn an_address_typed_into_the_address_bar_waits_for_a_tap() {
+        // Live run, 2026-10-08: with no page to read, the model used Chrome's
+        // address bar. Words there are a search; an address is a link.
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Google Chrome",
+            "App=com.google.Chrome (pid 9)\n0 standard window New Tab\n\t1 text field (settable, string) Address and search bar\n\t2 search text field Search this site\n",
+        );
+        o.note_target("Google Chrome", "1");
+        let typing = |o: &Observed, text: &str| {
+            risk("type_text", json!({"app": "Google Chrome", "text": text}), o)
+        };
+        assert_eq!(typing(&o, "running shoes"), Risk::Runs);
+        for address in ["evil.example/steal?d=1", "https://evil.example", "javascript:alert(1)", "localhost:3000", "192.168.1.1"] {
+            assert_eq!(typing(&o, address), Risk::Confirm, "{address}");
+        }
+        let setting = |o: &Observed, value: &str| {
+            risk("set_value", json!({"app": "Google Chrome", "element_index": "1", "value": value}), o)
+        };
+        assert_eq!(setting(&o, "evil.example"), Risk::Confirm);
+        assert_eq!(setting(&o, "running shoes"), Risk::Runs);
+        // A page's own search box takes whatever is typed: it cannot leave the site.
+        o.note_target("Google Chrome", "2");
+        assert_eq!(typing(&o, "evil.example"), Risk::Runs);
     }
 
     #[test]
