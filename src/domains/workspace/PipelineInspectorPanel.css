@@ -1058,7 +1058,6 @@
 
 .pipeline-skip-reasons li span {
     color: rgba(223, 227, 237, 0.86);
-    text-transform: capitalize;
 }
 
 .pipeline-skip-reasons li strong {
@@ -1072,8 +1071,15 @@
     color: rgba(223, 227, 237, 0.86);
 }
 
-.pipeline-privacy-note {
-    margin-top: 12px;
+.pipeline-panel--privacy .pipeline-muted {
+    margin: 4px 0 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.pipeline-panel--privacy .pipeline-privacy-note {
+    margin: 12px 0 0;
 }
 
 /* ===== Light Theme ===== */
