@@ -1,58 +1,43 @@
-# Handoff: Codex agent peer lane
+# Codex peer lane checkpoint, 2026-10-08
 
-## Goal and five-hour sequence
-
-Keep this lane on FNDR's agent interoperability while the two Claude sessions finish briefing/task quality and agent surfaces in the shared checkout. Use one measurable slice at a time.
-
-| Time box | Output | Gate |
-| --- | --- | --- |
-| 0:00–1:00 | Audit current MCP/Hermes boundary and decide A2A/MCP roles | ADR 025 and current-code evidence |
-| 1:00–2:00 | Give embedded Hermes a server-enforced read grant | Real localhost MCP positive/negative tests |
-| 2:00–3:00 | Define a configured peer and validate an A2A 1.0 Agent Card | Fixture and negative tests for card schema, URL, version, binding and required extension |
-| 3:00–4:00 | Build a delegation draft with an exact source attachment preview | Current durable-record authorization; excluded/missing source negatives |
-| 4:00–5:00 | Review quality, run focused suites, commit only owned hunks, write next checkpoint | Remote tip and clean ownership check |
-
-The first two boxes are complete. The third now has a validated backend boundary, saved peer choice, and Agent UI entry point. A peer task draft preview now uses the existing Agent chat memory selection and current source checks. Real-peer interoperability, Bearer credential binding, and send-time preview matching remain open. The remaining boxes are ordered gates, not a claim that transport or delegation is implemented.
+This replaces the completed five-hour plan in the earlier version of this file. The ongoing goal is to improve FNDR product quality, architecture, AI behavior and autonomous development through one verified slice at a time. The two Claude sessions still share this checkout.
 
 ## Current state
 
-- `main` includes Codex commit `d1a575f` for a bounded A2A 1.0 Agent Card validator/fetch. Earlier Codex commits are `aeb8a05` (grant and ADR), `2fbb581` (documentation correction), and `4dbcc95` (raw evidence restriction).
-- `agent/peer.rs` accepts a same-origin HTTPS JSON-RPC 1.0 Card with anonymous or Bearer authentication and no required extension. It checks DNS answers before egress, pins one vetted address, disables proxies and redirects, and bounds time and response bytes.
-- `agent/peer_store.rs` saves up to eight checked peers in the local StateStore, keyed by Card URL. The Agent UI adds and removes them; it sends only the public Card request. No credential binding or task send exists yet. The browser preview uses a synthetic peer fixture.
-- `agent/delegation.rs` builds a bounded task preview for a saved peer from the task, output goal, and explicit attached memory IDs. It uses `context_source_memories` to resolve aliases against current visibility, includes only current display summaries, and rejects missing or newly blocked sources. No A2A request is sent or persisted.
-- ADR 025 decides outbound A2A client first, explicit reviewable delegation, current source checks before egress, durable peer-task and egress records, and no automatic trust in remote artifacts. A2A transport is unbuilt.
-- The shared checkout remains dirty with the Claude sessions' Rust changes. In particular, unstaged formatting/test movement in `src-tauri/src/mcp/mod.rs` belongs to the other session. Do not stash, reset, or stage that entire file.
+- `main` includes `bada5ac` (reviewed A2A 1.0 Send/Get/Cancel and content-free run ledger), `7778384` (saved peer sends in Privacy Activity), and `80f8fa1` (ignored live interoperability test). Earlier peer and Hermes read-grant commits are listed in [the cross-session checkpoint](2026-10-08-cross-session-closeout.md).
+- A person can save an explicitly configured HTTPS Card, preview the exact text and selected current memory summaries, then Send. The backend revalidates Card, DNS, endpoint, source visibility, destination and reviewed text before egress. An uncertain send is recorded and never retried automatically. Peer output stays untrusted and outside memory.
+- Get and Cancel require a known remote task ID. Cancel is followed by Get before its state is shown. Bearer-protected peers are refused because FNDR has no peer credential binding yet.
+- Privacy Activity shows saved host, time, request size and readable state. The session request counter remains separate from this durable list.
+- The checkout is dirty only in another session's `risk_policy.rs`, `mcp/mod.rs` and `storage/lance_store/tests.rs` as of this checkpoint. Inspect current status before editing or staging.
 
-## Verification
+## Verification and limits
 
-| Command | Result |
-| --- | --- |
-| `CARGO_BUILD_JOBS=1 cargo test --lib mcp::tests::` | 39 passed |
-| `CARGO_BUILD_JOBS=1 cargo test --lib mcp::remember_http_tests::` | 15 passed |
-| `CARGO_BUILD_JOBS=1 cargo test --lib ipc::commands::hermes_codex::tests::mcp_block_quotes_the_endpoint_and_token` | 1 passed |
-| `CARGO_BUILD_JOBS=1 cargo test --lib mcp::tests::hermes_token_is_limited_by_the_server_to_its_four_read_tools` | Red before raw guard, then 1 passed after guard |
-| `git diff --cached --check` | Passed before each Codex commit |
-| `CARGO_BUILD_JOBS=1 cargo test --lib agent::peer::tests::` | Red for the parser and fetch first; then 7 passed. The final IANA IPv6 special-use correction passed its focused test. |
-| `CARGO_BUILD_JOBS=1 cargo test --lib agent::peer_store::tests::` | 1 passed for durable save, dedupe, and removal. |
-| `CARGO_BUILD_JOBS=1 cargo check --bin fndr` | Passed with existing warnings. |
-| `npm test -- --run src/domains/workspace/PeerDirectory.test.tsx src/domains/workspace/AgentWorkspace.test.tsx` | 22 passed. |
-| `npm run typecheck` and `npm run build` | Passed. |
-| Playwright browser preview, `http://127.0.0.1:1420/ui-preview.html` | Agent > Peers > add synthetic Card > remove > back to chat passed. This checks mounted UI behavior, not native peer networking. |
-| `CARGO_BUILD_JOBS=1 cargo test --lib agent::delegation::tests::` | Red on the pending builder, then passed for alias resolution, current summary only, missing-source refusal, and a later blocklist exclusion. |
-| `npm test -- --run src/domains/workspace/PeerDirectory.test.tsx src/domains/workspace/AgentWorkspace.test.tsx` | 23 passed after the draft form. |
-| Playwright browser preview | Add synthetic peer, enter task and output goal, preview exact text and destination. No Send control exists. |
-| `FNDR_DATA_DIR=/tmp/fndr-codex-peer-qa.oAcl0j CARGO_BUILD_JOBS=1 npm run tauri dev` | Native app compiled and launched; log confirmed the disposable profile override. The computer-use inventory and macOS window listing exposed no FNDR window, so native UI/IPC interaction was not verified. Dev file changes from another session caused one rebuild. App was stopped. The disposable profile, which briefly held captures, was removed with a fixed-path, checked cleanup after a broad recursive shell command was rejected. |
+- Peer Rust tests: 17 passed; delegation Rust tests: 3 passed; peer-run persistence test: 1 passed. Peer and Privacy Activity frontend tests: 20 passed. Typecheck, production build and native binary check passed. The shared tree has existing compiler warnings.
+- Browser preview: synthetic Card, reviewed Send, status check and Privacy Activity row worked; zero browser console errors. This proves mounted frontend behavior against preview IPC only.
+- The ignored live Rust test fetched [Emissar's public A2A 1.0 Card](https://emissar.ai/agent), sent a synthetic question through FNDR's transport and received reviewable output. It proves one independent Send path, not native UI, ledger, Get or Cancel.
+- Earlier disposable native launch confirmed `FNDR_DATA_DIR` isolation, but no FNDR window appeared in the available automation inventory. Repeating the same launch without a new window-access route would add no UI evidence. See [peer Send evidence](../evidence/W04/agent-peer-send-2026-10-08.md) and [ADR 025](../decisions/025-agent-peer-interoperability.md).
 
-The MCP test starts a real localhost server with a disposable profile. It checks four-tool discovery, method and action refusals, current sharing consent, restart behavior, raw-evidence refusal, and the full-token path. This is not a full Hermes gateway or GUI test. No real owner vault contents were used.
+## Next slices, in order
 
-## Next actions
+1. Finish AG-04 protocol lifecycle evidence: exercise Get and cancellation against a controlled peer, including working after cancel request, confirmed cancel, unknown task and uncertain Send. Keep synthetic data and exact wire assertions. Recheck source visibility after the network response.
+2. Establish a native window-access route, then run Peer UI and Privacy Activity after restart on a disposable profile. Do not use the owner vault. If the route remains unavailable, report native QA pending without another duplicate build.
+3. Bind a credential to one configured peer if a real target needs Bearer. Never place it in a Card URL, task body or run ledger. Prove endpoint binding and refusal after credential removal.
+4. After AG-04, measure task usefulness, unsupported claims, latency and bytes against two independent peers before expanding to inbound A2A. Keep AG-04 Doing until its native and lifecycle gates pass; AG-05 owns broader native Agent QA.
+5. When the Claude sessions settle, run one serial full gate and reconcile the board with their commits. Continue the core daily-loop QA from the cross-session checkpoint without repeating browser or synthetic evidence as native proof.
 
-1. Reinspect and revalidate the Card before any later task request; a saved endpoint or DNS answer is never enough. Bind Bearer credentials out of band, without putting them in the Card URL or message. Run a real independent-peer check before accepting Part 2.
-2. At Send, rebuild the draft against `context_runtime::context_source_memories` and compare with the reviewed preview. Hidden, missing, deleted and stale sources must block; aliases must resolve to the current canonical record. Prove preview text equals the A2A Message text bytes on the wire. Add a durable local draft/run ID and content-free egress record before any task POST.
-3. Keep new peer code out of Claude's active briefing/task/agent-surface files where possible. If shared command registration is needed, stage only owned hunks and inspect the index before committing.
-4. Do not claim peer tasks, cancellation or privacy accounting until the later ADR 025 gates pass. Keep external messages/artifacts as untrusted evidence.
+## Process doctor
 
-## Sources
+- Worked: explicit-path commits protected the shared checkout; focused tests and one verification gate per slice kept work moving. The public peer test found a real interoperability path without owner data.
+- Failed: the earlier five-hour plan and cross-session status remained in handoffs after their work shipped. Repeated native launches had no visible window and did not improve the acceptance claim. Multiple Cargo commands competed for the same artifact lock once; later checks ran serially.
+- Correction: AGENTS now permits a scoped ticket to start from its execution skill and existing decision instead of replaying discovery. This file replaces its stale plan with current state. Native GUI QA resumes only when window access changes.
 
-- [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/) for Agent Card, Task, Message and Artifact contracts.
-- [A2A and MCP comparison](https://a2a-protocol.org/v1.0.0/topics/a2a-and-mcp/) for the peer-task versus tool/data split.
+ANTI-BLOAT REVIEW
+
+- Behavior delivered: one reviewed outbound peer flow and durable content-free activity visibility.
+- Complexity added: one peer transport module, one run record module, IPC commands and mounted UI state. The separate public run view omits source IDs intentionally.
+- Bloat risks: peer state labels are mapped in two mounted views; keep them local until a third caller justifies a shared utility. The browser IPC fixture is synthetic and should not grow into a second backend.
+- Simplifications required: reuse the existing StateStore, context source authorization and Privacy Activity. Avoid another delegation framework or duplicate planning document.
+- Code to delete or merge: none in this slice. Remove superseded handoff claims rather than retaining a second current state.
+- Interface improvements: future Bearer binding should attach to saved peer identity and exact endpoint.
+- Testability gaps: native window, Get/Cancel lifecycle and second independent peer.
+- Verdict: approve with the stated acceptance work open.
