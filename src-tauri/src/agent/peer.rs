@@ -783,4 +783,27 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), request);
         server.abort();
     }
+
+    #[tokio::test]
+    #[ignore = "uses a public external peer and a synthetic question"]
+    async fn live_independent_text_peer_returns_a_reviewable_result() {
+        let card = inspect_configured_peer("https://emissar.ai/.well-known/agent-card.json")
+            .await
+            .unwrap();
+        assert_eq!(card.endpoint.as_str(), "https://emissar.ai/a2a/v1");
+        let sent = send_to_peer(
+            &card,
+            &uuid::Uuid::new_v4().to_string(),
+            "Task:\nWhich Emissar modules are live today?\n\nOutput goal:\nOne factual sentence.",
+        )
+        .await
+        .unwrap();
+        assert!(
+            sent.output_text
+                .as_ref()
+                .is_some_and(|text| !text.is_empty()),
+            "peer state {} did not include a reviewable result",
+            sent.state
+        );
+    }
 }
