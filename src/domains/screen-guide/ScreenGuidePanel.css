@@ -179,8 +179,8 @@
 }
 
 .sg-shortcut-row input:focus {
-    border-color: rgba(74, 142, 221, 0.6);
-    box-shadow: 0 0 0 2px rgba(74, 142, 221, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .sg-shortcut-row .ui-action-btn,
@@ -252,8 +252,8 @@
 }
 
 .sg-question-row input:focus {
-    border-color: rgba(74, 142, 221, 0.6);
-    box-shadow: 0 0 0 2px rgba(74, 142, 221, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .sg-ask-button {
