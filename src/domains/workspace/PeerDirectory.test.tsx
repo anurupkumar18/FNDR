@@ -84,6 +84,12 @@ describe("PeerDirectory", () => {
         expect(screen.queryByText("Loading peers…")).not.toBeInTheDocument();
     });
 
+    it("reports when peer send history cannot be loaded", async () => {
+        ipc.listPeerRuns.mockRejectedValue(new Error("History unavailable"));
+        render(<PeerDirectory onBack={vi.fn()} />);
+        expect(await screen.findByRole("alert")).toHaveTextContent("Could not load peer send history: History unavailable");
+    });
+
     it("keeps a stale peer visible when removal did not happen", async () => {
         ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
         ipc.removeConfiguredPeer.mockResolvedValue(false);
@@ -119,6 +125,31 @@ describe("PeerDirectory", () => {
         ));
         expect(await screen.findByText(/remote-1/)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Send task" })).not.toBeInTheDocument();
+    });
+
+    it("keeps a confirmed send visible when its history refresh fails", async () => {
+        ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
+        ipc.listPeerRuns.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("History unavailable"));
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Output goal" }), { target: { value: "Brief report" } });
+        fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Send task" }));
+        expect(await screen.findByRole("alert")).toHaveTextContent("Could not load peer send history: History unavailable");
+        expect(screen.getByText(/Peer task remote-1/)).toBeInTheDocument();
+    });
+
+    it("keeps the delivery warning when Send and history refresh both fail", async () => {
+        ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
+        ipc.sendPeerDelegation.mockRejectedValue(new Error("Peer task request failed; delivery is uncertain"));
+        ipc.listPeerRuns.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("History unavailable"));
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Output goal" }), { target: { value: "Brief report" } });
+        fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Send task" }));
+        expect(await screen.findByRole("alert")).toHaveTextContent("Could not load peer send history: History unavailable");
+        expect(screen.getByRole("alert")).toHaveTextContent("delivery is uncertain");
     });
 
     it("explains a direct reply that has no displayable text", async () => {
