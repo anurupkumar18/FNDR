@@ -483,9 +483,20 @@ fn main() {
                     let mut recent_app_switches: std::collections::VecDeque<String> =
                         std::collections::VecDeque::with_capacity(APP_SWITCH_RECENT_CAPACITY);
 
+                    let mut signal_clock = fndr_lib::proactive_signals::SignalClock::default();
+
                     let mut interval = tokio::time::interval(PROACTIVE_NOTIFICATION_TICK);
                     loop {
                         interval.tick().await;
+
+                        // Stuck detector, thread updates and meeting prep:
+                        // each on its own cadence, switch and daily limit.
+                        fndr_lib::proactive_signals::run_due(
+                            &notif_handle,
+                            &notif_state,
+                            &mut signal_clock,
+                        )
+                        .await;
 
                         let now = chrono::Local::now();
                         let hour = now.hour();
