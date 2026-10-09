@@ -48,6 +48,7 @@ pub mod telemetry;
 pub mod timeline;
 pub mod voice;
 pub mod wiki;
+pub mod workset;
 
 use config::Config;
 use graph::GraphStore;

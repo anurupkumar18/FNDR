@@ -8,7 +8,7 @@ pub use search::{
     search_raw_results, summarize_search, NeedsSignalCard,
 };
 
-mod memory;
+pub(crate) mod memory;
 pub use memory::*;
 
 mod quality;
