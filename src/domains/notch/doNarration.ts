@@ -5,6 +5,7 @@
  * reported. Speech never decides anything: an approval is still a tap.
  */
 
+import type { WorkItem } from "@/shared/ipc/tauri";
 import { isStopPhrase, type DoState } from "./doRun";
 
 export interface Narration {
@@ -49,7 +50,61 @@ function leftOut(steps: DoState["steps"]): string {
     return pending.length === 0 ? "" : `I left out: ${pending.map((step) => sentence(step.label)).join(", ")}.`;
 }
 
+/** A site's name as people say it: `canvas.utah.edu` is Canvas. */
+function siteName(host: string): string {
+    const labels = host.toLowerCase().replace(/^www\./, "").split(".");
+    const known = ["canvas", "notion", "github", "figma", "overleaf", "gradescope", "piazza", "youtube"];
+    const name = labels.find((label) => known.includes(label)) ?? labels[Math.max(0, labels.length - 2)] ?? host;
+    if (name === "github") return "GitHub";
+    if (name === "youtube") return "YouTube";
+    return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** How the notch names a place it opens: "your Canvas page", "the PDF on page 4", "the doc". */
+export function spokenItem(item: WorkItem): string {
+    switch (item.kind) {
+        case "pdf_page":
+            return item.page ? `the PDF on page ${item.page}` : "the PDF";
+        case "url": {
+            const host = item.host ?? "";
+            if (host === "docs.google.com") return "the doc";
+            return host ? `your ${siteName(host)} page` : "the page";
+        }
+        case "file":
+            return `the file ${sentence(item.label)}`;
+        case "folder":
+            return `the ${sentence(item.label)} folder`;
+        case "app":
+            return sentence(item.label || item.appName);
+    }
+}
+
+/** "a", "a and b", "a, b and c". */
+function listed(parts: string[]): string {
+    if (parts.length <= 1) return parts.join("");
+    return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+function plannedReopens(next: DoState): Narration {
+    const places = listed(next.steps.map((step) => (step.item ? spokenItem(step.item) : sentence(step.label))));
+    return {
+        text: next.autoStart
+            ? `Opening ${places}.`
+            : `${plural(next.steps.length, "place")} to open: ${places}. Tap Start when you are ready.`,
+        urgent: false,
+    };
+}
+
+function choices(next: DoState): Narration {
+    const named = next.options.map((option, index) => `${num(index + 1)}, ${sentence(option.title)}`).join("; ");
+    return {
+        text: `That could be ${plural(next.options.length, "piece")} of work: ${named}. Tap one or say its number.`,
+        urgent: false,
+    };
+}
+
 function planned(next: DoState): Narration {
+    if (next.steps.every((step) => step.action === "reopen_memory")) return plannedReopens(next);
     const heard = sentence(next.transcript);
     const lead = `${heard ? `Understood: ${heard}. ` : ""}${plural(next.steps.length, "step")}.`;
     return {
@@ -73,6 +128,7 @@ function finished(next: DoState): Narration {
 /** The line to say now that `next` follows `prev`, or null for silence. */
 export function narrate(prev: DoState, next: DoState): Narration | null {
     if (next.phase === "plan" && prev.phase !== "plan" && next.steps.length > 0) return planned(next);
+    if (next.phase === "choose" && next.options.length > 0 && next.options !== prev.options) return choices(next);
 
     if (next.approval && next.approval.requestKey !== prev.approval?.requestKey) {
         return { text: `I need your okay to ${sentence(next.approval.summary)}. Tap Allow, or say no.`, urgent: true };
