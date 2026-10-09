@@ -21,6 +21,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Done when.** The scorecard shows top-five at 36 of 40 or better on the same copy, the three seeded gates still pass, and the miss classes are written down.
 
+**Result.** Done on 2026-10-07; this line was added on 2026-10-08. On a re-embedded copy the gist search went from 30 to 37 of 40 in the top five, over the target of 36. Miss classes: the summary was absent from the embedded text (the largest, fixed by VS-86), two lost in fusion while the vector branch had them (VS-87), one with a primary vector far from its own summary. On the owner's vault after both repairs (2026-10-08, a different sample of 40): the exact memory in the top five for 34, a memory with the same title for 37, none wrongly marked weak. The three seeded gates pass.
+
 **Evidence.** `docs/evidence/W04/vs-85-known-item-search.md` with the before and after scorecard, counts only.
 
 ## VS-86 Make the embedding text say what the memory is about
@@ -37,6 +39,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Cap each list segment (commands, entities, files) so one long item cannot dominate.
 3. Confirm no `context_thread: session` segment is written any more (2 of 147 older rows still carry one).
 4. This changes the embedding document, so bump `EMBEDDING_DOCUMENT_VERSION`, update the Python mirror in `scripts/audit/embedding_bakeoff.py`, and plan the re-embed of existing rows.
+
+**Result.** Done on 2026-10-07 with VS-85; this line was added on 2026-10-08. The card summary leads the primary text when it is not a placeholder, prose misfiled as a command is left out, capture, review and repair share one recipe (`memory_embedding_document::refresh_text_vectors`), and `EMBEDDING_DOCUMENT_VERSION` is 2. On the owner's vault 152 of 158 primary vectors match a fresh embedding of their text and 6 have drifted slightly; 2 rows still carry a `context_thread: session` segment.
 
 **Done when.** Unit tests cover the composition, the three seeded gates pass, and the VS-85 scorecard improves on a re-embedded copy.
 

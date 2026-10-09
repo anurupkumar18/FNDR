@@ -27,6 +27,14 @@ All committed and on both remotes.
 - **Second review pass** on the repaired copy: visible weak rows 18 to 14. `docs/evidence/W04/vs-91-weak-summaries.md`.
 - The retrieval gate fails on every "yesterday" query when run with `QA_SKIP_SEED=1` on a profile seeded on an earlier day. Reseed first.
 
+Later the same day the owner delegated product and architecture decisions in this lane. Each one is a row in `docs/team/decision-log.md`.
+
+- **Second repair applied to the real vault** (62 of 158 rows; backup `com.fndr.app.lancedb-backup-20261008-172306-before-second-repair`). Title search 10 of 11, no unrelated query marked strong.
+- **Voice:** a present-tense statement of what the screen held is in voice. The extraction prompt is unchanged.
+- **VS-88 deferred** to the ADR 019 model choice; one code path for the BGE prompts.
+- **VS-92:** the Vault session row is composed from its moments with no model and nothing stored. It shows "N moments over M min", the files, decisions, next steps and errors the moments record, and the most detailed earlier sentence. Sessions in different apps are linked when they are within ten minutes and share a file or two distinctive title words. Seen working in the UI preview (`ui-preview.html`).
+- Every ticket in the lane file now has a result. What is left: task recall on real mail and chat (needs the owner's labels), 32 visible card lines that are titles or noun phrases, 6 primary vectors that have drifted slightly.
+
 Open items 1, 3 and 4 below are done. Item 2 is the owner's call: the remaining "The ... is ..." summaries are the model following the extraction prompt's "Describe what is visible". Asking it for a past-tense action instead invites it to invent one.
 
 The repair tool now changes 16 more rows on a copy (labels only, vectors kept). Not applied to the real vault.
