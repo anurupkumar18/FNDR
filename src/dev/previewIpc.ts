@@ -1435,6 +1435,42 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
+            case "computer_use_permissions":
+                return {
+                    accessibility: true,
+                    screenRecording: true,
+                    automationMedia: null,
+                    backend: null,
+                    backendReady: null,
+                    backendDetail: null,
+                };
+            case "setup_components":
+                return [
+                    {
+                        id: "codex",
+                        name: "Codex",
+                        purpose: "Signs in to ChatGPT for Hermes and Notch Do.",
+                        required: false,
+                        state: "ready",
+                        version: "0.45.0",
+                        detail: null,
+                        action: null,
+                        url: null,
+                    },
+                    {
+                        id: "hermes",
+                        name: "Hermes Agent",
+                        purpose: "Answers questions with the memories you attach.",
+                        required: false,
+                        state: "missing",
+                        version: null,
+                        detail: "Not installed yet.",
+                        action: "install",
+                        url: null,
+                    },
+                ];
+            case "install_component":
+                return null;
             case "openclicky_bridge_status":
                 return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
             case "list_agent_chats":
