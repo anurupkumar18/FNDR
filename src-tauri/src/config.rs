@@ -779,6 +779,72 @@ pub struct Config {
     /// macOS banners for proactive notifications.
     #[serde(default)]
     pub notifications: NotificationConfig,
+    /// How FNDR speaks when a surface talks back: which voice and how fast.
+    #[serde(default)]
+    pub voice_output: VoiceOutputConfig,
+}
+
+/// Spoken output. `provider` is `auto` (the ChatGPT plan voice when signed
+/// in, else the best voice on this Mac) or one provider id the webview's
+/// speech registry knows. `system_voice` is a macOS voice identifier such as
+/// `com.apple.voice.premium.en-US.Zoe`; empty means the best one installed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceOutputConfig {
+    #[serde(default = "default_voice_output_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub system_voice: String,
+    #[serde(default = "default_voice_output_rate")]
+    pub rate: f32,
+}
+
+const VOICE_OUTPUT_PROVIDERS: [&str; 5] = [
+    "auto",
+    "codex_realtime",
+    "system_enhanced",
+    "local_neural",
+    "webview_basic",
+];
+
+fn default_voice_output_provider() -> String {
+    "auto".to_string()
+}
+
+fn default_voice_output_rate() -> f32 {
+    1.0
+}
+
+impl Default for VoiceOutputConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_voice_output_provider(),
+            system_voice: String::new(),
+            rate: default_voice_output_rate(),
+        }
+    }
+}
+
+impl VoiceOutputConfig {
+    pub fn normalized(mut self) -> Self {
+        let provider = self.provider.trim();
+        self.provider = if VOICE_OUTPUT_PROVIDERS.contains(&provider) {
+            provider.to_string()
+        } else {
+            default_voice_output_provider()
+        };
+        let voice = self.system_voice.trim();
+        self.system_voice = if voice.len() <= 200 && !voice.chars().any(char::is_control) {
+            voice.to_string()
+        } else {
+            String::new()
+        };
+        self.rate = if self.rate.is_finite() {
+            self.rate.clamp(0.5, 2.0)
+        } else {
+            default_voice_output_rate()
+        };
+        self
+    }
 }
 
 /// Banners for the briefing, stale tasks and context-switch nudges when FNDR
@@ -1167,6 +1233,7 @@ impl Default for Config {
             proactive: ProactiveConfig::default(),
             memory_quality: MemoryQualityConfig::default(),
             notifications: NotificationConfig::default(),
+            voice_output: VoiceOutputConfig::default(),
         }
     }
 }
@@ -1177,6 +1244,7 @@ impl Config {
         self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
         self.screen_guide = self.screen_guide.normalized();
+        self.voice_output = self.voice_output.normalized();
         if self.screen_guide.operate_computer {
             // An older file kept this opt-in under Screen Guide.
             self.operator.enabled = true;
@@ -1331,6 +1399,38 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn voice_output_defaults_for_an_older_file_and_rejects_bad_values() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file: String = current.split("[voice_output]").next().unwrap().to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert_eq!(older.voice_output, VoiceOutputConfig::default());
+        assert_eq!(older.voice_output.provider, "auto");
+
+        let chosen: VoiceOutputConfig = toml::from_str(
+            "provider = \"system_enhanced\"\nsystem_voice = \"com.apple.voice.premium.en-US.Zoe\"\nrate = 1.2",
+        )
+        .unwrap();
+        let chosen = chosen.normalized();
+        assert_eq!(chosen.provider, "system_enhanced");
+        assert_eq!(chosen.system_voice, "com.apple.voice.premium.en-US.Zoe");
+        assert!((chosen.rate - 1.2).abs() < 1e-6);
+
+        let bad = VoiceOutputConfig {
+            provider: "elevenlabs".into(),
+            system_voice: "x".repeat(300),
+            rate: f32::NAN,
+        }
+        .normalized();
+        assert_eq!(bad, VoiceOutputConfig::default());
+        let fast = VoiceOutputConfig {
+            rate: 9.0,
+            ..VoiceOutputConfig::default()
+        }
+        .normalized();
+        assert_eq!(fast.rate, 2.0);
     }
 
     #[test]
