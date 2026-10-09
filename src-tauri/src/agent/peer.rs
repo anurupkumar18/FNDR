@@ -897,4 +897,34 @@ mod tests {
             sent.state
         );
     }
+
+    #[tokio::test]
+    #[ignore = "uses a public external peer and a synthetic public-data question"]
+    async fn live_second_peer_returns_a_reviewable_result() {
+        let card = inspect_configured_peer(
+            "https://agentnative.cazimedia.com/.well-known/agent-card.json",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            card.endpoint.as_str(),
+            "https://agentnative.cazimedia.com/a2a"
+        );
+        assert!(!card.requires_bearer);
+        let sent = send_to_peer(
+            &card,
+            &uuid::Uuid::new_v4().to_string(),
+            "Task:\nGive me a free current Federal Register briefing with provenance.\n\nOutput goal:\nA short reviewable summary of the public sample.",
+        )
+        .await
+        .unwrap();
+        assert!(
+            sent.output_text
+                .as_ref()
+                .is_some_and(|text| text.contains("federal-register-briefing")
+                    && text.contains("federalregister.gov")),
+            "peer state {} did not include a relevant, sourced result",
+            sent.state
+        );
+    }
 }

@@ -4,17 +4,17 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 
 ## Current state
 
-- `main` includes `bada5ac` (reviewed A2A 1.0 Send/Get/Cancel and content-free run ledger), `7778384` (saved peer sends in Privacy Activity), and `80f8fa1` (ignored live interoperability test). Earlier peer and Hermes read-grant commits are listed in [the cross-session checkpoint](2026-10-08-cross-session-closeout.md).
+- `main` includes `bada5ac` (reviewed A2A 1.0 Send/Get/Cancel and content-free run ledger), `7778384` (saved peer sends in Privacy Activity), `80f8fa1` (first ignored live interoperability test), and `4e1d2dd` (controlled lifecycle tests). Earlier peer and Hermes read-grant commits are listed in [the cross-session checkpoint](2026-10-08-cross-session-closeout.md).
 - A person can save an explicitly configured HTTPS Card, preview the exact text and selected current memory summaries, then Send. The backend revalidates Card, DNS, endpoint, source visibility, destination and reviewed text before egress. An uncertain send is recorded and never retried automatically. Peer output stays untrusted and outside memory.
 - Get and Cancel require a known remote task ID. Cancel is followed by Get before its state is shown. Bearer-protected peers are refused because FNDR has no peer credential binding yet.
 - Privacy Activity shows saved host, time, request size and readable state. The session request counter remains separate from this durable list.
-- The checkout is dirty only in another session's `risk_policy.rs`, `mcp/mod.rs` and `storage/lance_store/tests.rs` as of this checkpoint. Inspect current status before editing or staging.
+- The checkout is shared with two Claude sessions. Inspect current status before editing or staging; do not stage their files.
 
 ## Verification and limits
 
-- Peer Rust tests: 19 passed with the external test ignored in a clean copy of HEAD plus `peer.rs`; delegation Rust tests: 3 passed earlier; peer-run persistence test: 1 passed. Peer and Privacy Activity frontend tests: 20 passed. Typecheck, production build and native binary check passed before the latest lifecycle test. The current shared tree has another session's uncommitted `operator/policy.rs` borrow error, so its direct Rust gate is not green.
+- Peer Rust tests: 17 passed with two external tests ignored in a clean copy of HEAD plus `peer.rs`; each external test also passed when run separately. Delegation Rust tests: 3 passed earlier; peer-run persistence test: 1 passed. Peer and Privacy Activity frontend tests: 20 passed. Typecheck, production build and native binary check passed before the latest lifecycle test. An earlier shared-tree Rust gate had another session's uncommitted `operator/policy.rs` borrow error; no later full shared-tree gate is claimed.
 - Browser preview: synthetic Card, reviewed Send, status check and Privacy Activity row worked; zero browser console errors. This proves mounted frontend behavior against preview IPC only.
-- The ignored live Rust test fetched [Emissar's public A2A 1.0 Card](https://emissar.ai/agent), sent a synthetic question through FNDR's transport and received reviewable output. It proves one independent Send path, not native UI, ledger, Get or Cancel.
+- Ignored live Rust tests fetched [Emissar's public A2A 1.0 Card](https://emissar.ai/agent) and [AgentNative Data Exchange's Card](https://agentnative.cazimedia.com/.well-known/agent-card.json), then sent synthetic questions through FNDR's transport. Both returned reviewable output; the second returned public sample records with source URLs. They prove two independent Send paths, not native UI, ledger, Get or Cancel.
 - Earlier disposable native launch confirmed `FNDR_DATA_DIR` isolation, but no FNDR window appeared in the available automation inventory. Repeating the same launch without a new window-access route would add no UI evidence. See [peer Send evidence](../evidence/W04/agent-peer-send-2026-10-08.md) and [ADR 025](../decisions/025-agent-peer-interoperability.md).
 
 ## Next slices, in order
@@ -22,7 +22,7 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 1. Finish AG-04 lifecycle acceptance: controlled Cancel/Get, missing task and one-attempt failed Send now pass. Exercise Get/Cancel and an uncertain task through native UI with a real task-capable peer and a disposable profile. Keep source visibility checks before and after network access.
 2. Establish a native window-access route, then run Peer UI and Privacy Activity after restart on a disposable profile. Do not use the owner vault. If the route remains unavailable, report native QA pending without another duplicate build.
 3. Bind a credential to one configured peer if a real target needs Bearer. Never place it in a Card URL, task body or run ledger. Prove endpoint binding and refusal after credential removal.
-4. After AG-04, measure task usefulness, unsupported claims, latency and bytes against two independent peers before expanding to inbound A2A. Keep AG-04 Doing until its native and lifecycle gates pass; AG-05 owns broader native Agent QA.
+4. After AG-04, measure task usefulness, unsupported claims, latency and bytes across the two checked peers before expanding to inbound A2A. Keep AG-04 Doing until its native and lifecycle gates pass; AG-05 owns broader native Agent QA.
 5. When the Claude sessions settle, run one serial full gate and reconcile the board with their commits. Continue the core daily-loop QA from the cross-session checkpoint without repeating browser or synthetic evidence as native proof.
 
 ## Process doctor
@@ -39,5 +39,5 @@ ANTI-BLOAT REVIEW
 - Simplifications required: reuse the existing StateStore, context source authorization and Privacy Activity. Avoid another delegation framework or duplicate planning document.
 - Code to delete or merge: none in this slice. Remove superseded handoff claims rather than retaining a second current state.
 - Interface improvements: future Bearer binding should attach to saved peer identity and exact endpoint.
-- Testability gaps: native window, Get/Cancel lifecycle and second independent peer.
+- Testability gaps: native window and live Get/Cancel lifecycle.
 - Verdict: approve with the stated acceptance work open.

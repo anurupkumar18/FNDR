@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-10-08. Outbound Send/Get/Cancel is implemented for explicitly configured, unauthenticated A2A 1.0 JSONRPC peers. Independent interoperability and native acceptance remain open.
+Accepted 2026-10-08. Outbound Send/Get/Cancel is implemented for explicitly configured, unauthenticated A2A 1.0 JSONRPC peers. Two independent Send checks passed; native acceptance and live lifecycle checks remain open.
 
 ## User outcome
 
@@ -37,11 +37,11 @@ A person can ask FNDR to hand a bounded piece of work to a configured peer agent
 
 Each part must be usable or verifiable before the next. Part 1 is implemented: the localhost MCP boundary test and 39 MCP server tests passed on 2026-10-08; the other rows remain open.
 
-Part 2 now includes the Card validator and bounded fetch in `agent/peer.rs`, a local saved-peer directory, and a person-entered Card URL in the Agent UI. The native build, focused Rust and frontend tests, and a synthetic browser-preview add/remove flow passed on 2026-10-08. The preview fixture does not contact a remote peer. Bearer credentials are not configured, and an independent real-peer interoperability check remains open, so Part 2 is not accepted yet. The Card's chosen endpoint and authentication requirement must be revalidated for each later task request; a saved Card alone does not authorize task egress.
+Part 2 now includes the Card validator and bounded fetch in `agent/peer.rs`, a local saved-peer directory, and a person-entered Card URL in the Agent UI. The native build, focused Rust and frontend tests, and a synthetic browser-preview add/remove flow passed on 2026-10-08. The preview fixture does not contact a remote peer. Two independent real-peer Send checks passed with synthetic public questions. Bearer credentials are not configured, and native peer UI acceptance remains open. The Card's chosen endpoint and authentication requirement must be revalidated for each later task request; a saved Card alone does not authorize task egress.
 
 Part 3 has a draft preview that accepts an explicit list of up to eight memories already selected in Agent chat. It resolves aliases and checks today's source visibility, sends only current display summaries in the preview, and rejects missing or newly blocked sources. Send rebuilds the current preview after Card inspection and compares its destination and text with the reviewed copy. The JSONRPC request contains that exact reviewed text.
 
-Part 4 now has outbound Send, Get and Cancel commands. The local run record is written before Send and remains uncertain if delivery or response is unknown; FNDR does not automatically retry it. Get and Cancel require a known remote task ID and recheck attached sources. Cancel follows its acknowledgment with Get before showing the resulting state. Peer output is untrusted, bounded and shown for review; it is not imported into memory. Bearer protected peers are refused until FNDR has a credential binding. A synthetic Send through FNDR's Rust transport to one independent public peer passed on 2026-10-08. The native UI, ledger, Get and Cancel paths still require live acceptance.
+Part 4 now has outbound Send, Get and Cancel commands. The local run record is written before Send and remains uncertain if delivery or response is unknown; FNDR does not automatically retry it. Get and Cancel require a known remote task ID and recheck attached sources. Cancel follows its acknowledgment with Get before showing the resulting state. Peer output is untrusted, bounded and shown for review; it is not imported into memory. Bearer protected peers are refused until FNDR has a credential binding. Synthetic Sends through FNDR's Rust transport to two independent public peers passed on 2026-10-08. The native UI, ledger, Get and Cancel paths still require live acceptance.
 
 ## Rejected shortcuts
 
