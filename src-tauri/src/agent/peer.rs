@@ -79,10 +79,16 @@ pub fn parse_send_response(message_id: &str, response: &Value) -> Result<SentTas
         if message["role"] != "ROLE_AGENT" || !message["parts"].is_array() {
             return Err("Peer returned an invalid direct message".into());
         }
+        let output_text = text_from_parts(&message["parts"]);
         return Ok(SentTask {
             task_id: String::new(),
-            state: "DIRECT_MESSAGE".into(),
-            output_text: text_from_parts(&message["parts"]),
+            state: if output_text.is_some() {
+                "DIRECT_MESSAGE"
+            } else {
+                "DIRECT_MESSAGE_UNSUPPORTED"
+            }
+            .into(),
+            output_text,
         });
     }
     parse_task(&response["result"]["task"])
@@ -710,6 +716,18 @@ mod tests {
         let parsed = parse_send_response("msg-123", &direct).unwrap();
         assert_eq!(parsed.task_id, "");
         assert_eq!(parsed.output_text.as_deref(), Some("Direct answer"));
+    }
+
+    #[test]
+    fn direct_reply_without_text_is_recorded_as_unsupported() {
+        let response = json!({"jsonrpc":"2.0","id":"msg-123","result":{"message":{
+            "role":"ROLE_AGENT","parts":[{"data":{"result":"not displayable"}}],
+            "messageId":"reply-1"
+        }}});
+        let parsed = parse_send_response("msg-123", &response).unwrap();
+        assert_eq!(parsed.task_id, "");
+        assert_eq!(parsed.state, "DIRECT_MESSAGE_UNSUPPORTED");
+        assert!(parsed.output_text.is_none());
     }
 
     #[test]

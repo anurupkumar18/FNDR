@@ -121,6 +121,25 @@ describe("PeerDirectory", () => {
         expect(screen.queryByRole("button", { name: "Send task" })).not.toBeInTheDocument();
     });
 
+    it("explains a direct reply that has no displayable text", async () => {
+        ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
+        ipc.sendPeerDelegation.mockResolvedValue({
+            run: {
+                local_id: "local-1", message_id: "msg-1", peer_id: "peer-1", host: "peer.example",
+                attachment_ids: [], payload_bytes: 200, created_at_ms: 1, status: "direct_reply",
+                remote_task_id: null, remote_state: "DIRECT_MESSAGE_UNSUPPORTED",
+            },
+            output_text: null,
+        });
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Output goal" }), { target: { value: "Brief report" } });
+        fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Send task" }));
+        expect(await screen.findByText(/FNDR cannot display its reply/)).toBeInTheDocument();
+        expect(screen.queryByLabelText("Untrusted peer output")).not.toBeInTheDocument();
+    });
+
     it("checks a known peer task and shows its output only for review", async () => {
         ipc.listPeerRuns.mockResolvedValue([{
             local_id: "local-1", peer_id: "peer-1", host: "peer.example", created_at_ms: 1,

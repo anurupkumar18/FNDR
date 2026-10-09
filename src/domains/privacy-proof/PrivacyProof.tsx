@@ -73,6 +73,7 @@ function formatBytes(bytes: number): string {
 
 function peerState(run: PeerRunView): string {
     if (run.status === "uncertain") return "delivery uncertain";
+    if (run.remote_state === "DIRECT_MESSAGE_UNSUPPORTED") return "reply without displayable text";
     if (run.status === "direct_reply") return "direct reply";
     return run.remote_state?.replace(/^TASK_STATE_/, "").replace(/_/g, " ").toLowerCase()
         ?? "acknowledged";

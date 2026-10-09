@@ -111,12 +111,17 @@ describe("PrivacyProofPanel", () => {
             local_id: "local-1", peer_id: "peer-1", host: "peer.example",
             created_at_ms: Date.now(), payload_bytes: 321, status: "acknowledged",
             remote_task_id: "task-1", remote_state: "TASK_STATE_WORKING",
+        }, {
+            local_id: "local-2", peer_id: "peer-2", host: "other.example",
+            created_at_ms: Date.now(), payload_bytes: 200, status: "direct_reply",
+            remote_task_id: null, remote_state: "DIRECT_MESSAGE_UNSUPPORTED",
         }]);
         render(<PrivacyProofPanel isVisible onClose={() => {}} />);
         const runs = await screen.findByRole("list", { name: "Peer sends" });
         expect(runs).toHaveTextContent("peer.example");
         expect(runs).toHaveTextContent("321 B");
         expect(runs).toHaveTextContent("working");
+        expect(runs).toHaveTextContent("reply without displayable text");
         expect(runs).not.toHaveTextContent("PRIVATE_TASK_TEXT");
         expect(runs).not.toHaveTextContent("memory-1");
     });
