@@ -613,6 +613,7 @@ pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), Stri
         .env("PATH", child_path_env(executable))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| format!("Could not ask Codex for its features: {e}"))?;
@@ -761,6 +762,30 @@ fn ensure_screen_guide_not_cancelled(cancel: &std::sync::atomic::AtomicBool) -> 
     }
 }
 
+/// Time allowed for everything before the turn: finding Codex, listing its
+/// features and MCP servers, starting the session.
+const SCREEN_GUIDE_SETUP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Runs `work` until it ends, `cancel` is set, or `limit` passes. Dropping
+/// `work` kills any Codex child it started and removes its scratch directory.
+async fn run_until_cancelled_or_late<T>(
+    cancel: &std::sync::atomic::AtomicBool,
+    limit: Duration,
+    work: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let watch = async {
+        loop {
+            ensure_screen_guide_not_cancelled(cancel)?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::select! {
+        result = work => result,
+        stopped = watch => stopped,
+        () = tokio::time::sleep(limit) => Err("ChatGPT took too long to answer.".to_string()),
+    }
+}
+
 /// Answers a Screen Guide question with the user's ChatGPT plan. Uses the
 /// same prompt and [POINT] contract as the on-device model, so FNDR's
 /// grounding and freshness checks apply unchanged to the result.
@@ -772,18 +797,41 @@ pub(crate) async fn answer_screen_guide_with_codex(
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     timeout: Duration,
 ) -> Result<String, String> {
+    run_until_cancelled_or_late(
+        cancel.as_ref(),
+        timeout + SCREEN_GUIDE_SETUP_BUDGET,
+        run_screen_guide_turn(
+            question,
+            positioned_ocr,
+            history,
+            screenshot_png,
+            cancel.as_ref(),
+            timeout,
+        ),
+    )
+    .await
+}
+
+async fn run_screen_guide_turn(
+    question: &str,
+    positioned_ocr: &str,
+    history: &str,
+    screenshot_png: Option<Vec<u8>>,
+    cancel: &std::sync::atomic::AtomicBool,
+    timeout: Duration,
+) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     let executable = ready_executable()?;
     let mcp_names = configured_mcp_server_names(&executable).await?;
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     refresh_codex_features(&executable).await?;
     let args = read_only_session_args(&mcp_names)?;
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     let mut server = AppServer::spawn_with(&executable, &args).await?;
 
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -791,7 +839,7 @@ pub(crate) async fn answer_screen_guide_with_codex(
     let account = server
         .request("account/read", json!({ "refreshToken": false }))
         .await?;
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -822,13 +870,13 @@ pub(crate) async fn answer_screen_guide_with_codex(
         let jpeg = tokio::task::spawn_blocking(move || downscaled_jpeg(&png))
             .await
             .map_err(|_| "Screenshot preparation stopped unexpectedly.".to_string())??;
-        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
             server.shutdown().await;
             return Err(error);
         }
         let path = stage_private_screenshot(&scratch.0, &jpeg)
             .map_err(|e| format!("Could not stage the screenshot: {e}"))?;
-        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
             server.shutdown().await;
             return Err(error);
         }
@@ -837,7 +885,7 @@ pub(crate) async fn answer_screen_guide_with_codex(
         instructions.push_str(SCREEN_GUIDE_SCREENSHOT_NOTE);
     }
 
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -863,21 +911,16 @@ pub(crate) async fn answer_screen_guide_with_codex(
         .and_then(Value::as_str)
         .ok_or("Codex did not start a thread.")?
         .to_string();
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
-    let turn = server
+    server
         .request(
             "turn/start",
             json!({ "threadId": thread_id, "input": input, "effort": "low" }),
         )
         .await?;
-    let turn_id = turn
-        .pointer("/turn/id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
 
     let deadline = tokio::time::Instant::now() + timeout;
     let mut answer = String::new();
@@ -925,14 +968,6 @@ pub(crate) async fn answer_screen_guide_with_codex(
         }
     };
 
-    if outcome.is_err() && !turn_id.is_empty() {
-        let _ = server
-            .request(
-                "turn/interrupt",
-                json!({ "threadId": thread_id, "turnId": turn_id }),
-            )
-            .await;
-    }
     server.shutdown().await;
     drop(scratch);
     outcome.map(|()| answer)
@@ -1083,6 +1118,26 @@ mod tests {
     fn refuses_mcp_server_names_it_cannot_address() {
         assert!(read_only_session_args(&["weird name".into()]).is_err());
         assert!(read_only_session_args(&["a.b".into()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_stuck_setup_ends_at_the_deadline_and_at_a_cancel() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let never = || std::future::pending::<Result<String, String>>();
+        let idle = Arc::new(AtomicBool::new(false));
+        let late = run_until_cancelled_or_late(&idle, Duration::from_millis(50), never()).await;
+        assert_eq!(late.unwrap_err(), "ChatGPT took too long to answer.");
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+        let stopped = run_until_cancelled_or_late(&cancel, Duration::from_secs(30), never()).await;
+        assert_eq!(stopped.unwrap_err(), "Screen Guide was cancelled.");
     }
 
     #[test]

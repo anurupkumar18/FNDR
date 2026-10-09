@@ -780,6 +780,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let codexSignedIn = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let configuredPeers: ConfiguredPeer[] = [];
+    let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
+        payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1400,6 +1402,36 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 if (!task || !goal) throw new Error("Task and output goal are required");
                 if (ids.length > 0) throw new Error("The preview fixture has no durable memory records");
                 return { peer_id: peer.id, destination: peer.endpoint, message_text: `Task:\n${task}\n\nOutput goal:\n${goal}`, attachments: [] };
+            }
+            case "list_peer_runs":
+                return clonePreview(previewPeerRuns);
+            case "send_peer_delegation": {
+                const args = payloadRecord(payload);
+                const peer = configuredPeers.find((row) => row.id === String(args?.peerId ?? ""));
+                if (!peer) throw new Error("Saved peer was not found");
+                const text = `Task:\n${String(args?.task ?? "").trim()}\n\nOutput goal:\n${String(args?.outputGoal ?? "").trim()}`;
+                if (args?.reviewedDestination !== peer.endpoint || args?.reviewedText !== text) {
+                    throw new Error("Peer task or destination changed. Preview it again before sending");
+                }
+                const view = { local_id: `preview-run-${previewPeerRuns.length + 1}`, peer_id: peer.id,
+                    host: new URL(peer.endpoint).hostname, created_at_ms: Date.now(), payload_bytes: text.length, status: "acknowledged",
+                    remote_task_id: `synthetic-task-${previewPeerRuns.length + 1}`, remote_state: "TASK_STATE_SUBMITTED" };
+                previewPeerRuns = [...previewPeerRuns, view];
+                return { run: { ...view, message_id: "synthetic-message", attachment_ids: [], payload_bytes: text.length }, output_text: null };
+            }
+            case "refresh_peer_task": {
+                const localId = String(payloadRecord(payload)?.localId ?? "");
+                const run = previewPeerRuns.find((row) => row.local_id === localId);
+                if (!run) throw new Error("Peer run was not found");
+                run.remote_state = "TASK_STATE_COMPLETED";
+                return { run: clonePreview(run), output_text: "Synthetic peer report for browser preview." };
+            }
+            case "cancel_peer_task": {
+                const localId = String(payloadRecord(payload)?.localId ?? "");
+                const run = previewPeerRuns.find((row) => row.local_id === localId);
+                if (!run) throw new Error("Peer run was not found");
+                run.remote_state = "TASK_STATE_CANCELED";
+                return { run: clonePreview(run), output_text: null };
             }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };

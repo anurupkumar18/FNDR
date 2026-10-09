@@ -25,6 +25,8 @@ import {
     resultNote,
     type DoState,
 } from "./doRun";
+import { isEchoOfSpeech, narrate } from "./doNarration";
+import { createSpeaker, readMuted, writeMuted, type NotchSpeaker } from "./notchSpeech";
 
 interface NotchOperatorProps {
     /** The notch is open and Do mode is showing. */
@@ -52,6 +54,9 @@ function message(reason: unknown): string {
  * The plan is a step list; it starts by itself only when no step can need a
  * yes, otherwise it waits for Start or "go".
  * Saying "stop" or pressing Stop kills the run at any point.
+ * It talks while it works (`doNarration.ts`) unless muted: what it understood,
+ * each step, anything it asks first or leaves out, and what it checked. Speech
+ * is announcement only; an approval is still a tap.
  */
 export function NotchOperator({ active }: NotchOperatorProps) {
     const [state, dispatch] = useReducer(doRunReducer, initialDoState);
@@ -63,6 +68,12 @@ export function NotchOperator({ active }: NotchOperatorProps) {
     /** Events that arrived before `computerUsePlan` returned their run id. */
     const earlyEvents = useRef<ComputerUseEvent[]>([]);
     const voiceRef = useRef<ReturnType<typeof useVoice> | null>(null);
+    const speakerRef = useRef<NotchSpeaker | null | undefined>(undefined);
+    if (speakerRef.current === undefined) speakerRef.current = createSpeaker();
+    const [muted, setMuted] = useState(readMuted);
+    const mutedRef = useRef(muted);
+    mutedRef.current = muted;
+    const spokenState = useRef<DoState>(initialDoState);
 
     const clearTimer = (timer: { current: number | null }) => {
         if (timer.current !== null) window.clearTimeout(timer.current);
@@ -71,6 +82,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
 
     const stopRun = useCallback(async () => {
         clearTimer(endpointTimer);
+        speakerRef.current?.cancel();
         dispatch({ type: "stopped" });
         try {
             await computerUseStop();
@@ -122,6 +134,8 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 running: runInProgress(current),
             });
             if (!intent) return;
+            // The notch's own voice comes back through the microphone; stop, no and go never count as echo.
+            if (intent.kind === "request" && spoken && isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
             switch (intent.kind) {
                 case "stop":
                     void stopRun();
@@ -149,6 +163,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         surface: "notch_do",
         mode: "toggle",
         onPartial: (text) => {
+            if (isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
             clearTimer(silenceTimer);
             if (runInProgress(stateRef.current) && isStopPhrase(text)) {
                 void voiceRef.current?.cancel();
@@ -174,8 +189,31 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         }
         clearTimer(endpointTimer);
         clearTimer(silenceTimer);
+        speakerRef.current?.cancel();
         void voiceRef.current?.cancel();
     }, [active]);
+
+    // Say what changed. A new turn, a stop or a failure of the ears ends whatever is being said.
+    useEffect(() => {
+        const previous = spokenState.current;
+        spokenState.current = state;
+        const speaker = speakerRef.current;
+        if (!speaker) return;
+        if (["listening", "heard", "silence", "mic_denied", "voice_unavailable", "stopped"].includes(state.phase)) {
+            speaker.cancel();
+            return;
+        }
+        if (!active || mutedRef.current) return;
+        const line = narrate(previous, state);
+        if (line) speaker.say(line);
+    }, [state, active]);
+
+    const toggleMuted = () => {
+        const next = !muted;
+        writeMuted(next);
+        setMuted(next);
+        if (next) speakerRef.current?.cancel();
+    };
 
     // Keep a session open while one is wanted: a new one after each utterance.
     useEffect(() => {
@@ -231,6 +269,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         () => () => {
             clearTimer(endpointTimer);
             clearTimer(silenceTimer);
+            speakerRef.current?.cancel();
             if (runInProgress(stateRef.current)) void computerUseStop().catch(() => undefined);
         },
         [],
@@ -409,6 +448,16 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 {state.reconnect ? (
                     <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void reconnect()}>
                         Reconnect ChatGPT
+                    </button>
+                ) : null}
+                {speakerRef.current ? (
+                    <button
+                        type="button"
+                        className="notch-operator-btn"
+                        aria-pressed={muted}
+                        onClick={toggleMuted}
+                    >
+                        {muted ? "Unmute voice" : "Mute voice"}
                     </button>
                 ) : null}
                 {["silence", "finished", "failed", "stopped", "voice_unavailable"].includes(state.phase) ? (

@@ -39,6 +39,11 @@ const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
 fn main() {
+    // `fndr operator-mcp`: Notch Do's computer-use tools, started by Codex as
+    // a child process. It must not initialise the app, and stdout is the protocol.
+    if std::env::args().nth(1).as_deref() == Some("operator-mcp") {
+        std::process::exit(fndr_lib::operator::mcp::run());
+    }
     // Install default TLS crypto provider (required by rustls 0.23+)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -796,6 +801,10 @@ fn main() {
             ipc::commands::add_configured_peer,
             ipc::commands::remove_configured_peer,
             ipc::commands::preview_peer_delegation,
+            ipc::commands::send_peer_delegation,
+            ipc::commands::list_peer_runs,
+            ipc::commands::refresh_peer_task,
+            ipc::commands::cancel_peer_task,
             ipc::commands::list_agent_chats,
             ipc::commands::get_agent_chat,
             ipc::commands::delete_agent_chat,

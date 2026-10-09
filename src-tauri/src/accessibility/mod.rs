@@ -4,7 +4,10 @@
 //! 1. Identify the currently focused input field's label in any app
 //! 2. Inject text directly into that field without requiring keyboard focus
 
+mod operate;
 mod text_tree;
+
+pub use operate::AxDesktop;
 
 use crate::ocr::{OcrConfig, OcrEngine};
 use objc2_app_kit::NSWorkspace;
@@ -413,10 +416,16 @@ unsafe fn frontmost_pid() -> Option<PidT> {
     }
 }
 
-/// Paste text into the frontmost app via the clipboard.
+/// Paste text into the frontmost app via the clipboard, replacing its content.
+fn type_text_into_frontmost_app(text: &str) -> Result<(), String> {
+    paste_into_frontmost_app(text, true)
+}
+
+/// Paste text into the frontmost app via the clipboard, after selecting all
+/// when `replace` is set. The clipboard keeps the text afterwards.
 /// Uses pbcopy + osascript keystroke — avoids enigo CGEventPost which can SIGABRT
 /// on macOS when called outside the right event context.
-fn type_text_into_frontmost_app(text: &str) -> Result<(), String> {
+fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
     use std::io::Write;
 
     // 1. Write text to clipboard via pbcopy.
@@ -435,16 +444,19 @@ fn type_text_into_frontmost_app(text: &str) -> Result<(), String> {
 
     std::thread::sleep(Duration::from_millis(30));
 
-    // 2. Select all existing content, then paste — replaces rather than appends.
-    let script = r#"tell application "System Events"
-keystroke "a" using command down
-delay 0.03
-keystroke "v" using command down
-end tell"#;
+    // 2. Select all existing content when replacing, then paste.
+    let select_all = if replace {
+        "keystroke \"a\" using command down\ndelay 0.03\n"
+    } else {
+        ""
+    };
+    let script = format!(
+        "tell application \"System Events\"\n{select_all}keystroke \"v\" using command down\nend tell"
+    );
 
     let status = std::process::Command::new("osascript")
         .arg("-e")
-        .arg(script)
+        .arg(&script)
         .status()
         .map_err(|e| format!("osascript paste failed to start: {e}"))?;
 
@@ -700,7 +712,7 @@ unsafe fn enable_manual_accessibility(application: AXUIElementRef) {
 }
 
 /// An owned AXUIElement reference, released on drop.
-struct AxElement(AXUIElementRef);
+pub struct AxElement(AXUIElementRef);
 
 impl Drop for AxElement {
     fn drop(&mut self) {

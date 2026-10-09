@@ -173,14 +173,16 @@ fn current_run() -> &'static Mutex<Option<RunHandle>> {
 
 // MARK: - Backends
 
-/// Shown when nothing FNDR can use is installed. The ChatGPT app's current
-/// Computer Use is one run-any-code tool, which FNDR cannot decide action by
-/// action, so FNDR does not attach it (ADR 026).
-const NO_HELPER: &str = "Notch Do has nothing to click and type with on this Mac. It works with open-computer-use; the ChatGPT app's Computer Use is not supported.";
+/// Shown when FNDR's own executor cannot start and no other helper is
+/// installed. The ChatGPT app's current Computer Use is one run-any-code tool,
+/// which FNDR cannot decide action by action, so FNDR does not attach it (ADR 026).
+const NO_HELPER: &str = "Notch Do could not start its own click-and-type tools and found no other helper. Reinstall FNDR, or install open-computer-use; the ChatGPT app's Computer Use is not supported.";
 
 /// Which computer-use MCP server the run attaches.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Backend {
+    /// FNDR's own binary, run as `fndr operator-mcp` (ADR 026).
+    Native(PathBuf),
     /// OpenAI's Computer Use plugin, installed with the ChatGPT/Codex app.
     CodexBundled(PathBuf),
     OpenComputerUse(PathBuf),
@@ -189,6 +191,7 @@ pub(crate) enum Backend {
 impl Backend {
     pub(crate) fn label(&self) -> &'static str {
         match self {
+            Backend::Native(_) => "fndr_native",
             Backend::CodexBundled(_) => "codex_computer_use",
             Backend::OpenComputerUse(_) => "open_computer_use",
         }
@@ -196,9 +199,24 @@ impl Backend {
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Backend::CodexBundled(path) | Backend::OpenComputerUse(path) => path,
+            Backend::Native(path)
+            | Backend::CodexBundled(path)
+            | Backend::OpenComputerUse(path) => path,
         }
     }
+
+    /// The argument that makes the program speak MCP on stdio.
+    pub(crate) fn mcp_arg(&self) -> &'static str {
+        match self {
+            Backend::Native(_) => "operator-mcp",
+            _ => "mcp",
+        }
+    }
+}
+
+/// FNDR's own executable, which serves the tools itself.
+fn detect_native() -> Option<PathBuf> {
+    std::env::current_exe().ok().filter(|path| path.is_file())
 }
 
 /// The newest installed `computer-use-client-launcher` under a Codex home.
@@ -249,23 +267,38 @@ static BUNDLED_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 const AUTOMATION_REFUSED: &str = "Computer Use was refused Automation access. Allow FNDR under System Settings > Privacy & Security > Automation, then try again; the next run uses open-computer-use if it is installed.";
 
-pub(crate) fn detect_backend() -> Option<Backend> {
-    // A fixed choice for diagnosis: `codex_computer_use` or `open_computer_use`.
-    match std::env::var("FNDR_COMPUTER_USE").ok().as_deref() {
-        Some("open_computer_use") => {
-            return detect_open_computer_use().map(Backend::OpenComputerUse)
-        }
-        Some("codex_computer_use") => {
-            return bundled_computer_use(&super::codex_account::codex_home_dir())
-                .map(Backend::CodexBundled)
-        }
+/// Picks the computer-use server. FNDR's own comes first; the third-party
+/// helpers stay as fallbacks until the twenty-task set passes (ADR 026, item 5).
+/// `forced` is `FNDR_COMPUTER_USE`, a fixed choice for diagnosis.
+fn choose_backend(
+    forced: Option<&str>,
+    native: Option<PathBuf>,
+    bundled: impl FnOnce() -> Option<PathBuf>,
+    open_computer_use: impl FnOnce() -> Option<PathBuf>,
+) -> Option<Backend> {
+    match forced {
+        Some("fndr_native") => return native.map(Backend::Native),
+        Some("open_computer_use") => return open_computer_use().map(Backend::OpenComputerUse),
+        Some("codex_computer_use") => return bundled().map(Backend::CodexBundled),
         _ => {}
     }
-    let bundled = (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
-        .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
-        .flatten()
-        .map(Backend::CodexBundled);
-    bundled.or_else(|| detect_open_computer_use().map(Backend::OpenComputerUse))
+    native
+        .map(Backend::Native)
+        .or_else(|| bundled().map(Backend::CodexBundled))
+        .or_else(|| open_computer_use().map(Backend::OpenComputerUse))
+}
+
+pub(crate) fn detect_backend() -> Option<Backend> {
+    choose_backend(
+        std::env::var("FNDR_COMPUTER_USE").ok().as_deref(),
+        detect_native(),
+        || {
+            (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
+                .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
+                .flatten()
+        },
+        detect_open_computer_use,
+    )
 }
 
 fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<String>, String> {
@@ -288,7 +321,10 @@ fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<St
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
         "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.args=[\"mcp\"]"),
+        format!(
+            "mcp_servers.{COMPUTER_SERVER}.args=[\"{}\"]",
+            backend.mcp_arg()
+        ),
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.default_tools_approval_mode=\"prompt\""),
     ]);
@@ -442,6 +478,8 @@ pub(crate) struct Session {
     operator_thread: String,
     /// The person said no to an action during the turn in progress.
     declined: bool,
+    /// What the operator said about the last operate step it finished.
+    last_report: Option<String>,
 }
 
 impl Session {
@@ -502,6 +540,7 @@ impl Session {
             server,
             next_id: 1_000,
             declined: false,
+            last_report: None,
         })
     }
 
@@ -832,14 +871,38 @@ fn record_tool_result(
 
 // MARK: - A run
 
-fn plan_request_text(transcript: &str, snippets: &[memory::MemorySnippet]) -> String {
-    if snippets.is_empty() {
-        format!("Request: {transcript}")
-    } else {
-        format!(
-            "Request: {transcript}\n\nMemory snippets:\n{}",
+fn plan_request_text(
+    transcript: &str,
+    snippets: &[memory::MemorySnippet],
+    in_front: Option<&str>,
+) -> String {
+    let mut text = format!("Request: {transcript}");
+    if let Some(app) = in_front {
+        // The name only, so "this page" has something to mean.
+        text.push_str(&format!("\nIn front: {app}"));
+    }
+    if !snippets.is_empty() {
+        text.push_str(&format!(
+            "\n\nMemory snippets:\n{}",
             memory::format_block(snippets)
-        )
+        ));
+    }
+    text
+}
+
+/// The app the person is looking at, for the planner. Never an app FNDR may
+/// not read, and never FNDR itself.
+fn app_in_front(seen: &plan::Observation, guards: &Guards) -> Option<String> {
+    let app = seen.frontmost_app.trim();
+    (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
+}
+
+/// What a run adds to "Done" when its last operate step reported something:
+/// the answer to a request that only reads, in the model's words and marked so.
+fn with_report(summary: String, report: Option<&str>) -> String {
+    match report.map(str::trim).filter(|report| !report.is_empty()) {
+        Some(report) => format!("{summary} Reported: {}", truncate(report, 400)),
+        None => summary,
     }
 }
 
@@ -1093,9 +1156,15 @@ async fn attempt_step(
             )
             .await
             .map_err(|_| RunError::Failed(format!("\"{}\" took too long.", step.label)))??;
-            let reported_done = serde_json::from_str::<Value>(&report)
-                .ok()
+            let report = serde_json::from_str::<Value>(&report).ok();
+            let reported_done = report
+                .as_ref()
                 .and_then(|value| value.get("done").and_then(Value::as_bool));
+            session.last_report = report
+                .as_ref()
+                .filter(|_| reported_done == Some(true))
+                .and_then(|value| value.get("detail").and_then(Value::as_str))
+                .map(str::to_string);
             let mut seen = native::observe(media_app).await;
             // Poll only a player that answered: an unreadable one stays unreadable.
             if media_app.is_some() && seen.media_playing == Some(false) {
@@ -1169,7 +1238,8 @@ async fn run_with_snippets(
     }
     let mut observed = Observed::default();
 
-    let request = plan_request_text(&transcript, &snippets);
+    let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
+    let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
         MODEL_HOST,
@@ -1275,7 +1345,10 @@ async fn run_with_snippets(
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: plan::with_left_out_note(format!("Done: {}.", done.join(", ")), &ctx.request),
+        summary: plan::with_left_out_note(
+            with_report(format!("Done: {}.", done.join(", ")), session.last_report.as_deref()),
+            &ctx.request,
+        ),
     });
     session.server.shutdown().await;
     Ok(())
@@ -1545,8 +1618,17 @@ pub struct OperatorPermissions {
 /// list, which is what triggers and then proves its macOS permissions.
 async fn probe_backend(backend: &Backend) -> (bool, String) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    if matches!(backend, Backend::Native(_))
+        && !crate::accessibility::has_accessibility_permission()
+    {
+        return (
+            false,
+            "Allow FNDR under System Settings > Privacy & Security > Accessibility, then check again."
+                .to_string(),
+        );
+    }
     let spawned = tokio::process::Command::new(backend.path())
-        .arg("mcp")
+        .arg(backend.mcp_arg())
         .env("CODEX_HOME", super::codex_account::codex_home_dir())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1666,6 +1748,51 @@ mod tests {
     }
 
     #[test]
+    fn fndrs_own_executor_is_attached_with_its_subcommand() {
+        let backend = Backend::Native(PathBuf::from("/Applications/FNDR.app/Contents/MacOS/fndr"));
+        assert_eq!(backend.label(), "fndr_native");
+        let args = session_args(&["computer-use".into()], &backend)
+            .unwrap()
+            .join(" ");
+        assert!(args.contains(
+            "mcp_servers.fndr_computer.command=\"/Applications/FNDR.app/Contents/MacOS/fndr\""
+        ));
+        assert!(args.contains("mcp_servers.fndr_computer.args=[\"operator-mcp\"]"));
+        assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+    }
+
+    #[test]
+    fn the_native_backend_wins_and_the_old_helpers_are_fallbacks() {
+        let at = |p: &str| Some(PathBuf::from(p));
+        let pick = |forced: Option<&str>, native: Option<PathBuf>, bundled, open| {
+            choose_backend(forced, native, move || bundled, move || open)
+        };
+        let all = |forced| pick(forced, at("/fndr"), at("/launcher"), at("/occ"));
+        assert_eq!(all(None), Some(Backend::Native("/fndr".into())));
+        assert_eq!(
+            all(Some("open_computer_use")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(
+            all(Some("codex_computer_use")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, at("/launcher"), at("/occ")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, None, at("/occ")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(pick(None, None, None, None), None);
+        assert_eq!(
+            pick(Some("fndr_native"), None, at("/launcher"), at("/occ")),
+            None
+        );
+    }
+
+    #[test]
     fn finds_the_newest_bundled_computer_use() {
         let home = tempfile::tempdir().unwrap();
         for version in ["1.0.900", "1.0.1000926", "1.0.99"] {
@@ -1728,7 +1855,7 @@ mod tests {
     #[test]
     fn memories_reach_the_planner_only_when_retrieved() {
         assert_eq!(
-            plan_request_text("open Spotify", &[]),
+            plan_request_text("open Spotify", &[], None),
             "Request: open Spotify"
         );
         let snippet = memory::MemorySnippet {
@@ -1739,8 +1866,33 @@ mod tests {
             timestamp: 1_790_000_000_000,
             text: "played".into(),
         };
-        let text = plan_request_text("play the song from yesterday", &[snippet]);
+        let text = plan_request_text("play the song from yesterday", &[snippet], Some("Music"));
         assert!(text.contains("Memory snippets:\n[1] 2026-10-05 21:00 | Spotify | Blinding Lights"));
+        assert!(text.starts_with("Request: play the song from yesterday\nIn front: Music\n"));
+    }
+
+    #[test]
+    fn the_planner_learns_the_app_in_front_unless_it_is_off_limits() {
+        let seen = |app: &str| plan::Observation {
+            frontmost_app: app.to_string(),
+            ..Default::default()
+        };
+        let mut guards = Guards::open();
+        assert_eq!(app_in_front(&seen("Google Chrome"), &guards).as_deref(), Some("Google Chrome"));
+        assert_eq!(app_in_front(&seen(""), &guards), None);
+        guards.off_limits = Arc::new(|app| app == "1Password");
+        assert_eq!(app_in_front(&seen("1Password"), &guards), None);
+    }
+
+    #[test]
+    fn a_run_that_only_read_shows_what_was_reported() {
+        // Live run, 2026-10-08: "summarize the article" ended in a bare "Done".
+        assert_eq!(
+            with_report("Done: Summarize article.".into(), Some(" It argues X. ")),
+            "Done: Summarize article. Reported: It argues X."
+        );
+        assert_eq!(with_report("Done: Open Chrome.".into(), None), "Done: Open Chrome.");
+        assert_eq!(with_report("Done.".into(), Some("  ")), "Done.");
     }
 
     #[test]

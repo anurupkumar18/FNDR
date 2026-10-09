@@ -4,9 +4,10 @@ import { PrivacyProof, PrivacyProofPanel } from "./PrivacyProof";
 
 vi.mock("@/shared/ipc/tauri", () => ({
     getPrivacyProof: vi.fn(),
+    listPeerRuns: vi.fn(),
 }));
 
-import { getPrivacyProof } from "@/shared/ipc/tauri";
+import { getPrivacyProof, listPeerRuns } from "@/shared/ipc/tauri";
 
 const proof = {
     evaluated: 120,
@@ -30,7 +31,7 @@ describe("PrivacyProof", () => {
     it("labels process-lifetime counters as current-session activity", () => {
         render(<PrivacyProof proof={proof} />);
         expect(
-            screen.getByRole("region", { name: /privacy activity for this app session/i }),
+            screen.getByRole("region", { name: /privacy activity details/i }),
         ).toBeInTheDocument();
         expect(screen.getByText("Frames evaluated this app session")).toBeInTheDocument();
         expect(screen.getByText("Frames stored this app session")).toBeInTheDocument();
@@ -101,6 +102,23 @@ describe("Notch Do runs in PrivacyProof", () => {
 describe("PrivacyProofPanel", () => {
     afterEach(() => {
         vi.mocked(getPrivacyProof).mockReset();
+        vi.mocked(listPeerRuns).mockReset();
+    });
+
+    it("shows persisted peer egress metadata without task or memory text", async () => {
+        vi.mocked(getPrivacyProof).mockResolvedValue(proof);
+        vi.mocked(listPeerRuns).mockResolvedValue([{
+            local_id: "local-1", peer_id: "peer-1", host: "peer.example",
+            created_at_ms: Date.now(), payload_bytes: 321, status: "acknowledged",
+            remote_task_id: "task-1", remote_state: "TASK_STATE_WORKING",
+        }]);
+        render(<PrivacyProofPanel isVisible onClose={() => {}} />);
+        const runs = await screen.findByRole("list", { name: "Peer sends" });
+        expect(runs).toHaveTextContent("peer.example");
+        expect(runs).toHaveTextContent("321 B");
+        expect(runs).toHaveTextContent("working");
+        expect(runs).not.toHaveTextContent("PRIVATE_TASK_TEXT");
+        expect(runs).not.toHaveTextContent("memory-1");
     });
 
     it("fetches and renders the privacy proof when opened", async () => {

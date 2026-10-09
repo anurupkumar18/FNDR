@@ -76,3 +76,23 @@ Rules the executor must keep:
 - New work for Final: the executor, its tests against the fixture pages in `src-tauri/tests/fixtures/operator/pages/`, and the twenty-task run.
 - The Notch Do live checks owed from Phase 1 move to the executor. Running them earlier needs `open-computer-use` on the test Mac, which is the owner's choice to install.
 - The code still looks for OpenAI's old launcher first (`bundled_computer_use`). It is harmless where the launcher is gone and is removed with item 5.
+
+## Update 2026-10-08: item 4, first slice built
+
+`fndr operator-mcp` exists (`src-tauri/src/operator/mcp.rs`, Mac side in `src-tauri/src/accessibility/operate.rs`, started from `main.rs`) and `detect_backend` prefers it (`Backend::Native`, label `fndr_native`). It serves `get_app_state`, `click`, `set_value`, `type_text`, `press_key`, `scroll` and `list_apps` with the argument shapes `policy.rs` reads; the policy and its tests are unchanged.
+
+How each rule is kept:
+
+- Index validity: indexes keep counting up across trees, so an index from an older tree is refused by number alone. Any action drops the app's tree and the next one needs a fresh `get_app_state`. Just before it acts, the server re-reads the element and refuses if it no longer says what was printed (the shifting-buttons case).
+- Click is AXPress on the element's handle. Coordinates are refused. Nothing falls back to a screen position.
+- FNDR, blocklisted apps and secure fields are refused inside the server as well as by the parent. The server reads the blocklist and the actions switch from settings at start and will not start if they cannot be read.
+- The text of a text field is never printed, so a field's contents cannot change how policy reads it. Other elements print their value (`text Edit field = 57`).
+- No pixels are read. The process exits on end of input and polls its parent.
+
+Honest limits:
+
+- Private Mode is not visible to the child. It is enforced by the parent before every approved call (the existing `halt` guard), which holds because every tool is set to `prompt`.
+- `press_key` and `scroll` go to the front app through System Events key events after FNDR has brought the named app forward and confirmed it. `scroll` is page keys, not wheel events. `type_text` pastes through the clipboard (the Autofill path without its select-all), which leaves the typed text on the clipboard.
+- The old bundled launcher and open-computer-use remain as fallbacks, and can be forced with `FNDR_COMPUTER_USE`. They go when the twenty-task set passes (item 5).
+
+Still open for item 4: a full Codex session through the native server (the `live_notch_do_runs_the_example_request` run with `FNDR_COMPUTER_USE=fndr_native`), the twenty-task set, the fixture pages in a browser, whether Codex's own process chain keeps the Accessibility grant of the FNDR binary, and wheel scrolling.

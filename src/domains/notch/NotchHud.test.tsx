@@ -631,5 +631,134 @@ describe("NotchHud", () => {
             fireEvent.click(await screen.findByRole("button", { name: "Reconnect ChatGPT" }));
             await waitFor(() => expect(ipcMocks.codexLoginStart).toHaveBeenCalled());
         });
+
+        describe("spoken progress", () => {
+            class FakeUtterance {
+                onend: (() => void) | null = null;
+                onerror: (() => void) | null = null;
+                constructor(public text: string) {}
+            }
+            let spoken: FakeUtterance[];
+            let current: FakeUtterance | null;
+            const synth = {
+                get speaking() {
+                    return current !== null;
+                },
+                speak: vi.fn((u: FakeUtterance) => {
+                    spoken.push(u);
+                    current = u;
+                }),
+                cancel: vi.fn(() => {
+                    const u = current;
+                    current = null;
+                    u?.onerror?.();
+                }),
+            };
+            const said = () => spoken.map((u) => u.text);
+
+            beforeEach(() => {
+                spoken = [];
+                current = null;
+                synth.speak.mockClear();
+                synth.cancel.mockClear();
+                vi.stubGlobal("SpeechSynthesisUtterance", FakeUtterance);
+                Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true });
+                window.localStorage.removeItem("fndr.notch.do.muted");
+            });
+
+            afterEach(() => {
+                vi.unstubAllGlobals();
+                Reflect.deleteProperty(window, "speechSynthesis");
+                window.localStorage.removeItem("fndr.notch.do.muted");
+            });
+
+            async function toRunning() {
+                await openDo();
+                voice({ kind: "final", text: "open Spotify and play Blinding Lights" });
+                await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+                planned();
+            }
+
+            it("says what it understood, then each step as it starts, by default", async () => {
+                await toRunning();
+                await waitFor(() => expect(said()[0]).toMatch(/^Understood: open Spotify and play Blinding Lights\. three steps\. Starting\.$/));
+                emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+                act(() => {
+                    current?.onend?.();
+                });
+                await waitFor(() => expect(said()).toContain("Step one of three: Open Spotify."));
+            });
+
+            it("announces an ask-first step aloud while the Allow button waits for a tap", async () => {
+                await toRunning();
+                emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 1, attempt: 1 });
+                emit("computer-use://event", {
+                    kind: "approval",
+                    runId: "r1",
+                    requestKey: "req-9",
+                    tool: "click",
+                    summary: "click Add to cart",
+                });
+                await waitFor(() => expect(said()).toContain("I need your okay to click Add to cart. Tap Allow, or say no."));
+                expect(ipcMocks.computerUseRespond).not.toHaveBeenCalled();
+                expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+            });
+
+            it("says what it did not do and how much it checked", async () => {
+                await toRunning();
+                emit("computer-use://event", { kind: "stepDone", runId: "r1", index: 0, ok: true, detail: "", checked: true });
+                emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Playing." });
+                await waitFor(() => expect(said()[said().length - 1]).toMatch(/^Done\. Playing\. I left out: .* I checked every step myself\./));
+            });
+
+            it("goes quiet at once on the Stop button", async () => {
+                await toRunning();
+                emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+                await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+                fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+                expect(synth.cancel).toHaveBeenCalled();
+                expect(synth.speaking).toBe(false);
+            });
+
+            it("a spoken stop still works while FNDR is talking", async () => {
+                await toRunning();
+                emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+                await waitFor(() => expect(coreMocks.invoke.mock.calls.filter(([c]) => c === "voice_start").length).toBe(2));
+                voice({ kind: "partial", text: "stop" });
+                await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+                expect(synth.speaking).toBe(false);
+            });
+
+            it("does not take its own voice for a new request", async () => {
+                await toRunning();
+                await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+                voice({ kind: "final", text: "understood 3 steps starting" });
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                expect(screen.queryByText(/Heard this/)).not.toBeInTheDocument();
+                expect(ipcMocks.computerUsePlan).toHaveBeenCalledTimes(1);
+            });
+
+            it("mute silences speech now and keeps it off, and the switch comes back", async () => {
+                await toRunning();
+                await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+                fireEvent.click(screen.getByRole("button", { name: "Mute voice" }));
+                expect(synth.speaking).toBe(false);
+                synth.speak.mockClear();
+                emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+                await new Promise((resolve) => setTimeout(resolve, 50));
+                expect(synth.speak).not.toHaveBeenCalled();
+                expect(window.localStorage.getItem("fndr.notch.do.muted")).toBe("1");
+                expect(screen.getByRole("button", { name: "Unmute voice" })).toBeInTheDocument();
+            });
+
+            it("closing the notch cancels speech", async () => {
+                await toRunning();
+                await waitFor(() => expect(synth.speak).toHaveBeenCalled());
+                synth.cancel.mockClear();
+                emit("notch-hud://summon", false);
+                await waitFor(() => expect(synth.cancel).toHaveBeenCalled());
+                expect(synth.speaking).toBe(false);
+            });
+        });
     });
 });
