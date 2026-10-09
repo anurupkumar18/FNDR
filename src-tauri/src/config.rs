@@ -782,6 +782,35 @@ pub struct Config {
     /// How FNDR speaks when a surface talks back: which voice and how fast.
     #[serde(default)]
     pub voice_output: VoiceOutputConfig,
+    /// The stuck detector, what-changed nudges and meeting prep.
+    #[serde(default)]
+    pub proactive_signals: ProactiveSignalsConfig,
+}
+
+/// Each proactive signal runs on device from stored memories and can be
+/// switched off on its own. Private Mode and the blocklist always apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveSignalsConfig {
+    #[serde(default = "default_proactive_signal_on")]
+    pub stuck: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub thread_updates: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub meeting_prep: bool,
+}
+
+fn default_proactive_signal_on() -> bool {
+    true
+}
+
+impl Default for ProactiveSignalsConfig {
+    fn default() -> Self {
+        Self {
+            stuck: true,
+            thread_updates: true,
+            meeting_prep: true,
+        }
+    }
 }
 
 /// Spoken output. `provider` is `auto` (the ChatGPT plan voice when signed
@@ -1234,6 +1263,7 @@ impl Default for Config {
             memory_quality: MemoryQualityConfig::default(),
             notifications: NotificationConfig::default(),
             voice_output: VoiceOutputConfig::default(),
+            proactive_signals: ProactiveSignalsConfig::default(),
         }
     }
 }
@@ -1399,6 +1429,24 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn proactive_signals_are_on_for_an_older_file_and_each_switches_off_alone() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file = current
+            .split("[proactive_signals]")
+            .next()
+            .unwrap()
+            .to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert!(older.proactive_signals.stuck);
+        assert!(older.proactive_signals.thread_updates);
+        assert!(older.proactive_signals.meeting_prep);
+
+        let partial: ProactiveSignalsConfig = toml::from_str("stuck = false").unwrap();
+        assert!(!partial.stuck);
+        assert!(partial.thread_updates && partial.meeting_prep);
     }
 
     #[test]
