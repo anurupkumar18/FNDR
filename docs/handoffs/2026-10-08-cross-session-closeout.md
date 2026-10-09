@@ -2,7 +2,7 @@
 
 ## Read this first
 
-Work stops at this checkpoint. `main` contains intertwined commits from the Codex peer/MCP lane, the Claude output-quality lane, and the Claude agent-surfaces lane. The shared checkout also holds other sessions' uncommitted edits. Inspect `git status --short` before any change; never stash, reset, or stage a shared file wholesale. `git push origin main` sends to GitLab and the GitHub mirror. The detailed source handoffs are [Codex peer/MCP](2026-10-08-codex-agent-peer.md), [output quality](../reports/2026-10-07-handoff-output-quality.md) and [agent surfaces](2026-10-07-agent-surfaces.md); their older interim status sections are superseded by later dated sections and this checkpoint.
+Work stops at this checkpoint. `main` contains intertwined commits from the Codex peer/MCP lane, the Claude output-quality lane, and the Claude agent-surfaces lane. The shared checkout also holds other sessions' uncommitted edits. Inspect `git status --short` before any change; never stash, reset, or stage a shared file wholesale. `git push origin main` sends to GitLab and the GitHub mirror. The detailed source handoffs are [Codex peer/MCP](2026-10-08-codex-agent-peer.md), [output quality](../reports/2026-10-08-output-quality.md) and [agent surfaces](2026-10-07-agent-surfaces.md); their older interim status sections are superseded by later dated sections and this checkpoint.
 
 ## Shipped this week
 

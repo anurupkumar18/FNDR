@@ -1,0 +1,23 @@
+{
+  "_about": "Floors and ceilings for the vault scorecard (examples/vault_qa.rs). Set from the owner vault on 2026-10-08 with a little room; tighten when a number improves and stays there. Counts only, never memory text.",
+  "max_percent": {
+    "summary_quality.cut_inside_token": 0,
+    "summary_quality.narrated": 12,
+    "summary_quality.placeholder": 15,
+    "vector_health.zero_primary_vector": 0,
+    "vector_health.embedding_text_carries_session_id": 2
+  },
+  "max_count": {
+    "unrelated_queries_marked_strong": 0,
+    "activity_labels_outside_the_list": 0
+  },
+  "min_fraction": {
+    "known_item_search.by_query.window_title.a_memory_with_the_same_title_in_top5": 0.8,
+    "known_item_search.by_query.summary_gist.a_memory_with_the_same_title_in_top5": 0.85,
+    "known_item_search.by_query.summary_gist.hybrid_top5": 0.75,
+    "voice_in_voice": 0.55
+  },
+  "max_fraction": {
+    "voice_out_of_voice": 0.08
+  }
+}

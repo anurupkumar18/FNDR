@@ -16,11 +16,38 @@ install:
 demo: install
 	npm run tauri dev
 
-test:
+test: scripts-test
 	npm run typecheck
 	npm test
 	npm run build
 	cd src-tauri && cargo test
+
+# The Python tests for the audit, team, model, bench and bootstrap scripts.
+# They take a few seconds and nothing else runs them.
+.PHONY: scripts-test
+scripts-test:
+	@for dir in $$(find scripts -name "test_*.py" -exec dirname {} \; | sort -u); do \
+		$(PYTHON) -m unittest discover -q -s "$$dir" -t "$$dir" -p "test_*.py" || exit 1; \
+	done
+
+# Runs `cargo test --lib` on the committed tree plus the files named in FILES,
+# in a scratch copy, so another session's uncommitted work cannot break it.
+#   make test-clean FILES="src-tauri/src/a.rs src-tauri/src/b.rs" FILTER=context_runtime
+.PHONY: test-clean
+test-clean:
+	./scripts/dev/test-clean.sh $(foreach file,$(FILES),-f "$(file)") $(FILTER)
+
+# The owner-vault quality gate: copies the vault, scores the copy
+# (examples/vault_qa.rs) and checks the scorecard against
+# scripts/audit/vault-quality-thresholds.json. Counts only; the real vault is
+# never opened for writing and the copy is removed afterwards.
+.PHONY: qa-vault
+VAULT_PROFILE ?= $(HOME)/Library/Application Support/com.fndr.app
+qa-vault:
+	@copy="$$(mktemp -d)"; trap 'rm -rf "$$copy"' EXIT; \
+	cp -R "$(VAULT_PROFILE)/lancedb" "$$copy/lancedb" && \
+	(cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run -q --example vault_qa -- --data-dir "$$copy" --sample 40 > "$$copy/scorecard.json") && \
+	$(PYTHON) scripts/audit/vault_quality_check.py --scorecard "$$copy/scorecard.json"
 
 rust-test:
 	cd src-tauri && cargo fmt --check && cargo clippy --all-targets && cargo test
@@ -51,6 +78,7 @@ capture-baseline-verify:
 
 qa-seed:
 	FNDR_DEMO_DIR="$(QA_PROFILE)" FNDR_DEMO_CORPUS="$(QA_CORPUS)" CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" ./scripts/demo/seed-demo-profile.sh --reset
+	date +%F > "$(QA_PROFILE)/.seeded-on"
 
 qa-retrieval:
 	mkdir -p "$(QA_EVIDENCE_DIR)"
@@ -89,7 +117,12 @@ QA_CHECK_DIR ?= $(CURDIR)/src-tauri/target/qa-retrieval-check/$(QA_CASE_SET)$(if
 # chunk-on deltas. Needs the BGE model (scripts/bootstrap/download-embedding-model.sh).
 QA_CHUNK_ARGS := $(if $(QA_CHUNKS),--chunks,)
 
+# The corpus is dated relative to the day it is seeded, so a profile seeded on
+# an earlier day misses every "yesterday" query. QA_SKIP_SEED=1 is refused then.
 qa-retrieval-check: $(if $(QA_SKIP_SEED),,qa-seed)
+	@if [ "$$(cat "$(QA_PROFILE)/.seeded-on" 2>/dev/null)" != "$$(date +%F)" ]; then \
+		echo "The QA profile was not seeded today, so its time queries would miss. Run without QA_SKIP_SEED=1." >&2; exit 1; \
+	fi
 	mkdir -p "$(QA_CHECK_DIR)"
 	cd src-tauri && CARGO_BUILD_JOBS="$(CARGO_BUILD_JOBS)" cargo run --example retrieval_qa -- --data-dir "$(QA_PROFILE)" --cases "$(QA_QUERIES)" --out "$(QA_CHECK_DIR)/current.md" --json "$(QA_CHECK_DIR)/current.json" $(QA_CHUNK_ARGS) > /dev/null
 	$(PYTHON) scripts/audit/retrieval_check.py --reference "$(QA_REFERENCE)" --current "$(QA_CHECK_DIR)/current.json" --out "$(QA_CHECK_DIR)/check.md"
