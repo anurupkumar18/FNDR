@@ -227,7 +227,9 @@ async fn execute_action_logic(app_data_dir: &Path, action_id: &str) -> Result<Ag
         .ok_or_else(|| format!("Action not found: {}", action_id))?;
     let result = execute_action(&action).await;
     let (status, result) = match result {
-        Ok(r) => (AgentActionStatus::Succeeded, Some(r)),
+        Ok(r) if r.success => (AgentActionStatus::Succeeded, Some(r)),
+        // The command ran and exited non-zero: keep its output, mark it failed.
+        Ok(r) => (AgentActionStatus::Failed, Some(r)),
         Err(e) => (
             AgentActionStatus::Failed,
             Some(crate::agent::actions::ActionResult {
@@ -313,6 +315,27 @@ mod action_lifecycle_tests {
         assert_eq!(executed.status, AgentActionStatus::Succeeded);
         let result = executed.result.unwrap();
         assert!(result.success);
+        assert!(!result.output.trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_command_that_exits_non_zero_is_recorded_as_failed() {
+        let dir = tempdir().unwrap();
+        let action = propose_action_logic(
+            dir.path(),
+            "run-3",
+            AgentActionKind::RunReadOnlyCommand,
+            RiskLevel::Medium,
+            "List a folder that does not exist",
+            serde_json::json!({"command": "ls", "args": ["/no-such-fndr-folder"]}),
+        )
+        .unwrap();
+        approve_action_logic(dir.path(), &action.id).unwrap();
+
+        let executed = execute_action_logic(dir.path(), &action.id).await.unwrap();
+        assert_eq!(executed.status, AgentActionStatus::Failed);
+        let result = executed.result.unwrap();
+        assert!(!result.success);
         assert!(!result.output.trim().is_empty());
     }
 
