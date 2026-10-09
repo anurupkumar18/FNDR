@@ -59,25 +59,33 @@ export function OperatorPermissions() {
                     ? rows(permissions).map((row) => (
                           <li key={row.label} className="sg-setting-row">
                               <span>
-                                  <strong>
-                                      {row.ok === true ? "✓ " : row.ok === false ? "✕ " : "• "}
-                                      {row.label}
-                                  </strong>
+                                  <strong>{row.label}</strong>
                                   <small>{row.why}</small>
                               </span>
-                              {row.ok !== true ? (
-                                  <button type="button" className="ui-action-btn" onClick={() => void openSystemSettings(row.pane)}>
-                                      Open Settings
-                                  </button>
-                              ) : null}
+                              {/* The state is a word, not only a symbol, so it reads the same to everyone. */}
+                              <div className="sg-permission-state">
+                                  <em className={`is-${row.ok === true ? "allowed" : row.ok === false ? "denied" : "unknown"}`}>
+                                      {row.ok === true ? "Allowed" : row.ok === false ? "Not allowed" : "Not checked"}
+                                  </em>
+                                  {row.ok !== true ? (
+                                      <button
+                                          type="button"
+                                          className="ui-action-btn"
+                                          aria-label={`Open ${row.label} settings`}
+                                          onClick={() => void openSystemSettings(row.pane)}
+                                      >
+                                          Open Settings
+                                      </button>
+                                  ) : null}
+                              </div>
                           </li>
                       ))
                     : null}
             </ul>
             {permissions && !permissions.backend ? (
-                <p className="sg-diagnostics-error" role="alert">No computer-use helper is installed.</p>
+                <p className="sg-operator-note" role="status">No computer-use helper is installed.</p>
             ) : null}
-            {error ? <p className="sg-diagnostics-error" role="alert">{error}</p> : null}
+            {error ? <p className="sg-operator-note is-error" role="alert">{error}</p> : null}
             <button type="button" className="ui-action-btn" disabled={checking} onClick={() => void check(true)}>
                 {checking ? "Checking…" : "Check again"}
             </button>
