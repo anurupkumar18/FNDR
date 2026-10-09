@@ -34,6 +34,17 @@ jobs:
       - name: Frontend tests
         run: npm test
 
+      # The Python tests for the audit, team, model, bench and bootstrap scripts.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Script tests
+        run: |
+          python3 -m pip install --quiet -r scripts/audit/requirements.txt
+          make scripts-test
+
   rust:
     name: Rust tests (macOS)
     runs-on: macos-26
