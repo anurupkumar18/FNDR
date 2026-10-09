@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     computerUseStatus: vi.fn(),
     setComputerUseEnabled: vi.fn(),
     openClickyBridgeStatus: vi.fn(),
+    getVoiceOutputSettings: vi.fn(() => Promise.resolve({ provider: "auto", system_voice: "", rate: 1 })),
+    setVoiceOutputSettings: vi.fn((settings: unknown) => Promise.resolve(settings)),
 }));
 
 vi.mock("@/shared/ipc/tauri", () => mocks);

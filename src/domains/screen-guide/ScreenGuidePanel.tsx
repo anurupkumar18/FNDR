@@ -1,4 +1,5 @@
 import { OperatorPermissions } from "./OperatorPermissions";
+import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
     armScreenGuideDiagnostic,
@@ -717,6 +718,8 @@ export function ScreenGuidePanel({
                     </label>
                     {canOperateComputer ? <OperatorPermissions /> : null}
                 </section>
+
+                <VoiceOutputSection />
 
                 <section className="sg-ask-card">
                     <label htmlFor="sg-question">Ask about your display or find a named file</label>

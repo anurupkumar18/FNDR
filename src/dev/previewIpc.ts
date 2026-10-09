@@ -14,6 +14,7 @@ import type {
     RuntimeMetricsSnapshot,
     ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
+    VoiceOutputSettings,
     Stats,
     Task,
     WeeklyWrapped,
@@ -737,6 +738,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
+    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1 };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
     let screenGuideDiagnosticStatus: Omit<
@@ -1224,6 +1226,20 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 // Deliberate no-op: never hand a path to the OS from the browser preview.
                 return undefined;
+            }
+            case "get_voice_output_settings":
+                return { ...voiceOutputSettings };
+            case "set_voice_output_settings": {
+                const settings = payloadRecord(payload)?.settings as Partial<VoiceOutputSettings> | undefined;
+                if (!settings || typeof settings.provider !== "string" || typeof settings.rate !== "number") {
+                    throw new Error("Preview set_voice_output_settings requires provider and rate.");
+                }
+                voiceOutputSettings = {
+                    provider: settings.provider,
+                    system_voice: typeof settings.system_voice === "string" ? settings.system_voice : "",
+                    rate: Math.min(2, Math.max(0.5, settings.rate)),
+                };
+                return { ...voiceOutputSettings };
             }
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
