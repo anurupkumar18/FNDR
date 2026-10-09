@@ -12,14 +12,14 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 
 ## Verification and limits
 
-- Peer Rust tests: 17 passed; delegation Rust tests: 3 passed; peer-run persistence test: 1 passed. Peer and Privacy Activity frontend tests: 20 passed. Typecheck, production build and native binary check passed. The shared tree has existing compiler warnings.
+- Peer Rust tests: 19 passed with the external test ignored in a clean copy of HEAD plus `peer.rs`; delegation Rust tests: 3 passed earlier; peer-run persistence test: 1 passed. Peer and Privacy Activity frontend tests: 20 passed. Typecheck, production build and native binary check passed before the latest lifecycle test. The current shared tree has another session's uncommitted `operator/policy.rs` borrow error, so its direct Rust gate is not green.
 - Browser preview: synthetic Card, reviewed Send, status check and Privacy Activity row worked; zero browser console errors. This proves mounted frontend behavior against preview IPC only.
 - The ignored live Rust test fetched [Emissar's public A2A 1.0 Card](https://emissar.ai/agent), sent a synthetic question through FNDR's transport and received reviewable output. It proves one independent Send path, not native UI, ledger, Get or Cancel.
 - Earlier disposable native launch confirmed `FNDR_DATA_DIR` isolation, but no FNDR window appeared in the available automation inventory. Repeating the same launch without a new window-access route would add no UI evidence. See [peer Send evidence](../evidence/W04/agent-peer-send-2026-10-08.md) and [ADR 025](../decisions/025-agent-peer-interoperability.md).
 
 ## Next slices, in order
 
-1. Finish AG-04 protocol lifecycle evidence: exercise Get and cancellation against a controlled peer, including working after cancel request, confirmed cancel, unknown task and uncertain Send. Keep synthetic data and exact wire assertions. Recheck source visibility after the network response.
+1. Finish AG-04 lifecycle acceptance: controlled Cancel/Get, missing task and one-attempt failed Send now pass. Exercise Get/Cancel and an uncertain task through native UI with a real task-capable peer and a disposable profile. Keep source visibility checks before and after network access.
 2. Establish a native window-access route, then run Peer UI and Privacy Activity after restart on a disposable profile. Do not use the owner vault. If the route remains unavailable, report native QA pending without another duplicate build.
 3. Bind a credential to one configured peer if a real target needs Bearer. Never place it in a Card URL, task body or run ledger. Prove endpoint binding and refusal after credential removal.
 4. After AG-04, measure task usefulness, unsupported claims, latency and bytes against two independent peers before expanding to inbound A2A. Keep AG-04 Doing until its native and lifecycle gates pass; AG-05 owns broader native Agent QA.

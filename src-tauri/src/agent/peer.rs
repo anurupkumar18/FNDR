@@ -269,25 +269,26 @@ pub async fn cancel_on_peer(card: &ValidatedCard, task_id: &str) -> Result<SentT
     }
     let addr = public_address_for(&card.endpoint).await?;
     let client = client_for_pinned(&card.endpoint, addr)?;
+    cancel_with_client(&client, &card.endpoint, task_id).await
+}
+
+async fn cancel_with_client(
+    client: &reqwest::Client,
+    endpoint: &Url,
+    task_id: &str,
+) -> Result<SentTask, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::privacy_proof::record_egress(card.endpoint.host_str().unwrap());
-    let response = send_jsonrpc_with_client(
-        &client,
-        &card.endpoint,
-        &cancel_task_request(&request_id, task_id),
-    )
-    .await?;
+    crate::privacy_proof::record_egress(endpoint.host_str().unwrap());
+    let response =
+        send_jsonrpc_with_client(client, endpoint, &cancel_task_request(&request_id, task_id))
+            .await?;
     parse_get_response(&request_id, task_id, &response)?;
     // A response to CancelTask acknowledges only the request. GetTask supplies
     // the state to show the person, even if the peer is still working.
     let verify_id = uuid::Uuid::new_v4().to_string();
-    crate::privacy_proof::record_egress(card.endpoint.host_str().unwrap());
-    let response = send_jsonrpc_with_client(
-        &client,
-        &card.endpoint,
-        &get_task_request(&verify_id, task_id),
-    )
-    .await?;
+    crate::privacy_proof::record_egress(endpoint.host_str().unwrap());
+    let response =
+        send_jsonrpc_with_client(client, endpoint, &get_task_request(&verify_id, task_id)).await?;
     parse_get_response(&verify_id, task_id, &response)
 }
 
@@ -738,6 +739,10 @@ mod tests {
         let task = parse_get_response("req-1", "peer-task-1", &response).unwrap();
         assert_eq!(task.output_text.as_deref(), Some("Finished report"));
         assert!(parse_get_response("req-1", "other-task", &response).is_err());
+        let missing = json!({"jsonrpc":"2.0","id":"req-1","error":{
+            "code":-32001,"message":"Task not found"
+        }});
+        assert!(parse_get_response("req-1", "peer-task-1", &missing).is_err());
     }
 
     #[test]
@@ -746,6 +751,57 @@ mod tests {
         assert_eq!(request["method"], "CancelTask");
         assert_eq!(request["params"], json!({"id":"peer-task-1"}));
         assert!(request.to_string().len() < 256);
+    }
+
+    #[tokio::test]
+    async fn cancel_reports_only_the_state_verified_by_get_task() {
+        use axum::{routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        for verified_state in ["TASK_STATE_WORKING", "TASK_STATE_CANCELED"] {
+            let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let seen = calls.clone();
+            let app = Router::new().route(
+                "/a2a",
+                post(move |Json(request): Json<Value>| {
+                    let seen = seen.clone();
+                    async move {
+                        let method = request["method"].as_str().unwrap().to_string();
+                        seen.lock().unwrap().push(request.clone());
+                        let state = if method == "CancelTask" {
+                            if verified_state == "TASK_STATE_WORKING" {
+                                "TASK_STATE_CANCELED"
+                            } else {
+                                "TASK_STATE_WORKING"
+                            }
+                        } else {
+                            verified_state
+                        };
+                        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                            "task":{"id":"remote-1","status":{"state":state}}
+                        }}))
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client = reqwest::Client::builder().build().unwrap();
+            let endpoint = Url::parse(&format!("http://localhost:{}/a2a", addr.port())).unwrap();
+
+            let task = cancel_with_client(&client, &endpoint, "remote-1")
+                .await
+                .unwrap();
+            assert_eq!(task.state, verified_state);
+            let requests = calls.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0]["method"], "CancelTask");
+            assert_eq!(requests[1]["method"], "GetTask");
+            assert!(requests
+                .iter()
+                .all(|call| call["params"]["id"] == "remote-1"));
+            server.abort();
+        }
     }
 
     #[tokio::test]
@@ -781,6 +837,41 @@ mod tests {
         assert_eq!(headers.get("a2a-version").unwrap(), "1.0");
         assert_eq!(headers.get("content-type").unwrap(), "application/json");
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), request);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_send_makes_one_attempt() {
+        use axum::{http::StatusCode, routing::post, Router};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let app = Router::new().route(
+            "/a2a",
+            post(move || {
+                let observed = observed.clone();
+                async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder().build().unwrap();
+        let endpoint = Url::parse(&format!("http://localhost:{}/a2a", addr.port())).unwrap();
+        let request = send_message_request("msg-123", "Synthetic task");
+
+        assert!(send_jsonrpc_with_client(&client, &endpoint, &request)
+            .await
+            .unwrap_err()
+            .contains("HTTP 503"));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
         server.abort();
     }
 
