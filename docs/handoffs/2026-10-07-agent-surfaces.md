@@ -38,7 +38,7 @@ Everything below is on `main` and pushed to both remotes.
 
 ## Known and open
 
-1. **The helper sends a picture.** With Screen Recording granted, `open-computer-use` attaches a PNG of the operated app's window to every read. FNDR discloses and logs it and cannot stop it. Only the ADR 026 executor removes it.
+1. **The old helper sends a picture.** With Screen Recording granted, `open-computer-use` attaches a PNG of the operated app's window to every read. FNDR's own executor (below) takes none and is now preferred, so this matters only where the fallback is used.
 2. **"This page" now resolves to the app in front** (the planner is told its name). Checked live at the planning step only.
 3. **A read-only request now shows what was reported**, marked "Reported:". Checked live.
 4. **Not checked in the running app:** quit and Stop during a Notch Do run, Agent Stop, quit with the Hermes gateway up, a Screen Guide ChatGPT answer.
@@ -48,8 +48,13 @@ Everything below is on `main` and pushed to both remotes.
 
 ## Next, in order
 
-1. The ADR 026 executor. Start with `get_app_state` and `click` against `src-tauri/tests/fixtures/operator/pages/`; keep the tool names `operator/policy.rs` already classifies.
-2. The twenty-task set on the executor.
+State on 2026-10-08, end of day: Kunj landed the ADR 026 executor the same evening (`src-tauri/src/operator/mcp.rs`, `src-tauri/src/accessibility/operate.rs`, started as `fndr operator-mcp`, preferred over the helpers in `computer_use.rs`), plus spoken progress in the notch. A second implementation written in this lane in parallel was withdrawn before it was pushed. Do not rebuild it.
+
+1. **Run the six fixture cases on the new executor.** The live runs in the evidence file were all on `open-computer-use`. Same harness, same pages; record which backend ran.
+2. **Collapse elements Chrome reports more than once.** Chrome lists its toolbar under several parents, so a reading carries each toolbar element about four times (seen live with a prototype reader). `read_tree` in `accessibility/operate.rs` has no check for an element it has already visited; a `CFHash` set fixes it.
+3. **Decide whether page text keeps a number.** The executor numbers static text, headings, images and any labelled group. The policy no longer lets such a line pose as a search box (`FIELD_ROLES`, a field's role must lead its line), but a numbered line is still something the model can ask to press. Listing page text without a number removes the question.
+4. The twenty-task set (`docs/evidence/W03/notch-do-task-set.md`) on the executor, then remove `open-computer-use` support (ADR 026, item 5).
+5. Shrink `src/shared/ipc/ipcDriftBaseline.ts`: 51 unused wrappers and 3 uncalled commands, most outside this lane. Take them a module at a time with the module's owner.
 
 ## How to run a live Notch Do check
 
@@ -68,6 +73,7 @@ cd src-tauri && FNDR_LIVE_REQUEST="in Google Chrome, add this to my cart on the 
 - **A check that only passes offline hides breakage.** Codex dropped a feature flag and every Notch Do and Screen Guide ChatGPT turn died at launch; unit tests with a fake server stayed green, and a fallback hid it in the app. Correction: FNDR now asks the installed Codex what it supports, and an exit carries its reason. When a feature depends on an outside program, run it for real before calling it done.
 - **Dead code was found by hand.** Correction: `src/shared/ipc/ipcDrift.test.ts` and `src/dev/docsDrift.test.ts` now fail on a new dead command or a doc that points at something gone.
 - **A push looked done and was not.** `origin` pushes to GitLab and GitHub; GitHub's "Everything up-to-date" hid GitLab's rejection. Correction: confirm with `git ls-remote origin main`.
+- **Two people built the same thing on the same evening.** This page named the executor as the next job, and Kunj and this lane both started it. Correction: before starting a slice that a doc lists as next, `git fetch` and read `git log origin/main` for the files it would touch; say in the team chat that you are taking it.
 - **This page grew by stacking updates** until its top contradicted its middle. Correction: rewrite it.
 
 ## Shared checkout
