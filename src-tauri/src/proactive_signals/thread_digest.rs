@@ -111,7 +111,7 @@ fn add_named(seen: &mut HashSet<String>, names: &mut Vec<String>, key: &str, nam
 
 /// The digest for `key` from admitted memories and tasks. Memories outside
 /// the thread or not newer than `since_ms` are ignored, as are tasks not
-/// drawn from one of the new memories.
+/// drawn from one of the new memories and tasks FNDR only suggested.
 pub fn compute_digest(
     key: &str,
     since_ms: i64,
@@ -157,6 +157,7 @@ pub fn compute_digest(
     let mut new_tasks: Vec<&Task> = tasks
         .iter()
         .filter(|task| task.created_at > since_ms && !task.is_dismissed)
+        .filter(|task| !crate::tasks::suggest::is_suggestion(task))
         .filter(|task| {
             task.source_memory_id
                 .as_deref()
@@ -379,6 +380,16 @@ mod tests {
         assert_eq!(digest.commit_count, 1, "a commit seen twice is one commit");
         assert_eq!(digest.newest_memory_id.as_deref(), Some("page"));
         assert_eq!(digest.title, "Parser");
+    }
+
+    #[test]
+    fn a_task_fndr_only_suggested_is_not_new_work() {
+        let (records, mut tasks) = fixture();
+        let mut suggested = task("Read the aliases RFC", "code", 1);
+        suggested.source_app = "Memory: Cursor".into();
+        tasks.push(suggested);
+        let digest = compute_digest("Parser", NOW - 24 * HOUR, false, &records, &tasks);
+        assert_eq!(digest.tasks, vec!["Add a test for weekday aliases"]);
     }
 
     #[test]
