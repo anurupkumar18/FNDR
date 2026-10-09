@@ -14,6 +14,9 @@ pub enum StepAction {
     OpenUrl,
     /// Codex operates the app's UI through the computer-use tools.
     Operate,
+    /// FNDR reopens a memory it resolved itself (ADR 027). Never planned by
+    /// a model: the schema does not offer it and `parse_plan` refuses it.
+    ReopenMemory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +30,8 @@ pub enum StepCheck {
     PageLoaded,
     /// Only the operator's own report.
     None,
+    /// The reopen core's typed outcome says the target opened.
+    Reopened,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +47,10 @@ pub struct PlanStep {
     #[serde(default)]
     pub goal: String,
     pub check: StepCheck,
+    /// The memory a `reopen_memory` step opens. Only FNDR's code sets it:
+    /// it is never read from a model's plan.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub item: Option<crate::workset::WorkItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,6 +165,12 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                     return Err(format!("Step \"{}\" is not a web link.", step.label));
                 }
             }
+            StepAction::ReopenMemory => {
+                return Err(format!(
+                    "Step \"{}\" reopens a memory, which only FNDR may plan.",
+                    step.label
+                ));
+            }
             _ => {}
         }
         if step.label.is_empty() {
@@ -163,6 +178,7 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 StepAction::OpenApp => format!("Open {}", step.app),
                 StepAction::OpenUrl => "Open the page".to_string(),
                 StepAction::Operate => step.goal.clone(),
+                StepAction::ReopenMemory => String::new(),
             };
         }
     }
@@ -185,6 +201,90 @@ pub fn refers_to_past(request: &str) -> bool {
         .expect("past-reference pattern compiles")
     });
     pattern.is_match(request)
+}
+
+/// Whether a request asks for a whole piece of work back ("pull up
+/// everything related to the assignment", "the essay I was working on").
+/// Decided on the Mac; such a request is resolved from memories here and
+/// never sent to a planner (ADR 027).
+pub fn asks_for_work_set(request: &str) -> bool {
+    static WORK_SET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = WORK_SET.get_or_init(|| {
+        regex::Regex::new(
+            r"(?ix)
+            \b(pull|bring|get|set|load|gather|open|reopen|show)\s+(me\s+)?(it\s+)?(up|out|back(\s+up)?|again)?\s*
+              (everything|all\s+(of\s+)?(my|the)\s+(stuff|things|tabs|files|windows|docs|pages|work)|all\s+(my|the)\s+\w+\s+(stuff|things|tabs|files)|(my|the)\s+(stuff|things|whole\s+\w+|workspace|setup))\b
+            | \b(pull|bring|set|get)\s+(it\s+|everything\s+|my\s+\w+\s+|the\s+\w+\s+)?(up|back\s+up)\s+(for|from|related\s+to|on)\b
+            | \b(the|my|that)\s+(\w+\s+){0,3}(i|we)\s+(was|were|had\s+been|am|are)\s+working\s+on\b
+            | \bwhat\s+(i|we)\s+(was|were|had\s+been)\s+working\s+on\b",
+        )
+        .expect("work-set pattern compiles")
+    });
+    pattern.is_match(request) && !asks_for_something_never_done(request)
+}
+
+/// The plan for a work set: one `reopen_memory` step per item, in the
+/// set's order. Built by code from what FNDR resolved, never by a model.
+pub fn from_work_set(set: &crate::workset::WorkSet) -> Plan {
+    Plan {
+        steps: set
+            .items
+            .iter()
+            .take(MAX_STEPS)
+            .map(|item| PlanStep {
+                action: StepAction::ReopenMemory,
+                label: format!("Open {}", item.label),
+                app: item.app_name.clone(),
+                url: String::new(),
+                goal: String::new(),
+                check: StepCheck::Reopened,
+                item: Some(item.clone()),
+            })
+            .collect(),
+    }
+}
+
+/// Whether a reopen landed, from the reopen core's typed outcome. FNDR
+/// checked the target exists and handed it to macOS; no model is asked.
+pub fn verify_reopen(outcome: &crate::memory::reopen::ReopenOutcome) -> Verdict {
+    use crate::memory::reopen::ReopenOutcome as O;
+    let file = |path: &str| {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path)
+            .to_string()
+    };
+    match outcome {
+        O::Opened => verdict(true, "Opened"),
+        O::OpenedMoved { new_path } => verdict(
+            true,
+            format!("Opened from its new place: {}", file(new_path)),
+        ),
+        O::AppOnly { app_name } => verdict(
+            true,
+            format!(
+                "Opened {} (the app only)",
+                app_name.as_deref().unwrap_or("the app")
+            ),
+        ),
+        O::Missing { path } => verdict(false, format!("{} is no longer there", file(path))),
+        O::DriveNotConnected { volume, .. } => {
+            verdict(false, format!("The drive {volume} is not connected"))
+        }
+        O::AppMissing {
+            app_name,
+            bundle_id,
+        } => verdict(
+            false,
+            format!(
+                "{} is not installed",
+                app_name.as_deref().unwrap_or(bundle_id.as_str())
+            ),
+        ),
+        O::Blocked { .. } => verdict(false, "FNDR does not open that kind of link"),
+        O::NoTarget => verdict(false, "FNDR has no place to reopen for this memory"),
+    }
 }
 
 /// What FNDR saw on the Mac after a step.
@@ -407,6 +507,7 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
             Some(true) => verdict(true, "Done"),
             _ => verdict(false, "The operator could not finish this step"),
         },
+        StepCheck::Reopened => verdict(false, "A reopen is judged by its outcome"),
     }
 }
 
@@ -518,6 +619,7 @@ mod tests {
             url: url.into(),
             goal: "g".into(),
             check,
+            item: None,
         }
     }
 
@@ -694,6 +796,142 @@ mod tests {
                 }
             )
             .ok
+        );
+    }
+
+    #[test]
+    fn work_set_requests_are_told_apart_from_other_requests() {
+        for text in [
+            "pull up everything related to the assignment I was working on",
+            "Open everything for my essay",
+            "set up my workspace for the biology lab",
+            "bring up all the stuff from the chem lab",
+            "get out everything related to the essay",
+            "the assignment I was working on",
+            "pull up what I was working on yesterday",
+            "set everything back up for the lab report",
+            "reopen everything from the biology lab",
+            "pull up the doc I was working on",
+        ] {
+            assert!(asks_for_work_set(text), "{text}");
+        }
+        for text in [
+            "open Spotify, play Blinding Lights, then open the browser and look up looped transformers",
+            "open Safari",
+            "play the song I was listening to yesterday",
+            "open that paper I was reading",
+            "search for the best pasta recipe",
+            "delete everything related to the essay",
+            "pull up everything and email it to Sam",
+            "set a timer for 10 minutes",
+            "open all tabs in Safari",
+            "show me the way to the station",
+        ] {
+            assert!(!asks_for_work_set(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_model_can_never_plan_a_reopen() {
+        let planned = r#"{"steps":[{"action":"reopen_memory","label":"x","app":"Safari","url":"","goal":"","check":"reopened","item":{"memoryId":"m","label":"x","kind":"url","reopenRank":4,"appName":"Safari","capturedAt":1}}]}"#;
+        assert!(parse_plan(planned)
+            .unwrap_err()
+            .contains("only FNDR may plan"));
+        let smuggled = r#"{"steps":[{"action":"open_app","label":"x","app":"Safari","url":"","goal":"","check":"frontmost","item":{"memoryId":"m","label":"x","kind":"url","reopenRank":4,"appName":"Safari","capturedAt":1}}]}"#;
+        assert_eq!(
+            parse_plan(smuggled).unwrap().steps[0].item,
+            None,
+            "an item is never read from a plan"
+        );
+        let schema = plan_output_schema().to_string();
+        assert!(!schema.contains("reopen_memory") && !schema.contains("reopened"));
+    }
+
+    fn work_item(id: &str, label: &str) -> crate::workset::WorkItem {
+        crate::workset::WorkItem {
+            memory_id: id.into(),
+            label: label.into(),
+            kind: crate::workset::ItemKind::Url,
+            reopen_rank: 4,
+            app_name: "Google Chrome".into(),
+            host: Some("canvas.example".into()),
+            page: None,
+            captured_at: 1,
+        }
+    }
+
+    #[test]
+    fn a_work_set_becomes_one_reopen_step_per_item() {
+        let set = crate::workset::WorkSet {
+            id: "ws".into(),
+            title: "Assignment 3".into(),
+            reason: "r".into(),
+            score: 1.0,
+            items: vec![
+                work_item("a", "Assignment 3"),
+                work_item("b", "notes.pdf, page 4"),
+            ],
+        };
+        let plan = from_work_set(&set);
+        let labels: Vec<&str> = plan.steps.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["Open Assignment 3", "Open notes.pdf, page 4"]);
+        assert!(plan
+            .steps
+            .iter()
+            .all(|s| s.action == StepAction::ReopenMemory
+                && s.check == StepCheck::Reopened
+                && s.app == "Google Chrome"));
+        assert_eq!(
+            plan.steps[1].item.as_ref().map(|i| i.memory_id.as_str()),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn a_reopen_is_judged_by_its_typed_outcome() {
+        use crate::memory::reopen::ReopenOutcome as O;
+        let step = from_work_set(&crate::workset::WorkSet {
+            id: "ws".into(),
+            title: "t".into(),
+            reason: "r".into(),
+            score: 1.0,
+            items: vec![work_item("a", "A")],
+        })
+        .steps
+        .remove(0);
+        let opened = verify_reopen(&O::Opened);
+        assert!(opened.ok && checked_by_fndr(&step, &opened));
+        let moved = verify_reopen(&O::OpenedMoved {
+            new_path: "/Users/k/Documents/notes.pdf".into(),
+        });
+        assert_eq!(moved.detail, "Opened from its new place: notes.pdf");
+        for failed in [
+            O::Missing {
+                path: "/Users/k/a.pdf".into(),
+            },
+            O::DriveNotConnected {
+                volume: "USB".into(),
+                path: "/Volumes/USB/a".into(),
+            },
+            O::AppMissing {
+                bundle_id: "com.x".into(),
+                app_name: Some("X".into()),
+            },
+            O::Blocked {
+                target: "javascript:x".into(),
+            },
+            O::NoTarget,
+        ] {
+            let verdict = verify_reopen(&failed);
+            assert!(!verdict.ok, "{failed:?}");
+            assert!(!checked_by_fndr(&step, &verdict));
+        }
+        assert_eq!(
+            verify_reopen(&O::Missing {
+                path: "/Users/k/a.pdf".into()
+            })
+            .detail,
+            "a.pdf is no longer there"
         );
     }
 }
