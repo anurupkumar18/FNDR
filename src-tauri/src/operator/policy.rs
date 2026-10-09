@@ -383,10 +383,24 @@ fn is_secure(description: &str) -> bool {
     description.contains("secure text field") || has_word(description, &["password", "passcode"])
 }
 
+/// A field's role comes first on its line. Looking for the words anywhere
+/// would let text on a page ("text search field for your password") or a
+/// button's label pose as a search box and be clicked or typed into unasked.
+const FIELD_ROLES: &[&str] = &[
+    "search text field",
+    "search field",
+    "text field",
+    "combo box",
+    "text box",
+];
+
 fn is_search_field(description: &str) -> bool {
-    let field = ["text field", "search field", "combo box", "text box"]
-        .iter()
-        .any(|role| description.contains(role));
+    let description = description.trim_start();
+    let field = FIELD_ROLES.iter().any(|role| {
+        description
+            .strip_prefix(role)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    });
     field && has_word(description, SEARCH_WORDS)
 }
 
@@ -685,6 +699,35 @@ Window: \"Shop\", App: Google Chrome.\n\
         ] {
             assert_eq!(key(name), Risk::Confirm, "{name}");
         }
+    }
+
+    #[test]
+    fn words_on_a_page_cannot_pose_as_a_search_box() {
+        // FNDR's own executor numbers page text and labelled groups too, and
+        // any button can be labelled anything.
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Google Chrome",
+            "App=com.google.Chrome (pid 9)\n0 standard window Blog\n\
+             \t1 text search field for coupons\n\
+             \t2 button Find text field\n\
+             \t3 group search text field\n\
+             \t4 search field Search this site\n\
+             \t5 text field Address and search bar\n",
+        );
+        let click = |index: &str| {
+            risk("click", json!({"app": "Google Chrome", "element_index": index}), &o)
+        };
+        for posing in ["1", "2", "3"] {
+            assert_eq!(click(posing), Risk::Confirm, "element {posing}");
+        }
+        assert_eq!(click("4"), Risk::Runs);
+        assert_eq!(click("5"), Risk::Runs);
+
+        // Typing after pressing one of them is not typing into a search box.
+        o.note_target("Google Chrome", "1");
+        let typing = risk("type_text", json!({"app": "Google Chrome", "text": "x"}), &o);
+        assert_eq!(typing, Risk::Confirm);
     }
 
     #[test]
