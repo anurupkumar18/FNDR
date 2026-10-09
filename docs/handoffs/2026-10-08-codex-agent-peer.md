@@ -8,6 +8,7 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 - A person can save an explicitly configured HTTPS Card, preview the exact text and selected current memory summaries, then Send. The backend revalidates Card, DNS, endpoint, source visibility, destination and reviewed text before egress. An uncertain send is recorded and never retried automatically. Peer output stays untrusted and outside memory.
 - Get and Cancel require a known remote task ID. Cancel is followed by Get before its state is shown. Bearer-protected peers are refused because FNDR has no peer credential binding yet.
 - Privacy Activity shows saved host, time, request size and readable state. The session request counter remains separate from this durable list.
+- The 100-run ledger preserves uncertain and active tasks. When full, it reuses an ended run's slot or refuses a new Send before egress.
 - The checkout is shared with two Claude sessions. Inspect current status before editing or staging; do not stage their files.
 
 ## Verification and limits
