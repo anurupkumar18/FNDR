@@ -176,6 +176,28 @@ Landed on the same branch as RE-08 so a `.pkg` / `.dmg` / `.app` / `.command` do
 
 Unit tests: `should_reveal_installer_and_script_extensions_r35`, `should_reveal_quarantined_executable_but_not_quarantined_pdf`, `plan_reopen_existing_pkg_stays_opened_and_is_reveal_only_r35`.
 
+## RE-10 follow-up (2026-10-08)
+
+Capture now builds an `AppDeepLink` for VS Code, VS Code Insiders, and Cursor when an absolute path is available, and stores it ahead of `files_touched` so a relative LLM path cannot win. Web Notion, Figma, and Slack https URLs stay `BrowserUrl` (higher rank). No desktop Notion or Slack deep-link parser was added: the live probe found no URL or team/channel ids.
+
+Path sources, in order:
+
+1. Window title, when it already contains an absolute path (for example `window.title` includes `${activeEditorLong}`). A leading dirty marker (`●` / `•`) is stripped. A trailing `:line` or `:line:column` keeps the line.
+2. Otherwise Accessibility `document_path` (decoded `file://` `AXDocument`), when it is absolute.
+
+VS Code is not installed on this Mac. R19 was run with Cursor (`com.todesktop.230313mzl4w4u92`, scheme `cursor`). VS Code would use the same title rule with scheme `vscode`.
+
+Live Accessibility probe (2026-10-08):
+
+| App | Window title | `AXDocument` / document path | Deep link |
+|---|---|---|---|
+| Cursor (default title) | `re10-notes.txt — fndr` or `….plan.md — fndr` | `file:///private/tmp/re10-fixtures/re10-notes.txt` (and plans path) | `cursor://file/private/tmp/re10-fixtures/re10-notes.txt` from document path |
+| Cursor with workspace `window.title` = `${dirty}${activeEditorLong}${separator}${rootName}` | Still short in this probe (`re10-notes.txt — fndr`) | Same `file://` when an editor is focused | Same; title did not expose the long path in this run |
+| Notion desktop | `new grad job application` | none | none → app only |
+| Slack desktop | `Slack` | none | none → app only |
+
+`open cursor://file/private/tmp/re10-fixtures/re10-notes.txt` launched Cursor on the fixture. Unit tests: `app_deep_link_for_maps_editor_titles_and_document_paths_r19`, `build_reopen_target_orders_url_then_deep_link_then_file_then_app`, `resolve_and_plan_vscode_deep_link_opens_r19`. `cd src-tauri && cargo test --lib reopen` and `cargo test --lib plan_reopen` pass.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -198,15 +220,15 @@ Unit tests: `should_reveal_installer_and_script_extensions_r35`, `should_reveal_
 | R16 | Pages, Keynote, or Numbers document | File path | File opens | `file_path` `…/re03-fixtures/re03-pages.pages` | exact | `a569e48`+RE-03 | 2026-10-01 | Pages. Full `tauri dev` capture, see RE-03 section. |
 | R17 | Word, Excel, or PowerPoint document | File path | File opens | `file_path` `…/re03-fixtures/re03-sheet-rich.xlsx` | exact | `a569e48`+RE-03 | 2026-10-01 | Excel (Word and PowerPoint not installed). Full `tauri dev` capture, see RE-03 section. |
 | R18 | Unsaved TextEdit document | App only, labeled unsaved | App opens, honest label | `file_path` `re-01_reopen_qa_matrix_….plan.md` (relative, not the unsaved doc); no unsaved label | wrong | `123cd75` | 2026-09-28 | LLM `files_touched` beat an honest app-only/unsaved target. `build_reopen_target` then `open` would hit `canonicalize_relaxed` “no longer exists.” |
-| R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | Capture context: title `re03-notes.txt`, no `AXDocument` | app only | `a569e48`+RE-03 | 2026-10-01 | VS Code does not expose `AXDocument`; title has the file name only. Moved to RE-10 (not an RE-03 row). |
+| R19 | VS Code file | File path (and `vscode://file/...:line` if derivable) | File opens in VS Code | Cursor substitute: `app_deep_link` `cursor://file/private/tmp/re10-fixtures/re10-notes.txt` from `AXDocument` (default title has file name only) | exact: `open` of the deep link opens Cursor on the file | RE-10 | 2026-10-08 | VS Code not installed; Cursor used. Cursor exposes `AXDocument`; VS Code still needs a title with `${activeEditorLong}` or stays app only. See RE-10 section. |
 | R20 | Finder window | Folder path | Folder revealed | `file_path` same relative plan filename, not the folder | wrong | `123cd75` | 2026-09-28 | Snippet mentioned the fixtures folder; stored reopen path did not. |
 | R21 | File moved after capture | Found again by name | Opens from new location, UI says moved | Absolute path that is then moved | opened_moved | RE-07 | 2026-10-05 | Spotlight exact-name lookup; UI: "File was moved. Opened it from …". See RE-07 section. |
 | R22 | File deleted after capture | Stored path | Clear "no longer exists," memory still readable | Absolute path then deleted | missing | RE-07 | 2026-10-05 | Outcome `missing`; Vault status line; memory is not deleted. Relative paths are also `missing` and skip Spotlight. |
 | R23 | File on an unmounted external drive | Stored path | Clear "drive not connected" | `/Volumes/FndrRe07Vol/doc.pdf` after detach | drive_not_connected | RE-07 | 2026-10-05 | Synthetic APFS disk image stood in for an external drive. UI: "Connect the drive FndrRe07Vol to open this file." |
 | R24 | iCloud file evicted from the Mac | Stored path | Opens and downloads, or clear message | iCloud Drive file still on disk | opened (placeholder / unevictable new file) | RE-07 | 2026-10-05 | `brctl evict` refused a brand-new file. Present iCloud/placeholder files `exists()` and reopen as `opened`. |
 | R25 | Path with spaces, accents, emoji | Stored exactly | Opens | `file_path` `…/re03-fixtures/café 📁/report (2) ✨.pdf` (decomposed accent, as macOS reports it) | exact | `a569e48`+RE-03 | 2026-10-01 | Preview. Stored path exists and opens. Full `tauri dev` capture, see RE-03 section. |
-| R26 | Slack channel | App, or deep link if derivable | App or channel | | not available | `123cd75` | 2026-09-28 | Slack not in this run's target list |
-| R27 | Notion desktop page | Notion URL or `notion://` | Same page | | not available | `123cd75` | 2026-09-28 | Notion desktop not in this run's target list |
+| R26 | Slack channel | App, or deep link if derivable | App or channel | Desktop: title `Slack`, no `AXDocument` → would store `app_bundle`. Web `app.slack.com/client/T…/C…` stays `browser_url` (unit-tested) | desktop: app only (honest); web: exact URL when AX/browser URL is stored | RE-10 | 2026-10-08 | Desktop exposes no team/channel id. No `slack://` mapping added. See RE-10 section. |
+| R27 | Notion desktop page | Notion URL or `notion://` | Same page | Desktop: title is the page name only, no `AXDocument` → `app_bundle`. Web `www.notion.so/…` stays `browser_url` (unit-tested) | desktop: app only (honest); web: exact URL when stored | RE-10 | 2026-10-08 | No `notion://` mapping added. Figma desktop not installed; web `www.figma.com` covered by the same BrowserUrl order test. See RE-10 section. |
 | R28 | Zoom call | App only | App, UI says no specific target | | not available | `123cd75` | 2026-09-28 | Zoom not in this run's target list |
 | R29 | App uninstalled after capture | Stored bundle id | Clear error | Bundle id with `NSWorkspace` check | app_missing when gone | RE-07 | 2026-10-05 | Preview is installed → `app_only`. Fake `com.fndr.re07.missingapp` → `app_missing`, UI: "<app> is no longer installed." Nothing launched. |
 | R30 | Chrome download of a PDF | File path, source URL, link to the page memory | PDF opens | `file_path` plus `url` from WhereFroms page; `related_memory_ids` when a browser memory matches the host in the prior 2 min | exact file (`plan_reopen` → `opened`) | RE-08 | 2026-10-07 | `build_download_record` sets `FilePath` and keeps it through `normalize_record_for_index`. xattr roundtrip stores the referring page, not the signed CDN URL. Live Chrome download (synthetic local page): `file_path` row, `url` = referring page, linked to the Chrome memory; see RE-08 section. |
@@ -228,6 +250,7 @@ Unit tests: `should_reveal_installer_and_script_extensions_r35`, `should_reveal_
 |---|---|
 | Browser memory is app only, no http URL | `capture/macos.rs` `read_frontmost_app_info` + `normalize_browser_document_url`; `build_reopen_target` |
 | Native doc has no file path | Accessibility not granted to the launching app, or the app exposes no `AXDocument` (VS Code); then `files_touched[0]` |
+| Editor stays app only | VS Code default title has no folder; set `window.title` to include `${activeEditorLong}`, or use Cursor which exposes `AXDocument`. Notion/Slack desktop titles have no URL or ids (RE-10). |
 | PDF page not stored | Preview title is total-only (`– 1 page`) or browser URL is not `.pdf`; page parsers live in `memory/reopen.rs` |
 | Download cannot reopen the file | Fixed in RE-08: `build_download_record` sets `FilePath`; settler delay is `flush_interval_secs + 15 s` |
 | Kind vs file disagree after merge | `capture/mod.rs` ~4795 field-wise `or` |
