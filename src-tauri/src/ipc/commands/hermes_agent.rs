@@ -402,17 +402,32 @@ fn detect_ollama_executable() -> Option<PathBuf> {
 
 /// Codex binaries bundled inside OpenAI's desktop apps. They ship a working
 /// native build even when a global npm install has lost its platform binary.
-const BUNDLED_CODEX_CANDIDATES: &[&str] = &[
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
-];
+const CODEX_APP_ROOTS: &[&str] = &["/Applications/ChatGPT.app", "/Applications/Codex.app"];
+
+/// Where those apps keep their Codex: `Resources/codex-cli/bin/codex` since
+/// the ChatGPT 26.1002 update, `Resources/codex` before it.
+fn bundled_codex_paths(app_root: &Path) -> [PathBuf; 2] {
+    let resources = app_root.join("Contents/Resources");
+    [
+        resources.join("codex-cli/bin/codex"),
+        resources.join("codex"),
+    ]
+}
 
 /// First Codex that actually runs; otherwise the first one found, so callers
 /// can report a broken install instead of a missing one.
 pub(crate) fn detect_codex_executable() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = existing_executable_path("codex").into_iter().collect();
     candidates.extend(common_executable_candidates("codex"));
-    candidates.extend(BUNDLED_CODEX_CANDIDATES.iter().map(PathBuf::from));
+    candidates.extend(
+        CODEX_APP_ROOTS
+            .iter()
+            .flat_map(|root| bundled_codex_paths(Path::new(root))),
+    );
+    // The official installer (chatgpt.com/codex/install.sh) links here.
+    if let Some(home) = user_home_dir() {
+        candidates.push(home.join(".codex/packages/standalone/current/bin/codex"));
+    }
     candidates.retain(|candidate| candidate.is_file());
     candidates.dedup();
 
@@ -1821,6 +1836,19 @@ async fn deliver_hermes_message(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bundled_codex_is_looked_up_in_the_current_and_the_old_location() {
+        let paths = bundled_codex_paths(Path::new("/Applications/ChatGPT.app"));
+        assert_eq!(
+            paths[0],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        );
+        assert_eq!(
+            paths[1],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex")
+        );
+    }
 
     /// Regression: status read the supervisor three times in one struct
     /// literal; the first guard was still held, so the second lock deadlocked
