@@ -298,8 +298,10 @@ mod action_lifecycle_tests {
             "run-1",
             AgentActionKind::RunReadOnlyCommand,
             RiskLevel::Medium,
-            "Check repo status",
-            serde_json::json!({"command": "git", "args": ["status"]}),
+            "Print the working directory",
+            // `pwd` succeeds in any directory. `git status` fails outside a
+            // git work tree, which is where `make test-clean` runs.
+            serde_json::json!({"command": "pwd", "args": []}),
         )
         .unwrap();
         assert_eq!(action.status, AgentActionStatus::NeedsApproval);
@@ -309,7 +311,9 @@ mod action_lifecycle_tests {
 
         let executed = execute_action_logic(dir.path(), &action.id).await.unwrap();
         assert_eq!(executed.status, AgentActionStatus::Succeeded);
-        assert!(executed.result.unwrap().success);
+        let result = executed.result.unwrap();
+        assert!(result.success);
+        assert!(!result.output.trim().is_empty());
     }
 
     #[tokio::test]

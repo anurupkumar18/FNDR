@@ -6991,7 +6991,10 @@ mod tests {
         ));
     }
 
+    // The MCP server is one process-wide singleton (`MCP_RUNTIME`). Every test
+    // that starts or stops it shares the `mcp_server` key so they never overlap.
     #[test]
+    #[serial_test::serial(mcp_server)]
     fn localhost_handshake_bypasses_auth_but_tools_call_requires_token() {
         std::env::remove_var("FNDR_MCP_REQUIRE_AUTH");
         let app_state = build_test_app_state();
@@ -7267,6 +7270,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(mcp_server)]
     fn hermes_token_is_limited_by_the_server_to_its_four_read_tools() {
         let dir = tempdir().expect("temporary profile");
         let app_state = related_test_state(dir.path());
