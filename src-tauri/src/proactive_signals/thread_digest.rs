@@ -449,9 +449,10 @@ mod tests {
                 .unwrap()
                 .unwrap();
         let state_path = dir.path().to_path_buf();
-        let state_store = tokio::task::spawn_blocking(move || StateStore::new(&state_path).unwrap())
-            .await
-            .unwrap();
+        let state_store =
+            tokio::task::spawn_blocking(move || StateStore::new(&state_path).unwrap())
+                .await
+                .unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         let mut seen = row("seen", "Parser", 0);
         seen.timestamp = now - 2 * HOUR;
