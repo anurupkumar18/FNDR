@@ -242,6 +242,9 @@ fn query_words(url: &str) -> Vec<String> {
 
 const SEARCH_HOSTS: &[&str] = &["google.com", "bing.com", "duckduckgo.com"];
 
+/// What a link step reports when the person said no to opening it.
+pub const LINK_DECLINED: &str = "The link was not opened";
+
 /// Whether a planned link is one the person's own words account for: a web
 /// search for words they said, or a site they named with nothing attached.
 /// Any other link (an unnamed host, a query they did not say, a fragment)
@@ -253,7 +256,8 @@ pub fn link_was_asked_for(url: &str, request: &str) -> bool {
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .collect();
-    let lower = url.trim().to_lowercase();
+    // A space is the one encoded character a search for spoken words needs.
+    let lower = url.trim().to_lowercase().replace("%20", "+");
     if lower.contains('#') || lower.contains('@') {
         return false;
     }
@@ -447,6 +451,8 @@ mod tests {
             "https://www.youtube.com",
             "https://www.youtube.com/",
             "https://www.google.com/search?q=looped+transformers",
+            // Models often write a space as %20 (live run, 2026-10-08).
+            "https://www.google.com/search?q=looped%20transformers",
         ] {
             assert!(link_was_asked_for(url, request), "{url}");
         }

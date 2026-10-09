@@ -40,7 +40,7 @@ function runOutcome(run: OperatorRunSummary): string {
 const FEATURE_LABELS: Record<string, string> = {
     notch_do_plan: "Notch Do planned a request",
     notch_do_step: "Notch Do ran a step",
-    notch_do_screen_text: "Notch Do sent an app's on-screen text",
+    notch_do_screen_text: "Notch Do sent what an app showed",
     hermes_chat: "Hermes chat message",
     screen_guide_answer: "Screen Guide asked ChatGPT",
 };

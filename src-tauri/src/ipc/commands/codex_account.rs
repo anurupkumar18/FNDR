@@ -108,6 +108,18 @@ pub(crate) struct AppServer {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
+    /// The last thing Codex wrote to stderr, so an exit can say why.
+    last_error_line: std::sync::Arc<Mutex<String>>,
+}
+
+/// "Codex app-server exited", with Codex's last error line when it left one.
+fn exit_message(last_error_line: &str) -> String {
+    let reason = last_error_line.trim();
+    if reason.is_empty() {
+        return "Codex app-server exited".to_string();
+    }
+    let reason: String = reason.chars().take(240).collect();
+    format!("Codex app-server exited: {reason}")
 }
 
 impl AppServer {
@@ -125,7 +137,7 @@ impl AppServer {
             .env("PATH", child_path_env(executable))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             // Its own process group, so stopping Notch Do can kill the MCP
             // servers Codex started along with it.
@@ -138,11 +150,33 @@ impl AppServer {
             .stdout
             .take()
             .ok_or("Codex app-server has no stdout")?;
+        let last_error_line = std::sync::Arc::new(Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let keep = last_error_line.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    // Codex logs warnings while it runs; only what it says
+                    // as it gives up is worth keeping.
+                    if line.trim_start().starts_with("Error") || line.contains("in `") {
+                        if let Ok(mut kept) = keep.lock() {
+                            if line.trim_start().starts_with("Error") {
+                                *kept = line;
+                            } else {
+                                kept.push(' ');
+                                kept.push_str(line.trim());
+                            }
+                        }
+                    }
+                }
+            });
+        }
         let mut server = Self {
             child,
             stdin,
             lines: BufReader::new(stdout).lines(),
             next_id: 0,
+            last_error_line,
         };
 
         server
@@ -221,13 +255,23 @@ impl AppServer {
     /// Next JSON-RPC message of any kind, including server-initiated requests.
     pub(crate) async fn read_raw(&mut self) -> Result<Value, String> {
         loop {
-            let line = self
+            let next = self
                 .lines
                 .next_line()
                 .await
-                .map_err(|e| format!("Reading from Codex app-server failed: {e}"))?
-                .ok_or("Codex app-server exited")?;
+                .map_err(|e| format!("Reading from Codex app-server failed: {e}"))?;
+            let Some(line) = next else {
+                // Give the stderr reader a moment to see Codex's last words.
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                let reason = self.last_error_line.lock().map(|l| l.clone());
+                return Err(exit_message(&reason.unwrap_or_default()));
+            };
             if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                // Live tests only: `FNDR_CODEX_TRACE=1` prints what Codex sent.
+                #[cfg(test)]
+                if std::env::var_os("FNDR_CODEX_TRACE").is_some() {
+                    eprintln!("codex> {}", line.chars().take(700).collect::<String>());
+                }
                 return Ok(message);
             }
         }
@@ -294,6 +338,35 @@ fn parse_window(window: Option<&Value>) -> Option<CodexUsageWindow> {
         window_minutes: window.get("windowDurationMins").and_then(Value::as_u64),
         resets_at: window.get("resetsAt").and_then(Value::as_i64),
     })
+}
+
+/// The model to run a turn on: the one this account's Codex marks as its
+/// default, else the first it offers. The person's own `config.toml` may name
+/// a model their plan does not include, and every turn on it fails.
+fn pick_model(models: &[CodexModel]) -> Option<String> {
+    models
+        .iter()
+        .find(|model| model.is_default)
+        .or_else(|| models.first())
+        .map(|model| model.id.clone())
+}
+
+/// Asks Codex which model this account should use. `None` leaves the choice
+/// to Codex's own configuration.
+pub(crate) async fn account_model(server: &mut AppServer) -> Option<String> {
+    let listed = server
+        .request("model/list", json!({ "limit": 50 }))
+        .await
+        .ok()?;
+    pick_model(&parse_models(&listed))
+}
+
+/// `thread/start` parameters with the account's model named, when known.
+pub(crate) fn with_model(mut thread: Value, model: Option<&str>) -> Value {
+    if let (Some(model), Some(params)) = (model, thread.as_object_mut()) {
+        params.insert("model".to_string(), json!(model));
+    }
+    thread
 }
 
 fn parse_models(result: &Value) -> Vec<CodexModel> {
@@ -512,7 +585,66 @@ pub(crate) const READ_ONLY_DISABLED_FEATURES: &[&str] = &[
     "skill_mcp_dependency_install",
     "tool_suggest",
     "sleep_tool",
+    "browser_use_full_cdp_access",
+    "memories",
 ];
+
+/// The feature names the installed Codex knows, read before each session.
+/// Codex exits on a `--disable` it does not recognise, and its features come
+/// and go between versions, so the list above is filtered through this.
+static KNOWN_CODEX_FEATURES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Feature names from the output of `codex features list`: the first word of
+/// each line.
+fn parse_feature_names(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| is_plain_config_key(name))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Asks the installed Codex which features it has. Fails rather than start a
+/// session with acting features FNDR could not switch off.
+pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), String> {
+    let output = Command::new(executable)
+        .args(["features", "list"])
+        .env("PATH", child_path_env(executable))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("Could not ask Codex for its features: {e}"))?;
+    let names = parse_feature_names(&String::from_utf8_lossy(&output.stdout));
+    if !output.status.success() || names.is_empty() {
+        return Err(
+            "This Codex could not list its features, so FNDR cannot limit it. Update Codex and try again."
+                .to_string(),
+        );
+    }
+    *KNOWN_CODEX_FEATURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(names);
+    Ok(())
+}
+
+/// `--disable` flags for every acting feature the installed Codex has.
+fn disable_flags(known: Option<&[String]>) -> Vec<String> {
+    READ_ONLY_DISABLED_FEATURES
+        .iter()
+        .filter(|feature| known.is_none_or(|known| known.iter().any(|name| name == *feature)))
+        .flat_map(|feature| ["--disable".to_string(), (*feature).to_string()])
+        .collect()
+}
+
+/// The flags for the Codex last asked; every flag when none was asked yet.
+pub(crate) fn read_only_feature_args() -> Vec<String> {
+    let known = KNOWN_CODEX_FEATURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    disable_flags(known.as_deref())
+}
 
 const SCREEN_GUIDE_SCREENSHOT_NOTE: &str = "A screenshot of the same display is attached for \
 context only. Coordinates must still be copied from the LOC markers, never estimated from the image.";
@@ -581,11 +713,7 @@ pub(crate) fn is_plain_config_key(name: &str) -> bool {
 /// this process only: acting features off and every configured MCP server
 /// disabled by name. Nothing is written to their config.toml.
 fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    for feature in READ_ONLY_DISABLED_FEATURES {
-        args.push("--disable".to_string());
-        args.push((*feature).to_string());
-    }
+    let mut args = read_only_feature_args();
     for name in mcp_server_names {
         if !is_plain_config_key(name) {
             return Err(format!(
@@ -650,6 +778,7 @@ pub(crate) async fn answer_screen_guide_with_codex(
     let executable = ready_executable()?;
     let mcp_names = configured_mcp_server_names(&executable).await?;
     ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    refresh_codex_features(&executable).await?;
     let args = read_only_session_args(&mcp_names)?;
     ensure_screen_guide_not_cancelled(cancel.as_ref())?;
     let mut server = AppServer::spawn_with(&executable, &args).await?;
@@ -712,17 +841,21 @@ pub(crate) async fn answer_screen_guide_with_codex(
         server.shutdown().await;
         return Err(error);
     }
+    let model = account_model(&mut server).await;
     let thread = server
         .request(
             "thread/start",
-            json!({
-                "ephemeral": true,
-                "cwd": scratch.0,
-                "sandbox": "read-only",
-                "approvalPolicy": "never",
-                "developerInstructions": instructions,
-                "serviceName": "fndr_screen_guide",
-            }),
+            with_model(
+                json!({
+                    "ephemeral": true,
+                    "cwd": scratch.0,
+                    "sandbox": "read-only",
+                    "approvalPolicy": "never",
+                    "developerInstructions": instructions,
+                    "serviceName": "fndr_screen_guide",
+                }),
+                model.as_deref(),
+            ),
         )
         .await?;
     let thread_id = thread
@@ -808,6 +941,49 @@ pub(crate) async fn answer_screen_guide_with_codex(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_runs_on_the_model_the_account_offers_not_the_one_in_config_toml() {
+        // 2026-10-08: config.toml said gpt-6-sol; the account offered these.
+        let listed = json!({ "data": [
+            { "id": "gpt-5.6-terra", "model": "gpt-5.6-terra", "hidden": false, "isDefault": false },
+            { "id": "gpt-5.6-sol", "model": "gpt-5.6-sol", "hidden": false, "isDefault": true },
+            { "id": "internal", "model": "internal", "hidden": true, "isDefault": true }
+        ]});
+        let model = pick_model(&parse_models(&listed));
+        assert_eq!(model.as_deref(), Some("gpt-5.6-sol"));
+        let thread = with_model(json!({ "ephemeral": true }), model.as_deref());
+        assert_eq!(thread["model"], "gpt-5.6-sol");
+        // Nothing listed: Codex keeps its own choice.
+        assert_eq!(pick_model(&[]), None);
+        assert!(with_model(json!({ "ephemeral": true }), None).get("model").is_none());
+    }
+
+    #[test]
+    fn only_features_the_installed_codex_knows_are_switched_off() {
+        // Codex 0.151 exits with "Unknown feature flag: sleep_tool".
+        let known = parse_feature_names(
+            "shell_tool   stable   true\nunified_exec stable true\nmemories stable true\n",
+        );
+        assert_eq!(known, ["shell_tool", "unified_exec", "memories"]);
+        let flags = disable_flags(Some(&known));
+        assert_eq!(
+            flags,
+            ["--disable", "shell_tool", "--disable", "unified_exec", "--disable", "memories"]
+        );
+        // Before any Codex was asked, nothing is left out.
+        assert_eq!(disable_flags(None).len(), READ_ONLY_DISABLED_FEATURES.len() * 2);
+    }
+
+    #[test]
+    fn an_exit_says_why_when_codex_left_a_reason() {
+        assert_eq!(exit_message("  "), "Codex app-server exited");
+        assert_eq!(
+            exit_message("Error: invalid transport in `mcp_servers.code-review`\n"),
+            "Codex app-server exited: Error: invalid transport in `mcp_servers.code-review`"
+        );
+        assert!(exit_message(&"x".repeat(900)).chars().count() < 300);
+    }
 
     #[cfg(unix)]
     #[test]

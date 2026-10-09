@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 
 use super::codex_account::{
     configured_mcp_server_names, is_plain_config_key, parse_account, ready_executable, AppServer,
-    READ_ONLY_DISABLED_FEATURES,
+    account_model, read_only_feature_args, refresh_codex_features, with_model,
 };
 use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
 use crate::operator::journal::{redact, Journal, JournalEntry};
@@ -269,11 +269,7 @@ pub(crate) fn detect_backend() -> Option<Backend> {
 }
 
 fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    for feature in READ_ONLY_DISABLED_FEATURES {
-        args.push("--disable".to_string());
-        args.push((*feature).to_string());
-    }
+    let mut args = read_only_feature_args();
     for name in user_mcp_servers
         .iter()
         .filter(|name| name.as_str() != COMPUTER_SERVER)
@@ -464,15 +460,19 @@ impl Session {
         let cwd = std::env::temp_dir().join("fndr-computer-use");
         std::fs::create_dir_all(&cwd)
             .map_err(|e| RunError::Failed(format!("Could not prepare Notch Do: {e}")))?;
+        let model = account_model(&mut server).await;
         let thread = |instructions: &'static str, service: &'static str| {
-            json!({
-                "ephemeral": true,
-                "cwd": cwd,
-                "sandbox": "read-only",
-                "approvalPolicy": "on-request",
-                "developerInstructions": instructions,
-                "serviceName": service,
-            })
+            with_model(
+                json!({
+                    "ephemeral": true,
+                    "cwd": cwd,
+                    "sandbox": "read-only",
+                    "approvalPolicy": "on-request",
+                    "developerInstructions": instructions,
+                    "serviceName": service,
+                }),
+                model.as_deref(),
+            )
         };
         let planner = server
             .request(
@@ -660,7 +660,7 @@ impl Session {
                                         let ok = item.get("status").and_then(Value::as_str) == Some("completed")
                                             && item.get("error").is_none_or(Value::is_null)
                                             && item.pointer("/result/isError").and_then(Value::as_bool) != Some(true);
-                                        record_tool_result(ctx, &tool, &args, ok, &result_text);
+                                        record_tool_result(ctx, &tool, &args, ok, &result_text, tool_result_image_bytes(item));
                                         if result_text.contains("-1743") {
                                             // Apple Events refused: every retry would wait
                                             // minutes for the same answer.
@@ -707,6 +707,23 @@ impl Session {
     }
 }
 
+/// Bytes of pictures in a tool result. A helper with Screen Recording access
+/// attaches a picture of the app's window, and Codex passes it to the model.
+fn tool_result_image_bytes(item: &Value) -> usize {
+    item.pointer("/result/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("image"))
+        .map(|part| {
+            ["data", "image_url", "imageUrl"]
+                .iter()
+                .find_map(|key| part.get(*key).and_then(Value::as_str))
+                .map_or(1, str::len)
+        })
+        .sum()
+}
+
 fn tool_result_text(item: &Value) -> String {
     item.pointer("/result/content")
         .and_then(Value::as_array)
@@ -743,6 +760,15 @@ fn journal(
     }
 }
 
+/// What a tool result carried to the model, for Privacy Activity.
+fn sent_kinds(result_text: &str, image_bytes: usize) -> &'static [&'static str] {
+    match (!result_text.is_empty(), image_bytes > 0) {
+        (true, true) => &["screen_text", "screenshot"],
+        (false, true) => &["screenshot"],
+        _ => &["screen_text"],
+    }
+}
+
 /// Bookkeeping after a computer-use call: what FNDR learned about the UI,
 /// the journal line, and the screen text that went to the model.
 fn record_tool_result(
@@ -751,6 +777,7 @@ fn record_tool_result(
     args: &Value,
     ok: bool,
     result_text: &str,
+    image_bytes: usize,
 ) {
     let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
     if ok && tool == "get_app_state" && !app.is_empty() {
@@ -771,12 +798,12 @@ fn record_tool_result(
     if result_text.contains("-1743") {
         BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    if !result_text.is_empty() {
+    if !result_text.is_empty() || image_bytes > 0 {
         crate::privacy_proof::record_model_request_including(
             crate::privacy_proof::Feature::NotchDoScreenText,
             MODEL_HOST,
-            result_text.len(),
-            &["screen_text"],
+            result_text.len() + image_bytes,
+            sent_kinds(result_text, image_bytes),
         );
     }
     let risk = classify(tool, args, ctx.observed).risk;
@@ -899,6 +926,12 @@ async fn wait_for_start(
     }
 }
 
+/// Whether a failed step gets its second attempt. Asking again after the
+/// person declined would put the same question to them twice.
+fn worth_retrying(verdict: &plan::Verdict) -> bool {
+    !verdict.ok && verdict.detail != plan::LINK_DECLINED
+}
+
 /// One attempt at one step; returns what FNDR saw afterward.
 async fn attempt_step(
     session: &mut Session,
@@ -975,7 +1008,7 @@ async fn attempt_step(
                 if !approved {
                     return Ok(plan::Verdict {
                         ok: false,
-                        detail: "The link was not opened".to_string(),
+                        detail: plan::LINK_DECLINED.to_string(),
                     });
                 }
             }
@@ -1092,6 +1125,9 @@ async fn run_with_snippets(
     let user_servers = configured_mcp_server_names(&codex)
         .await
         .map_err(RunError::Failed)?;
+    refresh_codex_features(&codex)
+        .await
+        .map_err(RunError::Failed)?;
     let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
 
     (ctx.emit)(ComputerUseEvent::Planning {
@@ -1181,7 +1217,8 @@ async fn run_with_snippets(
                 retry_note.as_deref(),
             )
             .await?;
-            if verdict.ok {
+            // A no from the person is an answer, not a failure to retry.
+            if verdict.ok || !worth_retrying(&verdict) {
                 break;
             }
             retry_note = Some(verdict.detail.clone());
@@ -1676,6 +1713,31 @@ mod tests {
         };
         let text = plan_request_text("play the song from yesterday", &[snippet]);
         assert!(text.contains("Memory snippets:\n[1] 2026-10-05 21:00 | Spotify | Blinding Lights"));
+    }
+
+    #[test]
+    fn a_picture_in_a_tool_result_is_counted_and_named() {
+        // The shape open-computer-use 0.3.6 returned with Screen Recording on.
+        let item = json!({ "result": { "content": [
+            { "type": "text", "text": "App=com.google.Chrome" },
+            { "type": "image", "mimeType": "image/png", "data": "AAAABBBB" }
+        ]}});
+        assert_eq!(tool_result_image_bytes(&item), 8);
+        assert_eq!(sent_kinds("tree", 8), ["screen_text", "screenshot"]);
+        let text_only = json!({ "result": { "content": [{ "type": "text", "text": "tree" }] }});
+        assert_eq!(tool_result_image_bytes(&text_only), 0);
+        assert_eq!(sent_kinds("tree", 0), ["screen_text"]);
+    }
+
+    #[test]
+    fn a_declined_link_is_not_asked_about_twice() {
+        let verdict = |ok: bool, detail: &str| plan::Verdict {
+            ok,
+            detail: detail.to_string(),
+        };
+        assert!(!worth_retrying(&verdict(false, plan::LINK_DECLINED)));
+        assert!(worth_retrying(&verdict(false, "Spotify is not in front")));
+        assert!(!worth_retrying(&verdict(true, "")));
     }
 
     #[test]
