@@ -19,6 +19,8 @@ Controlled lifecycle tests now exercise Cancel followed by Get with contradictor
 
 A second ignored live Rust test fetched [AgentNative Data Exchange's public Card](https://agentnative.cazimedia.com/.well-known/agent-card.json), selected its unauthenticated JSONRPC 1.0 interface, and sent a synthetic Federal Register question through FNDR's transport. It returned a direct message containing a public sample, Federal Register document URLs, and source provenance. This is a second independent Send implementation; it does not prove Get or Cancel. The free sample represented three records from an aggregate of 25, so it must not be described as a full 25-record result.
 
+Ledger capacity check: a focused regression first showed that the 101st Send discarded the oldest run even when it was still working. The ledger now retains uncertain and active runs, reuses a completed run's slot when available, and refuses a new Send before egress when all 100 slots are unfinished. The test checks both preservation and reuse at the real StateStore boundary. The isolated `agent::peer_runs::tests::` run passed 2 tests after the fix.
+
 ## Acceptance still open
 
 - Native reviewed-text and ledger verification for the real peer path. The two live transport tests check synthetic questions and relevant replies; the local fixture checks the exact JSONRPC request body. Bearer credential binding is still absent.

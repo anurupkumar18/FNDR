@@ -80,10 +80,27 @@ pub fn begin_send(
         remote_task_id: None,
         remote_state: None,
     };
-    runs.push(run.clone());
-    if runs.len() > MAX_RUNS {
-        runs.drain(..runs.len() - MAX_RUNS);
+    if runs.len() >= MAX_RUNS {
+        let finished = runs.iter().position(|prior| {
+            prior.status == "direct_reply"
+                || matches!(
+                    prior.remote_state.as_deref(),
+                    Some(
+                        "TASK_STATE_COMPLETED"
+                            | "TASK_STATE_FAILED"
+                            | "TASK_STATE_CANCELED"
+                            | "TASK_STATE_REJECTED"
+                    )
+                )
+        });
+        match finished {
+            Some(index) => {
+                runs.remove(index);
+            }
+            None => return Err("Peer task history is full of unfinished sends".into()),
+        }
     }
+    runs.push(run.clone());
     store.save_json(STATE_KEY, &runs)?;
     Ok(run)
 }
@@ -160,5 +177,61 @@ mod tests {
         let rows = list_runs(&reopened).unwrap();
         assert_eq!(rows[0].remote_task_id.as_deref(), Some("remote-task"));
         assert_eq!(rows[0].status, "acknowledged");
+    }
+
+    #[test]
+    fn full_ledger_never_discards_an_unfinished_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::StateStore::new(dir.path()).unwrap();
+        let mut ids = Vec::new();
+        for index in 0..MAX_RUNS {
+            let run = begin_send(
+                &store,
+                &format!("message-{index}"),
+                "peer-1",
+                "peer.example",
+                &[],
+                100,
+                index as i64,
+            )
+            .unwrap();
+            ids.push(run.local_id);
+        }
+        finish_send(&store, &ids[0], "remote-1", "TASK_STATE_WORKING").unwrap();
+
+        let result = begin_send(
+            &store,
+            "message-overflow",
+            "peer-1",
+            "peer.example",
+            &[],
+            100,
+            101,
+        );
+        assert!(
+            result.is_err(),
+            "a full ledger of unfinished tasks must block a new send"
+        );
+        let rows = list_runs(&store).unwrap();
+        assert_eq!(rows.len(), MAX_RUNS);
+        assert!(rows.iter().any(|run| run.local_id == ids[0]));
+        assert!(rows.iter().any(|run| run.local_id == ids[1]));
+        finish_send(&store, &ids[1], "remote-2", "TASK_STATE_COMPLETED").unwrap();
+
+        let new = begin_send(
+            &store,
+            "message-next",
+            "peer-1",
+            "peer.example",
+            &[],
+            100,
+            101,
+        )
+        .unwrap();
+        let rows = list_runs(&store).unwrap();
+        assert_eq!(rows.len(), MAX_RUNS);
+        assert!(rows.iter().any(|run| run.local_id == ids[0]));
+        assert!(!rows.iter().any(|run| run.local_id == ids[1]));
+        assert!(rows.iter().any(|run| run.local_id == new.local_id));
     }
 }
