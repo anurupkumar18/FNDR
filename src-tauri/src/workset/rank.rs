@@ -40,6 +40,8 @@ pub const AMBIGUITY_MARGIN: f32 = 0.1;
 const MAX_OPTIONS: usize = 3;
 /// A search hit at or above this counts as a match (`STRONG_MATCH_SCORE`).
 const MIN_HIT_SCORE: f32 = crate::context_runtime::retrieve::STRONG_MATCH_SCORE;
+/// A hit with none of the request's words matches only above this.
+const STRONG_HIT_ALONE: f32 = 0.6;
 /// The Vault's session-link window (`sessionLinks.ts`, `LINK_GAP_MS`).
 const LINK_GAP_MS: i64 = 10 * 60 * 1000;
 /// A thread that itself matches the request joins within this window.
@@ -117,6 +119,15 @@ const PHRASING: &[&str] = &[
     "whole",
     "thing",
     "everything's",
+    "page",
+    "pages",
+    "tab",
+    "tabs",
+    "window",
+    "windows",
+    "files",
+    "workspace",
+    "setup",
     "one",
     "ones",
     "just",
@@ -359,16 +370,12 @@ fn items_of(members: &[&MemoryRecord]) -> Vec<WorkItem> {
             .cmp(&a.captured_at)
             .then_with(|| a.memory_id.cmp(&b.memory_id))
     });
-    let apps_with_a_place: HashSet<String> = items
-        .iter()
-        .filter(|item| item.kind != ItemKind::App)
-        .map(|item| item.app_name.to_lowercase())
-        .collect();
-    items.retain(|item| {
-        !(item.kind == ItemKind::App
-            && item.reopen_rank <= 2
-            && apps_with_a_place.contains(&item.app_name.to_lowercase()))
-    });
+    // An app opened on its own says nothing about the work; once the set
+    // has a page, file or deep link, the bare apps go.
+    let app_alone = |item: &WorkItem| item.kind == ItemKind::App && item.reopen_rank <= 2;
+    if items.iter().any(|item| !app_alone(item)) {
+        items.retain(|item| !app_alone(item));
+    }
     items.truncate(MAX_ITEMS);
     items
 }
@@ -483,23 +490,36 @@ fn describe<'a>(
         .filter_map(|m| hits.get(m.id.as_str()).copied())
         .collect();
     let best_hit = member_hits.iter().copied().fold(0.0_f32, f32::max);
-    let relevance = if member_hits.is_empty() {
-        0.0
-    } else {
-        best_hit + 0.05 * (member_hits.len().saturating_sub(1).min(4) as f32)
-    };
+    let found = topic
+        .iter()
+        .filter(|word| words.contains(&stem(word)))
+        .count();
     let overlap = if topic.is_empty() {
         0.0
     } else {
-        topic
-            .iter()
-            .filter(|word| words.contains(&stem(word)))
-            .count() as f32
-            / topic.len() as f32
+        found as f32 / topic.len() as f32
+    };
+    // A hit that shares no word with the request counts for half: the
+    // vector search returns something for anything.
+    let relevance = if member_hits.is_empty() {
+        0.0
+    } else {
+        let weight = if found > 0 || topic.is_empty() {
+            1.0
+        } else {
+            0.5
+        };
+        weight * (best_hit + 0.05 * (member_hits.len().saturating_sub(1).min(4) as f32))
     };
     let age_hours = (inputs.now_ms - end).max(0) as f32 / HOUR_MS as f32;
     let recency = 0.3 * 0.5_f32.powf(age_hours / 24.0);
-    let matches = topic.is_empty() || best_hit >= MIN_HIT_SCORE || overlap > 0.0;
+    // Every word, two words, or one word with a search hit behind it; a
+    // single common word alone ("return") is not the work.
+    let matches = topic.is_empty()
+        || found == topic.len()
+        || found >= 2
+        || (found >= 1 && best_hit >= MIN_HIT_SCORE)
+        || best_hit >= STRONG_HIT_ALONE;
     Group {
         key,
         title,
@@ -1112,5 +1132,79 @@ mod tests {
             ["biology", "lab"]
         );
         assert!(topic_words("open everything I was working on").is_empty());
+    }
+
+    // Found on a copy of the owner's vault (docs/evidence/W04/work-sets.md).
+
+    #[test]
+    fn one_shared_common_word_is_not_a_match() {
+        let lab = app(
+            rec("lab", "Dia", "Mechanical engineering lab", 60),
+            "company.thebrowser.dia",
+        );
+        let mut inputs = inputs(
+            "pull up everything related to the tax return",
+            vec![lab],
+            vec![thread("Mechanical engineering lab", &["lab"])],
+        );
+        inputs.tasks = vec![Task {
+            id: "t".into(),
+            title: "Return the lab kit".into(),
+            description: String::new(),
+            source_app: "Dia".into(),
+            source_memory_id: Some("lab".into()),
+            created_at: NOW - 60 * MIN,
+            due_date: None,
+            is_completed: false,
+            is_dismissed: false,
+            task_type: crate::storage::TaskType::Todo,
+            linked_urls: Vec::new(),
+            linked_memory_ids: Vec::new(),
+        }];
+        assert!(
+            matches!(rank(&inputs), Resolution::None { .. }),
+            "{:?}",
+            rank(&inputs)
+        );
+    }
+
+    #[test]
+    fn a_search_hit_that_shares_no_word_with_the_request_loses_to_one_that_names_it() {
+        let music = app(
+            rec("music", "Spotify", "Spotify Premium", 30),
+            "com.spotify.client",
+        );
+        let mut chat = app(rec("chat", "ChatGPT", "ChatGPT", 40), "com.openai.chat");
+        chat.project = "Autonomous Recruiting AI App".into();
+        let mut inputs = inputs(
+            "set up my workspace for the recruiting app",
+            vec![music, chat],
+            vec![
+                thread("Spotify Premium", &["music"]),
+                thread("Autonomous Recruiting AI App", &["chat"]),
+            ],
+        );
+        inputs.hits = vec![hit("music", 0.45)];
+        assert_eq!(best(rank(&inputs)).title, "Autonomous Recruiting AI App");
+    }
+
+    #[test]
+    fn an_app_alone_gives_way_when_the_set_has_a_real_place() {
+        let note = file(
+            rec("note", "Code", "baseline.md - FNDR", 30),
+            "/Users/k/FNDR/docs/baseline.md",
+            None,
+        );
+        let chat = app(rec("chat", "ChatGPT", "ChatGPT", 25), "com.openai.chat");
+        let mut inputs = inputs(
+            "get out everything related to the baseline",
+            vec![note, chat],
+            vec![
+                thread("baseline.md - FNDR", &["note"]),
+                thread("ChatGPT", &["chat"]),
+            ],
+        );
+        inputs.hits = vec![hit("note", 0.6), hit("chat", 0.5)];
+        assert_eq!(ids(&best(rank(&inputs))), ["note"]);
     }
 }
