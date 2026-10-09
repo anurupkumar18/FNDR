@@ -2925,7 +2925,58 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
-export type ComputerUseStepAction = "open_app" | "open_url" | "operate";
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate" | "reopen_memory";
+
+// Work sets (ADR 027): the places of one thread of work, resolved on the Mac.
+
+export type WorkItemKind = "url" | "file" | "pdf_page" | "app" | "folder";
+
+export interface WorkItem {
+    memoryId: string;
+    /** What the card shows: a page title, a file name, an app. */
+    label: string;
+    kind: WorkItemKind;
+    reopenRank: number;
+    appName: string;
+    /** The site of a link, without `www.`. */
+    host?: string;
+    page?: number;
+    capturedAt: number;
+}
+
+export interface WorkSet {
+    id: string;
+    title: string;
+    /** Why this set was chosen, composed from the evidence. */
+    reason: string;
+    score: number;
+    items: WorkItem[];
+}
+
+export type WorkSetResolution =
+    | { kind: "best"; value: WorkSet }
+    | { kind: "ambiguous"; value: WorkSet[] }
+    | { kind: "none"; value: { why: string } };
+
+export interface WorkItemOutcome {
+    memoryId: string;
+    label: string;
+    kind?: WorkItemKind;
+    /** FNDR opened it, judged from the typed outcome. */
+    ok: boolean;
+    detail: string;
+    outcome?: ReopenOutcome;
+}
+
+/** Which thread of work a request means. Reads only; nothing leaves the Mac. */
+export async function resolveWorkSet(query: string): Promise<WorkSetResolution> {
+    return invoke<WorkSetResolution>("resolve_work_set", { query });
+}
+
+/** Opens the places of a set the person picked, at most six. */
+export async function openWorkSet(memoryIds: string[]): Promise<WorkItemOutcome[]> {
+    return invoke<WorkItemOutcome[]>("open_work_set", { memoryIds });
+}
 export type ComputerUseRisk = "runs" | "confirm" | "never";
 
 export type ComputerUseEvent =
@@ -2933,7 +2984,7 @@ export type ComputerUseEvent =
     | {
           kind: "planned";
           runId: string;
-          steps: { label: string; action: ComputerUseStepAction; app: string }[];
+          steps: { label: string; action: ComputerUseStepAction; app: string; item?: WorkItem }[];
           /** No step can need a yes, so the plan may start by itself. */
           autoStart?: boolean;
       }
@@ -2946,6 +2997,8 @@ export type ComputerUseEvent =
     | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string; checked?: boolean }
     | { kind: "finished"; runId: string; ok: boolean; summary: string }
     | { kind: "stopped"; runId: string }
+    /** A work-set request matched more than one thread about equally; the person picks. */
+    | { kind: "choose"; runId: string; options: WorkSet[] }
     | { kind: "failed"; runId: string; error: string; reconnect: boolean };
 
 export interface ComputerUseStatus {

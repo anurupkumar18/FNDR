@@ -1472,6 +1472,33 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 run.remote_state = "TASK_STATE_CANCELED";
                 return { run: clonePreview(run), output_text: null };
             }
+            case "resolve_work_set": {
+                // Preview: the newest cards with a reopen target, as one set.
+                const items = previewCards
+                    .filter((card) => Boolean(card.reopen_target))
+                    .slice(0, 3)
+                    .map((card) => ({
+                        memoryId: card.id,
+                        label: card.title,
+                        kind: "url" as const,
+                        reopenRank: 4,
+                        appName: card.app_name,
+                        capturedAt: card.timestamp,
+                    }));
+                return items.length > 0
+                    ? { kind: "best", value: { id: "preview-set", title: items[0].label, reason: "Preview", score: 1, items } }
+                    : { kind: "none", value: { why: "Nothing FNDR remembers matches that." } };
+            }
+            case "open_work_set": {
+                // Preview never launches anything; it reports what would open.
+                const ids = (payloadRecord(payload)?.memoryIds as string[] | undefined) ?? [];
+                return ids.slice(0, 6).map((memoryId) => {
+                    const card = previewCards.find((row) => row.id === memoryId);
+                    return card
+                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" } }
+                        : { memoryId, label: "", ok: false, detail: "FNDR no longer has this memory" };
+                });
+            }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
             case "computer_use_permissions":
