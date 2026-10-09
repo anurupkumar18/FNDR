@@ -1,248 +1,76 @@
-# Handoff: Agent surfaces (Hermes Agent, Screen Guide, Notch Do)
+# Handoff: agent surfaces (Agent page, Notch Do, Screen Guide's ChatGPT path)
 
-Date: 2026-10-07. Written at the owner's request when the session ran low on context.
+Current as of 2026-10-08. This page is rewritten, not appended to; earlier states are in git history.
 
-## Update, later on 2026-10-07
+## What this lane is
 
-The fourth batch is committed as `f45faa0` (116 Rust tests in the repo, 260 front-end). It was **not pushed**: the push failed with "Could not read from remote repository"; retry `git push origin main`. The shared Rust test build works again, so the copy method below is no longer needed. The owner approved the six live checks. Next in the five-hour plan: tests for the four untested pieces, the fixtures and task set, the live checks, then fixes. See "Phase 5 progress" in the breakdown.
+The owner took over three features from Kunj: the Agent page (Hermes chat), Notch Do (voice-driven computer use) and Screen Guide's ChatGPT answer. The owner has delegated product and architecture decisions in this lane: decide after weighing options, record as "Owner" in an ADR and `docs/team/decision-log.md`, then build.
 
-## Update 10, 2026-10-08 (read this first)
+Read in this order:
 
-Notch Do runs on the owner's Mac now. The owner installed `open-computer-use` 0.3.6 and granted it Accessibility and Screen Recording. Results and six findings are in `docs/evidence/W03/agent-surfaces-phase1.md`, "Notch Do live runs".
+1. `docs/agent.md`: what the Agent page is and every command it calls.
+2. `docs/decisions/024-agent-surfaces-egress-and-action-policy.md`: the rules, and the table of decisions E1 to E16 with their state.
+3. `docs/decisions/026-notch-do-acts-with-fndrs-own-hands.md`: where Notch Do is going.
+4. `docs/evidence/W03/agent-surfaces-phase1.md`: what was confirmed, including the live runs.
+5. `docs/superpowers/plans/2026-10-07-agent-surfaces-work-breakdown.md`: 184 parts with status lines; use it as a lookup, not a reading.
 
-- Fixed from the live runs: Codex exiting on an unknown `--disable` flag (this also broke Screen Guide's ChatGPT answers), turns running on a model the plan does not include, exits with no reason, `%20` search links held for a tap, a no being asked again, a finished run not saying what it left out, and the journal's risk column.
-- The helper sends a picture of the app's window with every read. Disclosed and logged; only ADR 026's executor removes it.
-- Open, next in this lane: tell the planner the name of the app in front; show the answer of a read-only request ("summarize this"); then the executor.
-- To rerun a live check: open a fixture page, then `FNDR_LIVE_REQUEST="in Google Chrome, ... on the page that is open" cargo test --lib live_notch_do -- --ignored --nocapture`. `FNDR_CODEX_TRACE=1` prints what Codex sends.
+## State
 
-## Update 9, 2026-10-08
+Everything below is on `main` and pushed to both remotes.
 
-The owner delegated product and architecture decisions. Three were taken and recorded in `docs/team/decision-log.md`:
+| Area | State | Verified how |
+| --- | --- | --- |
+| Hermes tool limit (planning list and read-only memory search only) | Built | Unit tests, and a live gateway on 2026-10-07 |
+| Related memories to cloud providers off by default; disclosure in setup; chips in chat | Built | Unit and front-end tests |
+| Agent Stop, failed sends kept, owner-only chat file, history bound (200 chats, 400 messages) | Built | Unit tests. Stop is not checked in the running app |
+| Privacy Activity: persistent, per feature, kinds of content, recent Notch Do runs | Built | Unit and front-end tests |
+| Notch Do policy: planning does not act, tap-only approval, browsers ask by default, blocklist, halts | Built | Unit tests, fake Codex server, and live runs on six fixture cases on 2026-10-08 |
+| Notch Do on the installed Codex and the account's model | Built 2026-10-08 | Live |
+| One no covers the rest of a step; a finished run says what it left out | Built 2026-10-08 | Fake Codex server test, and live |
+| Screen Guide ChatGPT answer: logged, private screenshot staging, falls back to this Mac | Built | Unit tests only. No live ChatGPT answer through the app since the Codex flag fix |
+| Dead Agent panels, their eight backend commands, `agent_runner.py` | Removed | Build and tests |
 
-- **ADR-018 accepted as a whole.** Rule: a cloud model only on a turn the person starts, on a surface where they chose the provider. Every background task stays local. The master plan and `TEAM.md` constraint lines are edited to match. PD-01 is closed; PD-08's table is not needed.
-- **ADR 026, new.** OpenAI's bundled Computer Use no longer ships the launcher FNDR attached, and its successor is one run-any-code `js` tool the policy cannot gate. Decision: FNDR never attaches it; Beta runs Notch Do only where `open-computer-use` already is; for Final FNDR serves the computer-use tools itself from its own accessibility code. Built now: with no helper, "Operate my Mac" cannot be turned on and says why, and the notch does not offer Do.
-- **Chat history bound (ADR 024, E15).** Newest 200 chats, 400 messages each, no expiry by age. Built with a test.
+## Decisions in force
 
-Next build in this lane: the executor in ADR 026 ("Shape of the executor"). It needs live testing with Accessibility granted to FNDR, so do it when the machine is free. Start with `get_app_state` and `click` against the fixture pages.
+- ADR-018, accepted 2026-10-08: a cloud model only on a turn the person starts, on a surface where they chose the provider. No background task ever calls one.
+- ADR 026: FNDR never attaches a tool that runs model-written code. Beta runs Notch Do only where `open-computer-use` is installed. For Final, FNDR serves the computer-use tools itself.
+- Agent and Notch Do stay in Labs for Beta (ADR 024, E12). The Beta demo does not depend on Notch Do.
 
-Still owed, needing the FNDR window: quit with the gateway up, Agent Stop, Screen Guide fallback with ChatGPT signed out.
+## Known and open
 
-## Update 8, 2026-10-07
+1. **The helper sends a picture.** With Screen Recording granted, `open-computer-use` attaches a PNG of the operated app's window to every read. FNDR discloses and logs it and cannot stop it. Only the ADR 026 executor removes it.
+2. **The planner cannot see what "this page" means.** It gets the words only. Requests that name the app work.
+3. **A read-only request shows no answer.** "Summarize the article" ends in "Done".
+4. **Not checked in the running app:** quit and Stop during a Notch Do run, Agent Stop, quit with the Hermes gateway up, a Screen Guide ChatGPT answer.
+5. **Not measured:** the twenty-task set (`docs/evidence/W03/notch-do-task-set.md`), Agent latency, Spotify or Music playback.
+6. **Waiting on others:** Notch Do in the SK-01 journal (E11).
+7. The Tauri commands in `ipc/commands/agent.rs` have no page calling them. They are recorded in `src/shared/ipc/ipcDriftBaseline.ts`; another session is working in `src-tauri/src/agent/`, so they were left.
 
-Loop goal set by the owner: build the next slices (A6.6, B7.5, C13.3), each with a test, and push.
+## Next, in order
 
-- **A6.6 done.** Read and confirmed: related memories use `retrieve_search_results`, the same path as Search, which drops excluded apps, FNDR's own windows and low-signal records. The gap was attached memories, loaded by id with no check. `permitted_attachments` in `agent_chats.rs` now applies `memory_is_permitted`; test added. Pushed.
-- **Also done this round:** the unmounted `AgentPanel.tsx` and `ResearchPanel.tsx` are removed (3,804 lines).
-- **B7.5 done and pushed** (see FR9a in `docs/product/screen-guide.md`; `with_on_device_note`). The fallback path itself is covered only by the note's test; a live check with ChatGPT signed out is still owed. Original note: In `screen_guide.rs` the ChatGPT answer and the local answer are the two arms of one `if`; a fallback means letting the ChatGPT arm fall through to the local one on a failure that is not a cancellation, and saying so in the answer. Upstream changed this file on 2026-10-07, so re-read it first.
-- **C13.3 done and pushed.** `operator::journal::summarize_runs` counts each run's outcomes; they ride along in `get_privacy_proof` as `operator_runs` (no new command) and show in Privacy as "Recent Notch Do runs". The loop's goal (A6.6, B7.5, C13.3) is met. Original note: Needs a read command over `operator/journal.jsonl` (register it in `main.rs`, a shared file), a type in `tauri.ts`, and a small list in Privacy or the notch.
-- Done 2026-10-08 (A12.2): the eight Tauri commands only the removed panels called, their `tauri.ts` wrappers and preview stubs, and the `agent_runner.py` sidecar are removed.
-- Done 2026-10-08 (Phase 6 docs and cleanup): A12.3 (`generate_daily_briefing` and `get_fun_greeting` moved to `ipc/commands/home.rs`), A12.4 (`docs/agent.md` rewritten for the Hermes page, with the MCP `agent.*` tools as a second section), B14.1 (Screen Guide PRD FR28, FR29), D4.1 checked. Found while writing: the Tauri commands in `ipc/commands/agent.rs` have `tauri.ts` wrappers but no page calls them; they are reachable only over MCP. Left as is, since the MCP lane owns that module.
-- Still the owner's: D5.3, accepting ADR-018 as a whole (it is accepted only for Notch Do, Hermes and Screen Guide's ChatGPT answers).
+1. Items 2 and 3 above: small, and they decide whether Notch Do feels right.
+2. The ADR 026 executor. Start with `get_app_state` and `click` against `src-tauri/tests/fixtures/operator/pages/`; keep the tool names `operator/policy.rs` already classifies.
+3. The twenty-task set on the executor.
 
-## Update 7, 2026-10-07
+## How to run a live Notch Do check
 
-A9.6 is built and pushed: `tools_used_in` in `hermes_agent.rs` reads `function_call` items from the gateway response, `tool_use_label` puts them in words, and the Agent page shows "Hermes searched FNDR memories." under the answer and keeps it in history. The MCP tool name prefix Hermes uses for FNDR's tools was not observed live (the live check ran without an MCP server); the label matches on "fndr" or "memory" so either form works, and an unknown tool shows by name.
-
-Open, in order of value:
-
-1. Owner decision: install `open-computer-use` so Notch Do can run on this Mac at all, then its live checks (pages README, task set, quit and halt).
-2. Checks that need clicking in the FNDR window: quit with the gateway up, Agent Stop, Screen Guide's ChatGPT path.
-3. C13.3 a list of past Notch Do runs; B7.5 Screen Guide falls back to local when ChatGPT is unavailable; A6.6 related memories skip excluded apps.
-4. Cleanup A12.1 and A12.2: remove the unmounted `AgentPanel.tsx` and `ResearchPanel.tsx` and the commands only they call.
-
-## Update 6, 2026-10-07
-
-Live checks run with the owner's approval; results are at the end of the phase 1 evidence.
-
-- **Hermes tool limit confirmed live.** With FNDR's config the model has only `todo` and could not write a file. With Hermes's default it wrote a file and ran a shell command without asking. Script: `docs/evidence/W03/scripts/live_hermes_tool_limit.py`.
-- **Notch Do cannot run on this Mac.** No usable computer-use helper is installed (the bundled one has no launcher; `open-computer-use` is absent). Its live checks are blocked until the owner decides whether to install the helper.
-- **A9.6 is unblocked:** tool calls arrive as `function_call` items with `name`. Build: collect the names in `deliver_hermes_message`, return them with the reply, show "Hermes used: ..." on the answer.
-- Not run: anything that needs clicking in the FNDR window.
-
-## Update 5, 2026-10-07
-
-All pushed. Usefulness slices built since Update 4, each with tests:
-
-- A11.1: `src/domains/workspace/AgentReply.tsx` renders lists, code, emphasis and http links from text nodes only; citations still open the memory.
-- C11.1, C11.3: `StepDone` carries `checked`; `resultNote` in `doRun.ts` tells the person how many steps FNDR saw itself and that nothing is undone automatically.
-- C9.5: `plan::explain_empty_plan` gives the reason when a request was only something Notch Do never does. It explains after planning; it does not refuse before the cloud request, because a word list would block harmless requests.
-
-Not built: A9.6 (show when Hermes searched memory). It needs the shape of tool calls in the gateway's `/v1/responses` output, which has to be read from a running gateway.
-
-Still waiting on a free machine: the live checks (see Update 4).
-
-Next slices: A9.6 once a gateway is running; C13.3 (a list of past Notch Do runs from `operator/journal.jsonl`); B7.5 (Screen Guide falls back to the local model when ChatGPT is unavailable); A6.6 (confirm related memories skip excluded apps).
-
-## Update 4, 2026-10-07
-
-All pushed; local and remotes in sync. Since Update 3:
-
-- Tests added for the stale-gateway check and the operate setter. Every piece that shipped untested now has one.
-- Fixed: attached memories are numbered after the ones FNDR added, so a citation points at one memory.
-- Built: a `[2]` in an Agent answer opens that memory (A11.5).
-- Added: four hand-check pages and their expected behavior (`src-tauri/tests/fixtures/operator/pages/`), and the twenty-task set (`docs/evidence/W03/notch-do-task-set.md`).
-- Checked without spending the ChatGPT account: at the pinned Hermes commit, FNDR's config leaves Hermes one tool (`todo`) where the default is 31. Recorded at the end of the phase 1 evidence.
-
-Not done: the live checks that need the app running (quit cleanup, mid-run halt, the hand-check pages, the task set, a write tool refused over MCP). There is no dev build of the app in `target/debug`, another session was compiling, and a full app build on top of that risks the memory-pressure block. Run `npm run tauri dev` when the other sessions are idle, then follow the pages README and the phase 1 list.
-
-Next usefulness slices, in order: A11.1 (render lists, code and links in replies), A9.6 (show when Hermes searched memory), C11.1 and C11.3 (checked versus reported steps, and undo, on Notch Do's result), C9.5 (refuse never-tier requests at the plan card).
-
-## Update 3, 2026-10-07 (read this first)
-
-- **Pushed.** `main` was merged with upstream (Minh's reopen work) and pushed; local and both remotes are in sync. The "push is blocked" note in Update 2 is no longer true.
-- To merge, two files with another session's uncommitted edits were set aside and restored with the owner's approval: `src-tauri/src/mcp/mod.rs` and `src-tauri/src/context_runtime/mod.rs`. Both are back; the first now sits on top of upstream's changes to it.
-- Checks on the merged tree: typecheck clean, 260 front-end tests, 118 focused Rust tests.
-- The Codex session has its own stash in the list ("codex DEC-02 isolated worktree transfer"). Leave it alone.
-
-Left from the five-hour plan, in order:
-
-1. Tests for the stale-gateway kill (`reap_stale_hermes_gateway`) and the operate setter (`set_computer_use_enabled`). Same approach as `until_halted` and `unless_stopped`: pull the decision into a small function and test that.
-2. Ten fixture screens and the twenty-task Notch Do set (breakdown parts 0.3 and F1).
-3. The six live checks, approved by the owner (end of the phase 1 evidence file). Needs the pinned Hermes installed first.
-4. Fixes for what the live checks find.
-
-To make the product better for a person using it, after the checks pass (owner asked for this on 2026-10-07). Each is a small slice with a test:
-
-| Part | What the person gets |
-| --- | --- |
-| A11.1 | Agent replies render lists, code and links instead of plain text |
-| A11.5 | A `[2]` in a reply opens that memory |
-| A11.5 first step | Fix the numbering: memories FNDR adds (`operator::memory::format_block`) and attached ones (`agent_chats::memory_context_block`) are both numbered from 1 in the same message, so a `[1]` in a reply is ambiguous. Number attached ones after the added ones |
-| A9.6 | The chat shows when Hermes searched memory, not only the final answer |
-| C11.1, C11.3 | Notch Do's result says which steps FNDR checked and which it took on the model's word, and what can be undone |
-| C13.3 | A list of past Notch Do runs with their outcome, reachable from Privacy |
-| A6.6 | Related memories skip excluded apps the same way Search does (confirm, then test) |
-| B7.5 | Screen Guide falls back to the local model when ChatGPT is signed out or over its limit, and says so |
-| C9.5 | A request in the never tier is refused at the plan card, not after steps have run |
-
-## Update 2, 2026-10-07
-
-- Local `main` is ahead of `origin/main` by my commits `f45faa0`, `c156d93`, `055d36f` and the Agent stop test, plus another session's `98fe16e`; it is also behind by nine upstream commits (Minh's reopen merges).
-- **The push is blocked.** A merge is needed first, and upstream changed `src-tauri/src/mcp/mod.rs`, which another session has uncommitted edits in. Git will refuse to merge until that session commits. Do not stash it. Once it is committed: `git merge origin/main`, run the focused tests, `git push origin main`.
-- Upstream also changed `src/shared/ipc/tauri.ts` and `ipc/commands/screen_guide.rs`; expect to check those after the merge.
-- Done from the five-hour plan: land the batch, docs, tests for the mid-run halt and Agent reply Stop.
-- Left: tests for the stale-gateway kill and the operate setter; ten fixture screens; twenty-task Notch Do set; the six live checks (approved by the owner); fixes from them.
-
-## Goal
-
-Take over Kunj's agent features, find what is unsafe or unclear, decide, fix,
-and prove it. The plan, findings and decisions live in:
-
-- `docs/superpowers/plans/2026-10-07-agent-surfaces-work-breakdown.md` (184 parts, progress tables, findings N1 to N14 and P1 to P5)
-- `docs/decisions/024-agent-surfaces-egress-and-action-policy.md` (accepted by the owner, decision table E1 to E14)
-- `docs/superpowers/specs/2026-10-07-agent-surfaces-prd.md`
-- `docs/evidence/W03/agent-surfaces-phase1.md`
-
-## Current state
-
-Three commits are on `main` and pushed to both remotes:
-
-- `5b98a86` first safety and privacy fixes
-- `780feee` PRD, ADR 024, breakdown, phase 1 evidence
-- `ed175dd` the ADR 024 decisions for Hermes and Notch Do
-
-A fourth batch is **written but not committed and its Rust tests have not been
-run**. The owner stopped the Rust test run. It builds "decided but not built":
-
-| Item | State |
-| --- | --- |
-| E6: the notch shows what it heard for 1.2 s before sending (`heard` phase, Cancel, Send now); typed requests skip it | Written; front-end tests pass |
-| C3.1: "Operate my Mac" moved to its own config section `operator.enabled`, read once from the old `screen_guide.operate_computer`; new command `set_computer_use_enabled` | Written; compiles; Rust test not run |
-| A6.7, A6.8: Hermes instruction strings moved to `inference/prompts.rs` (`HERMES_CHAT_INSTRUCTIONS`, `HERMES_IDENTITY`, `HERMES_OPERATING_NOTES`, `HERMES_ATTACHED_MEMORIES_HEADER`) with fingerprints and catalog rows; text rewritten to match what Hermes can do | Written; compiles; fingerprint test not run |
-| E12: sidebar group "Assist" split into "Trust" (Privacy Activity) and "Labs" (Hermes Agent, Screen Guide, Engine diagnostics) | Written; app tests pass |
-| E10: OpenClicky and Operate switches carry a "Labs" tag | Written |
-| E11: Notch Do in the SK-01 journal | Not started; waits for SK-01 |
-
-## Decisions made
-
-| Decision | Reason | Files/Docs |
-|---|---|---|
-| All of E1 to E14 taken as recommended | Owner, 2026-10-07; Kunj agreed with the findings | ADR 024 "Decisions taken" |
-| "Next" is not on the browser run list | A Next button often submits a form step | ADR 024 |
-| No cap on chat history yet | Deleting chats is a retention choice for PD-09 | Breakdown, phase 2 |
-| Gateway errors kept in memory, not a log file | Hermes output may contain message text | Breakdown, phase 2 |
-| Notch default stays Do | Alt+N is designed to open Do and listen; E6 was solved with the heard step instead | `NotchOperator.tsx` |
-| E12 done as a small regroup, not the full five destinations | The full regroup is ticket PX-01 in another lane | `src/app/App.tsx` |
-
-## Files changed (uncommitted, mine)
-
-| File | Change | Notes |
-|---|---|---|
-| `src-tauri/src/config.rs` | `OperatorConfig`, migration, test | Mine only |
-| `src-tauri/src/ipc/commands/computer_use.rs` | reads `operator.enabled`; `set_computer_use_enabled` | Mine only |
-| `src-tauri/src/ipc/commands/hermes_agent.rs`, `agent_chats.rs` | use the prompt constants; header wording | Mine only |
-| `src-tauri/src/inference/prompts.rs` | four Hermes constants, `live_prompts` and `FINGERPRINTS` rows | **Shared.** The other session's hunks: version v6 to v7, daily briefing text, two briefing fingerprints |
-| `src-tauri/src/main.rs` | registers `set_computer_use_enabled` | **Shared.** Their hunk: `resolve_mcp_approval` |
-| `src/shared/ipc/tauri.ts` | `setComputerUseEnabled`; removed `operate_computer` | **Shared.** Their hunks: MCP approval types and function |
-| `src/domains/notch/doRun.ts`, `NotchOperator.tsx`, both notch tests | heard step | Mine only |
-| `src/domains/screen-guide/ScreenGuidePanel.tsx`, `.css`, its test | new setter, copy, Labs tags | Mine only |
-| `src/app/App.tsx` | Trust and Labs groups | Mine only |
-| `docs/product/llm-task-catalog.md` | four Hermes rows; two stale rows fixed | **Check:** it no longer shows as modified. The other session's commit `145a0eb` may have included it. Confirm the rows are there |
-
-Everything else modified in the tree belongs to the other session.
-
-## Commands run
-
-| Command | Result |
-|---|---|
-| `npx tsc --noEmit -p .` | clean |
-| `npx vitest run src/domains/workspace src/domains/notch src/domains/screen-guide src/domains/privacy-proof src/domains/setup src/app` | 35 files, 260 tests pass |
-| `cargo check --lib --bin fndr` (in `src-tauri`) | Finished, no errors |
-| Rust tests for the fourth batch | **Not run** |
-
-## Tests / verification
-
-Rust tests cannot build in the shared tree while the other session's MCP work
-is unfinished (`mcp/mod.rs`, `mcp/remember_http_tests.rs`). The method used so
-far: copy `src-tauri` without `target` to a scratch folder, symlink `target`
-and `../dist` back to the repo, remove the `remember_http_tests` module line
-and put `#[cfg(any())]` on `localhost_handshake_bypasses_auth_but_tools_call_requires_token`
-in the copy, then run:
+Needs a signed-in Codex and `open-computer-use` with Accessibility granted. It operates real apps and spends requests on the signed-in ChatGPT plan. The harness starts every plan and answers no to every question.
 
 ```bash
-CARGO_BUILD_JOBS=2 cargo test --lib -- ipc::commands::computer_use privacy_proof ipc::commands::hermes_ ipc::commands::setup_center ipc::commands::codex_account ipc::commands::agent_chats operator:: inference::prompts config::
+open src-tauri/tests/fixtures/operator/pages/shop.html
+cd src-tauri && FNDR_LIVE_REQUEST="in Google Chrome, add this to my cart on the page that is open" \
+  cargo test --lib live_notch_do -- --ignored --nocapture
 ```
 
-The owner rejected this run once; ask before repeating it. Try the repo first:
-the shared build may be fixed by now.
+`FNDR_CODEX_TRACE=1` prints what Codex sends. The journal path is printed at the end of the run.
 
-## Known issues
+## What went wrong in this lane, and the correction
 
-- The four new prompt fingerprints were computed outside Rust. If
-  `prompt_changes_require_a_version_bump` fails it prints the right values;
-  paste them into `FINGERPRINTS`.
-- The committed tree after a by-hunk commit has never been built on its own.
-- Hermes tool limits (`platform_toolsets.api_server: [todo]`, MCP
-  `tools.include`) were written against Hermes 0.13's source. The pinned 0.18
-  copy is not on this Mac.
-- Only the pinned Hermes runs now, so the Agent page on this Mac will ask to
-  install it.
-- Catalog row `hermes_memory_context` still says snippets go with every
-  message; it should say "for a provider on this Mac, or when turned on".
-- Not covered by a test: the half-second halt check, backend Stop for Agent
-  replies, the stale-gateway kill, `set_computer_use_enabled`.
+- **A check that only passes offline hides breakage.** Codex dropped a feature flag and every Notch Do and Screen Guide ChatGPT turn died at launch; unit tests with a fake server stayed green, and a fallback hid it in the app. Correction: FNDR now asks the installed Codex what it supports, and an exit carries its reason. When a feature depends on an outside program, run it for real before calling it done.
+- **Dead code was found by hand.** Correction: `src/shared/ipc/ipcDrift.test.ts` and `src/dev/docsDrift.test.ts` now fail on a new dead command or a doc that points at something gone.
+- **A push looked done and was not.** `origin` pushes to GitLab and GitHub; GitHub's "Everything up-to-date" hid GitLab's rejection. Correction: confirm with `git ls-remote origin main`.
+- **This page grew by stacking updates** until its top contradicted its middle. Correction: rewrite it.
 
-## Next steps
+## Shared checkout
 
-1. Run the Rust tests for the fourth batch (repo first, then the copy method with the owner's go-ahead). Fix fingerprints if the test asks.
-2. Commit the fourth batch by path. For `main.rs`, `tauri.ts` and `prompts.rs` stage only my hunks: `git diff -U0` the file, drop hunks that mention `mcp_approval`, `McpApproval`, `MCP_APPROVAL`, `resolveMcpApproval`, `LLM_PROMPT_VERSION`, or `daily_briefing`, then `git apply --cached --unidiff-zero`. No co-author trailer.
-3. Add a "phase 5" table to the breakdown and a changelog line for the fourth batch; update ADR 024's table (E6, E10, E12 to Built).
-4. Fix the `hermes_memory_context` catalog row.
-5. Live checks, with the owner's go-ahead on the ChatGPT account (list at the end of the phase 1 evidence): quit with the gateway up and `ps`; quit during a Notch Do run; Tab-then-type and reordering fixtures; Hermes tool list on a running pinned gateway; a write tool refused through Hermes's MCP entry; the Spotify and web-search example under the tighter browser rules.
-6. Then Track F in the breakdown: the twenty-task Notch Do set and Agent latency.
-
-## Risks / do not do
-
-- Shared checkout with a second agent on `main`: never stash, switch branches, or `git add` a shared file whole.
-- Do not run `rustfmt` on `prompts.rs`; it holds the other session's edits.
-- Memory pressure on this Mac goes critical during Rust builds; a hook blocks tool calls when it does. Use `CARGO_BUILD_JOBS=2` and do not build while another `rustc` is running.
-- Do not run Codex logout, a live Notch Do run, or a ChatGPT request without the owner saying so.
-- No em or en dashes in docs, tickets or commit messages.
-
-## Useful context for next agent
-
-- Notch Do's policy is `src-tauri/src/operator/policy.rs`; the run loop and guards are in `ipc/commands/computer_use.rs` (`Guards`, `run_turn`, `plan_starts_by_itself`, `ask_person`).
-- The fake Codex for tests is `src-tauri/tests/fixtures/operator/fake_codex_app_server.py`; "PROBE" and "REWORDED_APPROVAL" in a turn's text trigger the special cases.
-- Hermes limits are in `ipc/commands/hermes_codex.rs` (`HERMES_TOOLS_YAML`, `HERMES_MCP_TOOLS`) and `hermes_agent.rs` (`provider_is_local`, `sends_related_memories`).
-- Privacy Activity log: `src-tauri/src/privacy_proof.rs` (`Feature`, `record_model_request_including`, `init_model_request_log`).
-- GitLab is the source of truth and GitHub mirrors it; a push to `origin` reaches both.
+Other sessions work in this checkout at the same time (MCP, `src-tauri/src/agent/`, storage tests). Commit by path. Where a file holds someone else's uncommitted lines too, stage only your own hunks. Never stash or switch branches without the owner saying so.

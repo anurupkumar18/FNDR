@@ -5,7 +5,7 @@
 1. **The Agent page**: a chat with Hermes, an open-source agent FNDR runs as a child process. This is what a person sees.
 2. **The MCP agent tools** (`agent.*`): a deterministic, model-free runner that outside agents call over MCP. It has no page.
 
-Decisions behind the page: [ADR 020](decisions/020-chatgpt-plan-via-codex-app-server.md), [ADR 024](decisions/024-agent-surfaces-egress-and-action-policy.md). Product requirements: `docs/superpowers/specs/2026-10-07-agent-surfaces-prd.md`.
+Decisions behind the page: [ADR 018](decisions/018-reasoning-tier.md) (when a cloud model may be used) and [ADR 024](decisions/024-agent-surfaces-egress-and-action-policy.md) (what is sent and what Hermes may do). Product requirements: `docs/superpowers/specs/2026-10-07-agent-surfaces-prd.md`.
 
 ## The Agent page (Hermes chat)
 

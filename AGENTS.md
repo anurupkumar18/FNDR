@@ -14,7 +14,21 @@ Full documentation index: `docs/README.md`. Domain vocabulary: `docs/CONTEXT.md`
 
 ## Verification (after meaningful edits)
 
-Run the **cheapest relevant** checks and say what you ran. Default full sweep from repo root: `make test` (runs `npm run typecheck`, `npm test`, and `cargo test` under `src-tauri/`). For small isolated edits, a subset is fine if you state why.
+Run the **cheapest relevant** checks and say what you ran. Default full sweep from repo root: `make test` (runs `npm run typecheck`, `npm test`, `npm run build`, and `cargo test` under `src-tauri/`). For small isolated edits, a subset is fine if you state why.
+
+- Say how each claim was checked: unit test, a fake of the outside program, or the real thing. A feature that depends on an outside program (Codex, Hermes, a computer-use helper, a model file) is not done until it has run against the real one once. A fake keeps passing after the real program changes.
+- Two tests guard against rot and run with `npm test`. `src/shared/ipc/ipcDrift.test.ts` fails on a call to an unregistered command, a new backend command nothing calls, or a new wrapper nothing imports; its baseline file may only shrink. `src/dev/docsDrift.test.ts` fails when a file people are told to read first points at something that is gone. Fix the cause; do not add to a baseline to get green.
+
+## Shared checkout and shipping
+
+Several agent sessions and people work in this one checkout at the same time.
+
+- Check the branch before you commit. Commit by path. Where a file also holds someone else's uncommitted lines, stage only your own hunks.
+- Never stash, reset, switch branches or create a worktree unless the owner says so.
+- Rust builds are heavy on this machine: run one at a time, with `CARGO_BUILD_JOBS=2`.
+- `git push origin` pushes to GitLab and GitHub. One can reject while the other reports "Everything up-to-date", so confirm with `git ls-remote origin main`.
+- Commits, merge requests and tickets carry no AI attribution and no co-author trailer.
+- New text in docs, tickets and commit messages uses no em or en dashes.
 
 ## Non-negotiable engineering rules
 
@@ -25,6 +39,7 @@ Run the **cheapest relevant** checks and say what you ran. Default full sweep fr
 - Add or extend tests at stable boundaries where behavior is observable.
 - Debug with evidence (repro, narrowing, hypotheses), not guesses.
 - If something is unclear after inspection, ask targeted questions instead of assuming.
+- When you delete or rename something, delete what pointed at it in the same change: wrappers, preview stubs, catalog rows, doc sections. Half-removed code is worse than either state.
 - Anti-bloat gate before adding code: can this be solved by deleting code, reusing an existing module, tightening an interface, adding a test, or improving a name instead of adding a new layer? If yes, do that first.
 
 ## Portable skills (always on)
