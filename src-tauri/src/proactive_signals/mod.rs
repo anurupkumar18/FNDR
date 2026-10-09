@@ -3,6 +3,8 @@
 //! from stored memories, honors Private Mode and the blocklist, and reaches
 //! the person through `notify` (a toast, and a banner with fixed text).
 
+#[cfg(test)]
+mod eval;
 pub mod meeting_prep;
 pub mod stuck;
 pub mod thread_digest;
