@@ -33,7 +33,7 @@ pub fn send_message_request(message_id: &str, reviewed_text: &str) -> Value {
         "jsonrpc": "2.0", "id": message_id, "method": "SendMessage",
         "params": {
             "message": {"messageId": message_id, "role": "ROLE_USER", "parts": [{"text": reviewed_text}]},
-            "configuration": {"acceptedOutputModes": ["text/plain"]}
+            "configuration": {"acceptedOutputModes": ["text/plain"], "returnImmediately": true}
         }
     })
 }
@@ -681,6 +681,10 @@ mod tests {
         assert_eq!(
             request["params"]["configuration"]["acceptedOutputModes"],
             json!(["text/plain"])
+        );
+        assert_eq!(
+            request["params"]["configuration"]["returnImmediately"],
+            true
         );
         assert!(!request.to_string().contains("token"));
     }
