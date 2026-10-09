@@ -334,7 +334,10 @@ describe("ScreenGuidePanel", () => {
         });
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
-        expect(await screen.findByText(/cannot be turned on/i)).toBeInTheDocument();
+        const why = await screen.findByText(/so this stays off/i);
+        expect(why).toBeInTheDocument();
+        // A Beta person is never sent to a terminal to install a helper (ADR 026).
+        expect(why.textContent).not.toMatch(/npm|open-computer-use/);
         expect(screen.getByRole("switch", { name: "Operate my Mac" })).toBeDisabled();
     });
 
@@ -348,7 +351,7 @@ describe("ScreenGuidePanel", () => {
         });
         render(<ScreenGuidePanel isVisible onClose={() => {}} />);
 
-        await screen.findByText(/cannot be turned on/i);
+        await screen.findByText(/so this stays off/i);
         await waitFor(() =>
             expect(screen.getByRole("switch", { name: "Operate my Mac" })).not.toBeDisabled(),
         );
