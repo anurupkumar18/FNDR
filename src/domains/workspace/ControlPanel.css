@@ -173,14 +173,6 @@
     margin: 0 0 10px;
 }
 
-.settings-section--capture { order: 1; }
-.settings-section--privacy { order: 2; }
-.settings-section--voice { order: 3; }
-.settings-section--agent-access { order: 4; }
-.settings-section--models { order: 5; }
-.settings-section--updates { order: 6; }
-.settings-section--about { order: 7; }
-
 .settings-subsection {
     margin-top: 0;
 }

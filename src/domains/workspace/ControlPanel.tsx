@@ -508,6 +508,186 @@ export function ControlPanel({
                                 </p>
                             )}
 
+                            <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
+                                <h3 id="settings-capture-title">Capture</h3>
+                                <p className="section-hint">
+                                    Control when FNDR may process new screen context on this Mac.
+                                </p>
+                                <button
+                                    type="button"
+                                    className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
+                                    onClick={() => void handleToggleCapture()}
+                                    disabled={!status || captureBusy}
+                                >
+                                    {!status
+                                        ? "Checking capture status…"
+                                        : captureBusy
+                                            ? "Updating…"
+                                            : status?.is_incognito
+                                                ? "Exit private mode"
+                                            : capturePaused
+                                                ? "Resume capture"
+                                                : "Pause capture"}
+                                </button>
+                                {captureMessage && (
+                                    <p
+                                        className={`settings-message ${captureMessage.startsWith("Capture action failed") ? "settings-message--error" : ""}`}
+                                        role={captureMessage.startsWith("Capture action failed") ? "alert" : "status"}
+                                        aria-label={captureMessage.startsWith("Capture action failed") ? "Capture action failed" : undefined}
+                                    >
+                                        {captureMessage}
+                                    </p>
+                                )}
+                                <div className="capture-stats capture-stats--pipeline" aria-label="This session">
+                                    <span>Stored this session: {stored.toLocaleString()}</span>
+                                    <span>Skipped this session: {skipped.toLocaleString()}</span>
+                                </div>
+                                {captureTrace && (
+                                    <ActivityTrace
+                                        trace={captureTrace}
+                                        className="capture-activity-trace"
+                                    />
+                                )}
+                            </section>
+
+                            <section className="panel-section settings-section--privacy" aria-labelledby="settings-privacy-title">
+                                <h3 id="settings-privacy-title">Privacy</h3>
+                                <p className="section-hint">Review sensitive activity and control what FNDR captures.</p>
+                                <PrivacyPanel
+                                    isVisible={true}
+                                    onClose={() => undefined}
+                                    onAlertsChange={setPrivacyAlertCount}
+                                    onBlocklistChange={setBlocklistState}
+                                    embedded={true}
+                                />
+                            </section>
+
+                            <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
+                                <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>
+                                <p className="section-hint">
+                                    Matching apps and websites are excluded from future capture.
+                                </p>
+                                <div className="blocklist">
+                                    {blocklist.length === 0 ? (
+                                        <p className="blocklist-empty">No custom apps or sites are blocked.</p>
+                                    ) : (
+                                        blocklist.map((app) => (
+                                            <div key={app} className="blocklist-item">
+                                                <span>{app}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleRemoveBlocklist(app)}
+                                                    aria-label={`Remove ${app} from blocklist`}
+                                                    disabled={blocklistBusy}
+                                                >
+                                                    <span aria-hidden="true">×</span>
+                                                </button>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                                <label className="settings-field-label" htmlFor="fndr-blocklist-entry">
+                                    App or website
+                                </label>
+                                <div className="add-app-row">
+                                    <input
+                                        id="fndr-blocklist-entry"
+                                        type="text"
+                                        placeholder="Example: 1Password or bank.example"
+                                        value={newApp}
+                                        onChange={(event) => {
+                                            setNewApp(event.target.value);
+                                            setBlocklistMessage(null);
+                                        }}
+                                        onKeyDown={(event) => {
+                                            if (event.key === "Enter" && newApp.trim() && !blocklistBusy) {
+                                                void handleAddBlocklist();
+                                            }
+                                        }}
+                                        className="add-app-input"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleAddBlocklist()}
+                                        className="ui-action-btn btn-primary"
+                                        disabled={!newApp.trim() || blocklistBusy}
+                                    >
+                                        {blocklistBusy ? "Updating…" : "Add"}
+                                    </button>
+                                </div>
+                                {blocklistMessage && (
+                                    <p
+                                        className={`settings-message ${blocklistMessage.startsWith("Blocklist update failed") ? "settings-message--error" : ""}`}
+                                        role={blocklistMessage.startsWith("Blocklist update failed") ? "alert" : "status"}
+                                        aria-label={blocklistMessage.startsWith("Blocklist update failed") ? "Blocklist update failed" : undefined}
+                                    >
+                                        {blocklistMessage}
+                                    </p>
+                                )}
+                            </section>
+
+                            <section className="panel-section settings-section--voice" aria-labelledby="settings-voice-title">
+                                <h3 id="settings-voice-title">Voice</h3>
+                                <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
+                            </section>
+
+                            <section className="panel-section settings-section--agent-access" aria-labelledby="settings-trust-title">
+                                <h3 id="settings-trust-title">Agent access</h3>
+                                <p className="section-hint">Choose whether connected assistants can save notes on this Mac.</p>
+                                <label className="settings-switch-row">
+                                    <span>Let assistants add notes</span>
+                                    <input
+                                        type="checkbox"
+                                        role="switch"
+                                        className="settings-switch"
+                                        aria-describedby="settings-agent-notes-hint"
+                                        checked={agentNotesEnabled === true}
+                                        disabled={agentNotesEnabled === null || agentNotesBusy}
+                                        onChange={() => void handleToggleAgentNotes()}
+                                    />
+                                </label>
+                                <p className="section-hint" id="settings-agent-notes-hint">
+                                    Connected assistants can save labeled notes and decision records locally.
+                                    Turning this off keeps existing records.
+                                </p>
+                                {agentNotesError && (
+                                    <p
+                                        className="settings-message settings-message--error"
+                                        role="alert"
+                                        aria-label="Assistant notes update failed"
+                                    >
+                                        {agentNotesError}
+                                    </p>
+                                )}
+                            </section>
+
+                            <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
+                                <h3 id="settings-models-title">Models</h3>
+                                <p className="section-hint">
+                                    What intelligence is available locally, and why a feature may be limited.
+                                </p>
+                                {status?.embedding_backend === "unavailable" && (
+                                    <p className="model-error" role="alert">
+                                        Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.
+                                    </p>
+                                )}
+                                <ul className="model-readiness-list">
+                                    {readyModels.map((model) => (
+                                        <li key={model.id}><strong>{model.name}</strong> <span>Ready</span></li>
+                                    ))}
+                                    {models.length === 0 && <li>Checking local model readiness…</li>}
+                                    {models.length > 0 && readyModels.length === 0 && (
+                                        <li>No local models are ready. Finish model setup to enable AI features.</li>
+                                    )}
+                                </ul>
+                            </section>
+
+                            <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
+                                <h3 id="settings-updates-title">Updates</h3>
+                                <p className="section-hint">Keep FNDR and its required components ready to use.</p>
+                                <SetupCenter embedded />
+                            </section>
+
                             <section className="panel-section settings-section--about" aria-labelledby="settings-profile-title">
                                 <h3 id="settings-profile-title">About</h3>
                                 <p className="section-hint">Personalize FNDR and its appearance on this Mac.</p>
@@ -611,186 +791,6 @@ export function ControlPanel({
                                         );
                                     })}
                                 </div>
-                            </section>
-
-                            <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
-                                <h3 id="settings-updates-title">Updates</h3>
-                                <p className="section-hint">Keep FNDR and its required components ready to use.</p>
-                                <SetupCenter embedded />
-                            </section>
-
-                            <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
-                                <h3 id="settings-capture-title">Capture</h3>
-                                <p className="section-hint">
-                                    Control when FNDR may process new screen context on this Mac.
-                                </p>
-                                <button
-                                    type="button"
-                                    className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
-                                    onClick={() => void handleToggleCapture()}
-                                    disabled={!status || captureBusy}
-                                >
-                                    {!status
-                                        ? "Checking capture status…"
-                                        : captureBusy
-                                            ? "Updating…"
-                                            : status?.is_incognito
-                                                ? "Exit private mode"
-                                            : capturePaused
-                                                ? "Resume capture"
-                                                : "Pause capture"}
-                                </button>
-                                {captureMessage && (
-                                    <p
-                                        className={`settings-message ${captureMessage.startsWith("Capture action failed") ? "settings-message--error" : ""}`}
-                                        role={captureMessage.startsWith("Capture action failed") ? "alert" : "status"}
-                                        aria-label={captureMessage.startsWith("Capture action failed") ? "Capture action failed" : undefined}
-                                    >
-                                        {captureMessage}
-                                    </p>
-                                )}
-                                <div className="capture-stats capture-stats--pipeline" aria-label="This session">
-                                    <span>Stored this session: {stored.toLocaleString()}</span>
-                                    <span>Skipped this session: {skipped.toLocaleString()}</span>
-                                </div>
-                                {captureTrace && (
-                                    <ActivityTrace
-                                        trace={captureTrace}
-                                        className="capture-activity-trace"
-                                    />
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--voice" aria-labelledby="settings-voice-title">
-                                <h3 id="settings-voice-title">Voice</h3>
-                                <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
-                            </section>
-
-                            <section className="panel-section settings-section--agent-access" aria-labelledby="settings-trust-title">
-                                <h3 id="settings-trust-title">Agent access</h3>
-                                <p className="section-hint">Choose whether connected assistants can save notes on this Mac.</p>
-                                <label className="settings-switch-row">
-                                    <span>Let assistants add notes</span>
-                                    <input
-                                        type="checkbox"
-                                        role="switch"
-                                        className="settings-switch"
-                                        aria-describedby="settings-agent-notes-hint"
-                                        checked={agentNotesEnabled === true}
-                                        disabled={agentNotesEnabled === null || agentNotesBusy}
-                                        onChange={() => void handleToggleAgentNotes()}
-                                    />
-                                </label>
-                                <p className="section-hint" id="settings-agent-notes-hint">
-                                    Connected assistants can save labeled notes and decision records locally.
-                                    Turning this off keeps existing records.
-                                </p>
-                                {agentNotesError && (
-                                    <p
-                                        className="settings-message settings-message--error"
-                                        role="alert"
-                                        aria-label="Assistant notes update failed"
-                                    >
-                                        {agentNotesError}
-                                    </p>
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--privacy" aria-labelledby="settings-privacy-title">
-                                <h3 id="settings-privacy-title">Privacy</h3>
-                                <p className="section-hint">Review sensitive activity and control what FNDR captures.</p>
-                                <PrivacyPanel
-                                    isVisible={true}
-                                    onClose={() => undefined}
-                                    onAlertsChange={setPrivacyAlertCount}
-                                    onBlocklistChange={setBlocklistState}
-                                    embedded={true}
-                                />
-                            </section>
-
-                            <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
-                                <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>
-                                <p className="section-hint">
-                                    Matching apps and websites are excluded from future capture.
-                                </p>
-                                <div className="blocklist">
-                                    {blocklist.length === 0 ? (
-                                        <p className="blocklist-empty">No custom apps or sites are blocked.</p>
-                                    ) : (
-                                        blocklist.map((app) => (
-                                            <div key={app} className="blocklist-item">
-                                                <span>{app}</span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleRemoveBlocklist(app)}
-                                                    aria-label={`Remove ${app} from blocklist`}
-                                                    disabled={blocklistBusy}
-                                                >
-                                                    <span aria-hidden="true">×</span>
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                                <label className="settings-field-label" htmlFor="fndr-blocklist-entry">
-                                    App or website
-                                </label>
-                                <div className="add-app-row">
-                                    <input
-                                        id="fndr-blocklist-entry"
-                                        type="text"
-                                        placeholder="Example: 1Password or bank.example"
-                                        value={newApp}
-                                        onChange={(event) => {
-                                            setNewApp(event.target.value);
-                                            setBlocklistMessage(null);
-                                        }}
-                                        onKeyDown={(event) => {
-                                            if (event.key === "Enter" && newApp.trim() && !blocklistBusy) {
-                                                void handleAddBlocklist();
-                                            }
-                                        }}
-                                        className="add-app-input"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleAddBlocklist()}
-                                        className="ui-action-btn btn-primary"
-                                        disabled={!newApp.trim() || blocklistBusy}
-                                    >
-                                        {blocklistBusy ? "Updating…" : "Add"}
-                                    </button>
-                                </div>
-                                {blocklistMessage && (
-                                    <p
-                                        className={`settings-message ${blocklistMessage.startsWith("Blocklist update failed") ? "settings-message--error" : ""}`}
-                                        role={blocklistMessage.startsWith("Blocklist update failed") ? "alert" : "status"}
-                                        aria-label={blocklistMessage.startsWith("Blocklist update failed") ? "Blocklist update failed" : undefined}
-                                    >
-                                        {blocklistMessage}
-                                    </p>
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
-                                <h3 id="settings-models-title">Models</h3>
-                                <p className="section-hint">
-                                    What intelligence is available locally, and why a feature may be limited.
-                                </p>
-                                {status?.embedding_backend === "unavailable" && (
-                                    <p className="model-error" role="alert">
-                                        Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.
-                                    </p>
-                                )}
-                                <ul className="model-readiness-list">
-                                    {readyModels.map((model) => (
-                                        <li key={model.id}><strong>{model.name}</strong> <span>Ready</span></li>
-                                    ))}
-                                    {models.length === 0 && <li>Checking local model readiness…</li>}
-                                    {models.length > 0 && readyModels.length === 0 && (
-                                        <li>No local models are ready. Finish model setup to enable AI features.</li>
-                                    )}
-                                </ul>
                             </section>
                         </div>
                     </aside>

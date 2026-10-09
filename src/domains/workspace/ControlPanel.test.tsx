@@ -355,6 +355,13 @@ describe("ControlPanel", () => {
             expect(section).toHaveClass(className);
             expect(within(section as HTMLElement).getByText(description)).toBeInTheDocument();
         }
+
+        // Tab order follows the document, so the sections are written in the order they are shown.
+        const shown = screen
+            .getAllByRole("heading", { level: 3 })
+            .map((heading) => heading.textContent)
+            .filter((name) => sections.some(([section]) => section === name));
+        expect(shown).toEqual(sections.map(([name]) => name));
     });
 
     it("shows a read-only warning when capture cannot use its embedding model", async () => {
