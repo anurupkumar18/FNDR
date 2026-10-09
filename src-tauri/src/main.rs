@@ -822,6 +822,8 @@ fn main() {
             ipc::commands::computer_use_start,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
+            ipc::commands::resolve_work_set,
+            ipc::commands::open_work_set,
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
