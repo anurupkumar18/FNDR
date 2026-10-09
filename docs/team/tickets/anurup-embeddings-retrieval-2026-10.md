@@ -142,7 +142,14 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Do.** When a session goes quiet, write one session record from its moments: what was worked on, what was decided, where it stopped. Keep the moments as evidence beneath it. Stop adding a new card when a new moment adds no new fact. Link sessions across apps that share a project within minutes.
 
-**Progress, 2026-10-08.** Decided: the session summary is composed from the session's own moments and no model writes it. The on-device model was measured on the same kind of job for the briefing and invented advice, copied its notes, and reported an open task as done. `sessionDigest` (`src/domains/memory-vault/sessionDigest.ts`) gives a session row its moments, its length in minutes, its distinct files, and the most detailed earlier sentence when that says something the row's own line does not. Nothing is stored, so it covers every past session and can never disagree with its moments. Still to do: counts of decisions, next steps and errors (the card does not carry them yet), and linking sessions across apps.
+**Progress, 2026-10-08.** Decided: the session summary is composed from the session's own moments and no model writes it. The on-device model was measured on the same kind of job for the briefing and invented advice, copied its notes, and reported an open task as done. `sessionDigest` (`src/domains/memory-vault/sessionDigest.ts`) gives a session row its moments, its length in minutes, its distinct files, and the most detailed earlier sentence when that says something the row's own line does not. Nothing is stored, so it covers every past session and can never disagree with its moments. The counts and the links followed the same day; see the result below.
+
+
+**Result, 2026-10-08.** The Vault list now sets `decision_count`, `error_count` and `next_step_count` on each card from the stored record, and a session row adds them up beside its files ("In this session: 3 files, 2 decisions, 1 error"). On the owner's vault 13 percent of memories record a decision, 8 percent a next step and 6 percent an error.
+
+Sessions across apps: only 21 of 158 memories carry a project, so grouping by project links almost nothing. `linkSessions` (`src/domains/memory-vault/sessionLinks.ts`) ties two sessions in different threads when they are no more than ten minutes apart and share a file, or two distinctive words of their window titles. Each row lists the others under "Same stretch of work" as buttons that jump to them. Sessions are linked, never merged: two apps open at the same time are not evidence of one piece of work.
+
+Not done: no session record is stored, by decision (see the decision log), so a session is not one search result. "Stop adding a new card when a new moment adds no new fact" is covered for display by the fold into one row; nothing changes what capture stores. The new row has tests and has not yet been looked at in the running app.
 
 **Done when.** The Vault session row shows the session's own summary with counts of decisions, next steps and errors, and the moments still open individually.
 

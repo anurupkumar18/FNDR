@@ -1004,3 +1004,21 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
 }
+
+/* A session in another app that shares a file or a title with this one. */
+.vault-row-link {
+    margin-right: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-primary);
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.vault-row-link:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+}

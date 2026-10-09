@@ -3,6 +3,7 @@ import type { MemoryCard } from "@/shared/ipc/tauri";
 import { Icon, type IconName } from "@/shared/components/atoms";
 import { MemoryCard as MemoryCardComponent, pickPreviewText, reopenButtonLabel } from "./MemoryCard";
 import { sessionDigest, sessionDigestFacts, sessionDigestLabel, type SessionDigest } from "./sessionDigest";
+import { linkSessions, type SessionLink } from "./sessionLinks";
 import { vaultSourceKind, type VaultDay, type VaultRow, type VaultSourceKind } from "./vaultGrouping";
 
 const SOURCE_LABELS: Record<VaultSourceKind, string> = {
@@ -100,7 +101,19 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
         });
     };
 
-    const renderLine = (card: MemoryCard, row?: VaultRow, similarOpen = false, digest: SessionDigest | null = null) => (
+    const showRow = (leadId: string) => {
+        const target = document.getElementById(`vault-row-${leadId}`);
+        target?.scrollIntoView?.({ block: "center" });
+        target?.querySelector<HTMLElement>("button")?.focus();
+    };
+
+    const renderLine = (
+        card: MemoryCard,
+        row?: VaultRow,
+        similarOpen = false,
+        digest: SessionDigest | null = null,
+        links: SessionLink[] = [],
+    ) => (
         <div className="vault-row">
             <MemoryCardComponent
                 card={card}
@@ -147,8 +160,26 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                     <span className="vault-row-earlier-label">Earlier in this session</span> {digest.earlier}
                 </p>
             )}
+            {links.length > 0 && (
+                <p className="vault-row-earlier" aria-label="Same stretch of work">
+                    <span className="vault-row-earlier-label">Same stretch of work</span>
+                    {links.map((link) => (
+                        <button
+                            key={link.leadId}
+                            type="button"
+                            className="vault-row-link"
+                            onClick={() => showRow(link.leadId)}
+                        >
+                            {link.label}
+                            {link.moments > 1 ? ` (${link.moments} moments)` : ""}
+                        </button>
+                    ))}
+                </p>
+            )}
         </div>
     );
+
+    const linksByDay = new Map(days.map((day) => [day.key, linkSessions(day)]));
 
     return (
         <>
@@ -173,8 +204,14 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                                         openSimilarIds.has(row.lead.id) !==
                                         row.similar.some((card) => card.id === focusMemoryId);
                                     return (
-                                        <li key={row.lead.id}>
-                                            {renderLine(row.lead, row, similarOpen, sessionDigest(row, pickPreviewText))}
+                                        <li key={row.lead.id} id={`vault-row-${row.lead.id}`}>
+                                            {renderLine(
+                                                row.lead,
+                                                row,
+                                                similarOpen,
+                                                sessionDigest(row, pickPreviewText),
+                                                linksByDay.get(day.key)?.get(row.lead.id),
+                                            )}
                                             {similarOpen && (
                                                 <ul className="vault-rows vault-rows--similar">
                                                     {row.similar.map((card) => (

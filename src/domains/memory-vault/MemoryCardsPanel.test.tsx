@@ -358,6 +358,31 @@ describe("MemoryCardsPanel", () => {
         expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
     });
 
+    it("links a session to one in another app that touched the same file", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            {
+                ...card(1),
+                title: "Edited the ranking rule",
+                app_name: "Visual Studio Code",
+                files_touched: ["src/retrieve.rs"],
+                timestamp: VAULT_NOW - 5 * 60 * 1000,
+            },
+            {
+                ...card(2),
+                title: "Ran the tests",
+                app_name: "Terminal",
+                files_touched: ["retrieve.rs"],
+                timestamp: VAULT_NOW - 8 * 60 * 1000,
+            },
+        ]);
+
+        renderVault();
+
+        const [first] = await screen.findAllByLabelText("Same stretch of work");
+        expect(within(first).getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    });
+
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {
         vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
         vi.mocked(listMemoryCards).mockResolvedValue([
