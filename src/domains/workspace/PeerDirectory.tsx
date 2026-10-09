@@ -28,6 +28,7 @@ function errorText(reason: unknown): string {
 
 function taskState(state: string | null, status: string): string {
     if (status === "uncertain") return "delivery uncertain";
+    if (state === "DIRECT_MESSAGE_UNSUPPORTED") return "reply without displayable text";
     if (status === "direct_reply") return "direct reply";
     return state?.replace(/^TASK_STATE_/, "").replace(/_/g, " ").toLowerCase() ?? "acknowledged";
 }
@@ -231,7 +232,11 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
                                 ? <button type="button" disabled={busy} onClick={() => void send()}>Send task</button>
                                 : null}
                         {busy && sendAttempted && !run ? <p role="status">Sending reviewed task…</p> : null}
-                        {run ? <p role="status">{run.remote_task_id ? `Peer task ${run.remote_task_id}: ${taskState(run.remote_state, run.status)}` : "Peer replied without creating a tracked task."}</p> : null}
+                        {run ? <p role="status">{run.remote_task_id
+                            ? `Peer task ${run.remote_task_id}: ${taskState(run.remote_state, run.status)}`
+                            : run.remote_state === "DIRECT_MESSAGE_UNSUPPORTED"
+                                ? "Peer replied, but FNDR cannot display its reply. No tracked task was created."
+                                : "Peer replied without creating a tracked task."}</p> : null}
                         {outputText ? <div aria-label="Untrusted peer output"><p>Peer output for review</p><pre>{outputText}</pre></div> : null}
                     </div> : null}
                 </section>

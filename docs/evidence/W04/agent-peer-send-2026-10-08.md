@@ -23,6 +23,8 @@ Ledger capacity check: a focused regression first showed that the 101st Send dis
 
 Card output compatibility: FNDR requests and displays `text/plain`, but the validator previously accepted a Card offering only `application/json` output. The regression failed on that Card before the change. The validator now requires default `text/plain` output. The final isolated peer binary passed 18 local tests with 2 external tests ignored. Current Emissar and AgentNative Cards both advertise text output; this read-only check does not prove a native UI flow.
 
+Direct replies without text are now recorded as confirmed replies with unsupported content. Before the change, a data-only A2A Message was labeled a normal direct reply and the review panel showed no result. Parser, Peer UI and Privacy Activity regressions failed on that behavior. FNDR now stores a distinct content-free state and says the reply cannot be displayed; it does not fabricate a remote task ID or resend. The isolated peer binary passed 19 local tests with 2 external tests ignored; frontend tests passed 21/21 and typecheck passed. This is a controlled fixture, not a live non-text peer check.
+
 ## Acceptance still open
 
 - Native reviewed-text and ledger verification for the real peer path. The two live transport tests check synthetic questions and relevant replies; the local fixture checks the exact JSONRPC request body. Bearer credential binding is still absent.
