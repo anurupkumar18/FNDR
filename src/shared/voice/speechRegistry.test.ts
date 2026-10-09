@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechProvider";
-import { createSpeechRegistry, DEFAULT_ORDER, type SpeechRegistry } from "./speechRegistry";
+import { createSpeechRegistry, DEFAULT_ORDER, installOfflineVoices, type SpeechRegistry } from "./speechRegistry";
 
 interface FakeProvider extends SpeechProvider {
     spoken: { text: string; opts?: SpeakOptions }[];
@@ -294,5 +294,14 @@ describe("speech registry", () => {
         registry.speak("c");
         await flush();
         expect(changes).toHaveLength(1);
+    });
+
+    it("installs the Mac and basic voices once, leaving room for the ChatGPT plan voice", () => {
+        const codex = fake("codex_realtime");
+        registry.registerProvider(codex);
+        installOfflineVoices(registry);
+        installOfflineVoices(registry);
+        expect(registry.order()).toEqual(["codex_realtime", "system_enhanced", "webview_basic"]);
+        expect(registry.providers()[0]).toBe(codex);
     });
 });

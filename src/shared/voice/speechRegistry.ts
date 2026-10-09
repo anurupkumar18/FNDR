@@ -7,6 +7,8 @@
  */
 
 import type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechProvider";
+import { createSystemEnhancedProvider } from "./systemEnhanced";
+import { createWebviewBasicProvider } from "./webviewBasic";
 
 export const DEFAULT_ORDER: readonly SpeechProviderId[] = ["codex_realtime", "local_neural", "system_enhanced", "webview_basic"];
 
@@ -27,6 +29,7 @@ export type ProviderChangeListener = (id: SpeechProviderId, reason: string) => v
 
 export interface SpeechRegistry {
     registerProvider(provider: SpeechProvider): void;
+    has(id: SpeechProviderId): boolean;
     /** Never rejects: the outcome says whether and by whom the line was spoken. */
     speak(text: string, opts?: SpeakOptions): Promise<SpeakOutcome>;
     cancel(): void;
@@ -218,6 +221,9 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
         registerProvider(provider) {
             registered.set(provider.id, provider);
         },
+        has(id) {
+            return registered.has(id);
+        },
         speak(text, opts = {}) {
             return new Promise<SpeakOutcome>((resolve) => {
                 let settled = false;
@@ -267,3 +273,14 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
 
 /** The app's one registry; every window that speaks registers into its own copy. */
 export const speechRegistry = createSpeechRegistry();
+
+/**
+ * Registers the voices that need no account: the best Mac voice and the basic
+ * webview voice. Safe to call from every surface that speaks; the ChatGPT plan
+ * voice registers itself where it is built. `local_neural` stays unregistered
+ * (docs/evidence/W04/local-tts-spike.md).
+ */
+export function installOfflineVoices(registry: SpeechRegistry = speechRegistry): void {
+    if (!registry.has("system_enhanced")) registry.registerProvider(createSystemEnhancedProvider());
+    if (!registry.has("webview_basic")) registry.registerProvider(createWebviewBasicProvider());
+}
