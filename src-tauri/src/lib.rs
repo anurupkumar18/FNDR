@@ -35,6 +35,7 @@ pub mod ocr;
 pub mod operator;
 pub mod privacy;
 pub mod privacy_proof;
+pub mod proactive_signals;
 pub mod resume;
 pub mod search;
 pub mod speech;
