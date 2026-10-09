@@ -47,7 +47,10 @@ function registeredCommands(): Set<string> {
     return new Set(names.map((match) => match[1].split("::").pop() as string));
 }
 
-const files = sourceFiles(join(ROOT, "src")).filter((path) => !isTest(path));
+// The baseline names every dead wrapper, so it must not count as a user of them.
+const files = sourceFiles(join(ROOT, "src")).filter(
+    (path) => !isTest(path) && !path.endsWith("ipcDriftBaseline.ts"),
+);
 const wrapperFile = join(ROOT, "src/shared/ipc/tauri.ts");
 // The browser preview answers commands by name; it is not a caller.
 const callers = files.filter((path) => !path.endsWith("dev/previewIpc.ts"));
