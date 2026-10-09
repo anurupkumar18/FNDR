@@ -292,6 +292,10 @@ export async function fndrTimeline(args?: {
 }
 
 export interface ResumeThread {
+    /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
+    key?: string;
+    /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
+    key?: string;
     title: string;
     app_name?: string;
     last_state: string;
@@ -309,6 +313,32 @@ export interface ResumeThread {
 /** Recent observed work, with source citations; does not execute actions. */
 export async function resumeWork(): Promise<ResumeThread[]> {
     return invoke("resume_work", { hours: 24, budgetTokens: 800 });
+/** What is new in a Resume Work thread since it was last marked seen. */
+export interface ThreadDigest {
+    thread_key: string;
+    title: string;
+    since_ms: number;
+    /** True when the thread was never marked seen; the digest then covers a day. */
+    first_view: boolean;
+    new_memories: number;
+    page_count: number;
+    pages: string[];
+    file_count: number;
+    files: string[];
+    task_count: number;
+    tasks: string[];
+    commit_count: number;
+    newest_memory_id: string | null;
+}
+
+export async function whatChangedSince(threadKey: string): Promise<ThreadDigest> {
+    return invoke<ThreadDigest>("what_changed_since", { threadKey });
+}
+
+export async function markThreadSeen(threadKey: string): Promise<void> {
+    return invoke("mark_thread_seen", { threadKey });
+}
+
 }
 
 export async function fndrQualityStatus(): Promise<{
@@ -2274,6 +2304,10 @@ export interface ProactiveSuggestion {
 
 export interface FndrNotificationPayload {
     title: string;
+    /** The memory a "stuck" toast opens. */
+    memory_id?: string;
+    /** The Resume Work thread a "thread_update" or "meeting_prep" toast opens. */
+    thread_key?: string;
     body: string;
     kind: string;
 }

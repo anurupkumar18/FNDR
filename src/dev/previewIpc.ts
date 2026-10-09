@@ -815,6 +815,29 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return undefined;
             case "get_fun_greeting":
                 return "Good evening, Anurup.";
+            case "what_changed_since": {
+                const threadKey =
+                    typeof payload === "object" && payload !== null && "threadKey" in payload
+                        ? String((payload as { threadKey?: unknown }).threadKey)
+                        : "";
+                return {
+                    thread_key: threadKey,
+                    title: "FNDR",
+                    since_ms: Date.now() - 3 * 60 * 60 * 1000,
+                    first_view: false,
+                    new_memories: 6,
+                    page_count: 1,
+                    pages: ["Tauri notification plugin docs"],
+                    file_count: 2,
+                    files: ["notify.rs", "main.rs"],
+                    task_count: 1,
+                    tasks: ["Add a test for the toast target"],
+                    commit_count: 1,
+                    newest_memory_id: "preview-memory-1",
+                };
+            }
+            case "mark_thread_seen":
+                return undefined;
             case "get_app_names":
                 return ["Visual Studio Code", "Google Chrome", "Terminal", "Figma"];
             case "get_privacy_alerts":
