@@ -781,7 +781,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let configuredPeers: ConfiguredPeer[] = [];
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
-        status: string; remote_task_id: string | null; remote_state: string | null }> = [];
+        payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1414,7 +1414,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Peer task or destination changed. Preview it again before sending");
                 }
                 const view = { local_id: `preview-run-${previewPeerRuns.length + 1}`, peer_id: peer.id,
-                    host: new URL(peer.endpoint).hostname, created_at_ms: Date.now(), status: "acknowledged",
+                    host: new URL(peer.endpoint).hostname, created_at_ms: Date.now(), payload_bytes: text.length, status: "acknowledged",
                     remote_task_id: `synthetic-task-${previewPeerRuns.length + 1}`, remote_state: "TASK_STATE_SUBMITTED" };
                 previewPeerRuns = [...previewPeerRuns, view];
                 return { run: { ...view, message_id: "synthetic-message", attachment_ids: [], payload_bytes: text.length }, output_text: null };

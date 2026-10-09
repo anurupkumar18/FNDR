@@ -30,6 +30,7 @@ pub struct PeerRunView {
     pub peer_id: String,
     pub host: String,
     pub created_at_ms: i64,
+    pub payload_bytes: usize,
     pub status: String,
     pub remote_task_id: Option<String>,
     pub remote_state: Option<String>,
@@ -42,6 +43,7 @@ impl From<PeerRun> for PeerRunView {
             peer_id: run.peer_id,
             host: run.host,
             created_at_ms: run.created_at_ms,
+            payload_bytes: run.payload_bytes,
             status: run.status,
             remote_task_id: run.remote_task_id,
             remote_state: run.remote_state,
@@ -139,6 +141,12 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].local_id, run.local_id);
         assert_eq!(rows[0].attachment_ids, vec!["memory-1"]);
+        let view: PeerRunView = rows[0].clone().into();
+        assert_eq!(view.payload_bytes, 315);
+        assert!(serde_json::to_value(&view)
+            .unwrap()
+            .get("attachment_ids")
+            .is_none());
         let serialized = serde_json::to_value(&rows[0]).unwrap();
         assert!(serialized.get("message_text").is_none());
         assert!(serialized.get("output_text").is_none());

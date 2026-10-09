@@ -26,6 +26,12 @@ function errorText(reason: unknown): string {
     return reason instanceof Error ? reason.message : String(reason);
 }
 
+function taskState(state: string | null, status: string): string {
+    if (status === "uncertain") return "delivery uncertain";
+    if (status === "direct_reply") return "direct reply";
+    return state?.replace(/^TASK_STATE_/, "").replace(/_/g, " ").toLowerCase() ?? "acknowledged";
+}
+
 export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryProps) {
     const [peers, setPeers] = useState<ConfiguredPeer[] | null>(null);
     const [url, setUrl] = useState("");
@@ -202,7 +208,7 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
             {peers && peers.length > 0 ? (
                 <section className="aw-peer-draft" aria-label="Peer task draft">
                     <h3>Draft a peer task</h3>
-                    <p>Preview the exact task text and current memory summaries. Nothing is sent from this draft.</p>
+                    <p>Preview the exact task text and current memory summaries, then choose whether to send.</p>
                     <form onSubmit={(event) => void makePreview(event)}>
                         <label htmlFor="aw-draft-peer">Peer</label>
                         <select id="aw-draft-peer" value={selectedPeerId || peers[0].id} onChange={(event) => { setSelectedPeerId(event.target.value); setPreview(null); setRun(null); }}>
@@ -225,7 +231,7 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
                                 ? <button type="button" disabled={busy} onClick={() => void send()}>Send task</button>
                                 : null}
                         {busy && sendAttempted && !run ? <p role="status">Sending reviewed task…</p> : null}
-                        {run ? <p role="status">{run.remote_task_id ? `Peer task ${run.remote_task_id}: ${run.remote_state}` : "Peer replied without creating a tracked task."}</p> : null}
+                        {run ? <p role="status">{run.remote_task_id ? `Peer task ${run.remote_task_id}: ${taskState(run.remote_state, run.status)}` : "Peer replied without creating a tracked task."}</p> : null}
                         {outputText ? <div aria-label="Untrusted peer output"><p>Peer output for review</p><pre>{outputText}</pre></div> : null}
                     </div> : null}
                 </section>
@@ -233,13 +239,13 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
             {recentRuns.length > 0 ? <section aria-label="Recent peer sends">
                 <h3>Recent peer sends</h3>
                 <ul>{recentRuns.slice(-5).reverse().map((item) => <li key={item.local_id}>
-                    {item.host}: {item.remote_task_id ?? item.local_id} ({item.remote_state ?? item.status})
+                    {item.host}: {item.remote_task_id ?? item.local_id} ({taskState(item.remote_state, item.status)})
                     {item.remote_task_id ? <button type="button" disabled={busy} onClick={() => void refresh(item.local_id)}>Check status</button> : null}
                     {item.remote_task_id && !["TASK_STATE_COMPLETED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TASK_STATE_REJECTED"].includes(item.remote_state ?? "")
                         ? <button type="button" disabled={busy} onClick={() => void cancel(item.local_id)}>Request cancel</button> : null}
                 </li>)}</ul>
                 {inspected ? <div aria-label="Peer task result">
-                    <p>{inspected.run.remote_task_id}: {inspected.run.remote_state}</p>
+                    <p>{inspected.run.remote_task_id}: {taskState(inspected.run.remote_state, inspected.run.status)}</p>
                     {cancelNotice ? <p>{cancelNotice}</p> : null}
                     {inspected.output_text ? <><p>Untrusted peer output for review</p><pre>{inspected.output_text}</pre></> : null}
                 </div> : null}

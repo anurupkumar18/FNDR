@@ -1914,7 +1914,7 @@ export interface PeerRun {
 }
 
 export type PeerRunView = Pick<PeerRun,
-    "local_id" | "peer_id" | "host" | "created_at_ms" | "status" | "remote_task_id" | "remote_state">;
+    "local_id" | "peer_id" | "host" | "created_at_ms" | "payload_bytes" | "status" | "remote_task_id" | "remote_state">;
 
 export interface DelegationSendResult {
     run: PeerRun;
