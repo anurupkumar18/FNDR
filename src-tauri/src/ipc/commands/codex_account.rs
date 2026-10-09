@@ -613,6 +613,7 @@ pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), Stri
         .env("PATH", child_path_env(executable))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| format!("Could not ask Codex for its features: {e}"))?;
