@@ -56,6 +56,9 @@ pub use agent_chats::*;
 mod home;
 pub use home::*;
 
+mod proactive_signals;
+pub use proactive_signals::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
 
