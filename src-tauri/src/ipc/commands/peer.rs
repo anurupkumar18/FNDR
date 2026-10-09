@@ -44,3 +44,52 @@ pub async fn preview_peer_delegation(
     crate::agent::delegation::preview_delegation(&state, &peer_id, &task, &output_goal, &memory_ids)
         .await
 }
+
+#[tauri::command]
+pub async fn send_peer_delegation(
+    state: State<'_, Arc<AppState>>,
+    peer_id: String,
+    task: String,
+    output_goal: String,
+    memory_ids: Vec<String>,
+    reviewed_destination: String,
+    reviewed_text: String,
+) -> Result<crate::agent::delegation::DelegationSendResult, String> {
+    crate::agent::delegation::send_delegation(
+        &state,
+        &peer_id,
+        &task,
+        &output_goal,
+        &memory_ids,
+        &reviewed_destination,
+        &reviewed_text,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn list_peer_runs(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::agent::peer_runs::PeerRunView>, String> {
+    if state.is_incognito.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(Vec::new());
+    }
+    crate::agent::peer_runs::list_runs(&state.state_store)
+        .map(|runs| runs.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command]
+pub async fn refresh_peer_task(
+    state: State<'_, Arc<AppState>>,
+    local_id: String,
+) -> Result<crate::agent::delegation::DelegationTaskResult, String> {
+    crate::agent::delegation::refresh_delegation(&state, &local_id).await
+}
+
+#[tauri::command]
+pub async fn cancel_peer_task(
+    state: State<'_, Arc<AppState>>,
+    local_id: String,
+) -> Result<crate::agent::delegation::DelegationTaskResult, String> {
+    crate::agent::delegation::cancel_delegation(&state, &local_id).await
+}

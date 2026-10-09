@@ -6,6 +6,10 @@ const ipc = vi.hoisted(() => ({
     addConfiguredPeer: vi.fn(),
     removeConfiguredPeer: vi.fn(),
     previewPeerDelegation: vi.fn(),
+    sendPeerDelegation: vi.fn(),
+    listPeerRuns: vi.fn(),
+    refreshPeerTask: vi.fn(),
+    cancelPeerTask: vi.fn(),
 }));
 vi.mock("@/shared/ipc/tauri", () => ipc);
 
@@ -19,10 +23,29 @@ beforeEach(() => {
         requires_bearer: false, verified_at_ms: 1,
     });
     ipc.removeConfiguredPeer.mockResolvedValue(true);
+    ipc.listPeerRuns.mockResolvedValue([]);
+    ipc.refreshPeerTask.mockResolvedValue({
+        run: { local_id: "local-1", peer_id: "peer-1", host: "peer.example", created_at_ms: 1,
+            status: "acknowledged", remote_task_id: "remote-1", remote_state: "TASK_STATE_COMPLETED" },
+        output_text: "Finished report",
+    });
+    ipc.cancelPeerTask.mockResolvedValue({
+        run: { local_id: "local-1", peer_id: "peer-1", host: "peer.example", created_at_ms: 1,
+            status: "acknowledged", remote_task_id: "remote-1", remote_state: "TASK_STATE_WORKING" },
+        output_text: null,
+    });
     ipc.previewPeerDelegation.mockResolvedValue({
         peer_id: "peer-1", destination: "https://peer.example/a2a",
         message_text: "Task:\nReview the plan\n\nOutput goal:\nBrief report",
         attachments: [],
+    });
+    ipc.sendPeerDelegation.mockResolvedValue({
+        run: {
+            local_id: "local-1", message_id: "msg-1", peer_id: "peer-1", host: "peer.example",
+            attachment_ids: [], payload_bytes: 200, created_at_ms: 1, status: "acknowledged",
+            remote_task_id: "remote-1", remote_state: "TASK_STATE_SUBMITTED",
+        },
+        output_text: null,
     });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -70,7 +93,7 @@ describe("PeerDirectory", () => {
         expect(screen.getByRole("button", { name: "Remove Research peer" })).toBeInTheDocument();
     });
 
-    it("previews a bounded task for a saved peer without sending it", async () => {
+    it("previews a bounded task for a saved peer without sending until asked", async () => {
         ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
         render(<PeerDirectory onBack={vi.fn()} selectedMemories={[{ id: "memory-1", title: "Plan", appName: "Editor", timestamp: 1 }]} />);
         fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
@@ -78,6 +101,45 @@ describe("PeerDirectory", () => {
         fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
         await waitFor(() => expect(ipc.previewPeerDelegation).toHaveBeenCalledWith("peer-1", "Review the plan", "Brief report", ["memory-1"]));
         await waitFor(() => expect(screen.getByLabelText("Task preview").querySelector("pre")).toHaveTextContent("Task: Review the plan Output goal: Brief report"));
+        expect(screen.getByRole("button", { name: "Send task" })).toBeInTheDocument();
+        expect(ipc.sendPeerDelegation).not.toHaveBeenCalled();
+    });
+
+    it("sends only the reviewed draft and shows the peer task ID", async () => {
+        ipc.listConfiguredPeers.mockResolvedValue([await ipc.addConfiguredPeer()]);
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.change(await screen.findByRole("textbox", { name: "Task for peer" }), { target: { value: "Review the plan" } });
+        fireEvent.change(screen.getByRole("textbox", { name: "Output goal" }), { target: { value: "Brief report" } });
         expect(screen.queryByRole("button", { name: "Send task" })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Preview task" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Send task" }));
+        await waitFor(() => expect(ipc.sendPeerDelegation).toHaveBeenCalledWith(
+            "peer-1", "Review the plan", "Brief report", [],
+            "https://peer.example/a2a", "Task:\nReview the plan\n\nOutput goal:\nBrief report",
+        ));
+        expect(await screen.findByText(/remote-1/)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Send task" })).not.toBeInTheDocument();
+    });
+
+    it("checks a known peer task and shows its output only for review", async () => {
+        ipc.listPeerRuns.mockResolvedValue([{
+            local_id: "local-1", peer_id: "peer-1", host: "peer.example", created_at_ms: 1,
+            status: "acknowledged", remote_task_id: "remote-1", remote_state: "TASK_STATE_WORKING",
+        }]);
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Check status" }));
+        await waitFor(() => expect(ipc.refreshPeerTask).toHaveBeenCalledWith("local-1"));
+        expect(await screen.findByLabelText("Peer task result")).toHaveTextContent("Finished report");
+    });
+
+    it("does not call a cancellation confirmed while the peer still reports working", async () => {
+        ipc.listPeerRuns.mockResolvedValue([{
+            local_id: "local-1", peer_id: "peer-1", host: "peer.example", created_at_ms: 1,
+            status: "acknowledged", remote_task_id: "remote-1", remote_state: "TASK_STATE_WORKING",
+        }]);
+        render(<PeerDirectory onBack={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Request cancel" }));
+        await waitFor(() => expect(ipc.cancelPeerTask).toHaveBeenCalledWith("local-1"));
+        expect(await screen.findByText(/has not confirmed cancellation/)).toBeInTheDocument();
     });
 });

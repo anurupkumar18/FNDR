@@ -1900,6 +1900,53 @@ export async function previewPeerDelegation(peerId: string, task: string, output
     return invoke<DelegationPreview>("preview_peer_delegation", { peerId, task, outputGoal, memoryIds });
 }
 
+export interface PeerRun {
+    local_id: string;
+    message_id: string;
+    peer_id: string;
+    host: string;
+    attachment_ids: string[];
+    payload_bytes: number;
+    created_at_ms: number;
+    status: string;
+    remote_task_id: string | null;
+    remote_state: string | null;
+}
+
+export type PeerRunView = Pick<PeerRun,
+    "local_id" | "peer_id" | "host" | "created_at_ms" | "status" | "remote_task_id" | "remote_state">;
+
+export interface DelegationSendResult {
+    run: PeerRun;
+    output_text: string | null;
+}
+
+export interface DelegationTaskResult {
+    run: PeerRunView;
+    output_text: string | null;
+}
+
+export async function sendPeerDelegation(
+    peerId: string, task: string, outputGoal: string, memoryIds: string[],
+    reviewedDestination: string, reviewedText: string,
+): Promise<DelegationSendResult> {
+    return invoke<DelegationSendResult>("send_peer_delegation", {
+        peerId, task, outputGoal, memoryIds, reviewedDestination, reviewedText,
+    });
+}
+
+export async function listPeerRuns(): Promise<PeerRunView[]> {
+    return invoke<PeerRunView[]>("list_peer_runs");
+}
+
+export async function refreshPeerTask(localId: string): Promise<DelegationTaskResult> {
+    return invoke<DelegationTaskResult>("refresh_peer_task", { localId });
+}
+
+export async function cancelPeerTask(localId: string): Promise<DelegationTaskResult> {
+    return invoke<DelegationTaskResult>("cancel_peer_task", { localId });
+}
+
 export interface HermesAppContext {
     app_name: string;
     memory_count: number;
