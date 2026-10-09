@@ -29,6 +29,9 @@ pub use stats::*;
 mod autofill;
 pub use autofill::*;
 
+mod voice_output;
+pub use voice_output::*;
+
 mod omnibar;
 pub use omnibar::*;
 
