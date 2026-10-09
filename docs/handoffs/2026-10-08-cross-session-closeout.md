@@ -36,3 +36,7 @@ Work stops at this checkpoint. `main` contains intertwined commits from the Code
 ## Ownership and guardrails
 
 Codex owned `src-tauri/src/agent/{peer,peer_store,delegation}.rs`, the peer workspace UI, ADR 025 and scoped Hermes MCP changes. Claude owns the current dirty `risk_policy`, `computer_use`, `search`, `storage`, `memory-vault`, and related files. Check current ownership from `git diff` before touching any shared path. Prompt changes require a version bump, catalog update and fingerprint test. Embedding-contract changes require a reindex plan and retrieval evidence. Real vault writes require the owner-approved workflow, stopped app and backup. Keep source captures, secrets and database files out of Git and GitLab.
+
+## Board at closeout
+
+Eight focused tickets were created: AG-01 through AG-05 and OQ-01 through OQ-03. AG-01, AG-03, OQ-01 and OQ-02 are in Evidence; AG-02/04/05 and OQ-03 remain Ready for their stated gates. Existing PD-01, VS-61, VS-85/86/87 and VS-93 moved to Evidence with commit/test comments; VS-84/88/89/90/91/92 remain Ready with precise partial-work comments. A concurrent `dadc2d9` added decision, next-step and error counts to the Vault session row after this handoff was drafted; VS-92 still lacks durable session memory and cross-app linking. Reviewers, not agents, close Evidence tickets.
