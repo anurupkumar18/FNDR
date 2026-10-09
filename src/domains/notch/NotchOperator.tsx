@@ -7,6 +7,8 @@ import {
     computerUseRespond,
     computerUseStart,
     computerUseStop,
+    openWorkSet,
+    resolveWorkSet,
     type ComputerUseEvent,
 } from "@/shared/ipc/tauri";
 import { openSystemSettings } from "@/shared/ipc/onboarding";
@@ -40,7 +42,7 @@ function runInProgress(state: DoState): boolean {
 
 /** Listening continues through a run so "stop" works; it ends with the run. */
 function wantsMicrophone(state: DoState): boolean {
-    return state.phase === "listening" || state.phase === "heard" || runInProgress(state);
+    return state.phase === "listening" || state.phase === "heard" || state.phase === "choose" || runInProgress(state);
 }
 
 function message(reason: unknown): string {
@@ -105,7 +107,35 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         }
     }, []);
 
+    /** A picked work set is opened by FNDR itself, through the same reopen core. */
+    const openPicked = useCallback(async () => {
+        const set = stateRef.current.workSet;
+        if (!set || stateRef.current.phase !== "plan") return;
+        dispatch({ type: "workSetOpening" });
+        try {
+            const outcomes = await openWorkSet(set.items.map((item) => item.memoryId));
+            // Stopped while opening: what opened stays open, and the card stays stopped.
+            if (runInProgress(stateRef.current)) dispatch({ type: "workSetOpened", outcomes });
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    }, []);
+
+    /** Words that did not name an offered set narrow the request instead. */
+    const refine = useCallback(async (words: string) => {
+        try {
+            const resolution = await resolveWorkSet(`${stateRef.current.transcript} ${words}`);
+            dispatch({ type: "workSetResolved", resolution });
+        } catch (reason) {
+            dispatch({ type: "error", message: message(reason) });
+        }
+    }, []);
+
     const startRun = useCallback(async () => {
+        if (stateRef.current.workSet) {
+            await openPicked();
+            return;
+        }
         const runId = stateRef.current.runId;
         if (!runId || stateRef.current.phase !== "plan") return;
         try {
@@ -113,7 +143,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         } catch (reason) {
             dispatch({ type: "error", message: message(reason) });
         }
-    }, []);
+    }, [openPicked]);
 
     const respond = useCallback(async (approve: boolean) => {
         const approval = stateRef.current.approval;
@@ -132,11 +162,20 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 awaitingApproval: current.approval !== null,
                 awaitingStart: current.phase === "plan" || current.phase === "heard" || current.redirect !== null,
                 running: runInProgress(current),
+                choices: current.phase === "choose" ? current.options : undefined,
             });
             if (!intent) return;
             // The notch's own voice comes back through the microphone; stop, no and go never count as echo.
             if (intent.kind === "request" && spoken && isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
             switch (intent.kind) {
+                case "choose": {
+                    const set = current.options[intent.index];
+                    if (set) dispatch({ type: "workSetChosen", set });
+                    return;
+                }
+                case "refine":
+                    void refine(intent.text);
+                    return;
                 case "stop":
                     void stopRun();
                     return;
@@ -156,7 +195,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                     else void plan(intent.text);
             }
         },
-        [plan, respond, startRun, stopRun],
+        [plan, refine, respond, startRun, stopRun],
     );
 
     const voice = useVoice({
@@ -312,6 +351,8 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 return state.error ?? "Voice isn't available right now.";
             case "planning":
                 return state.usedMemories > 0 ? `Planning with ${state.usedMemories} memories…` : "Planning…";
+            case "choose":
+                return "Which one? Tap it or say its number";
             case "plan":
                 if (state.redirect) return "Paused";
                 return state.autoStart ? "Starting. Say “stop” to cancel" : "Ready. Tap Start or say “go”";
@@ -334,6 +375,26 @@ export function NotchOperator({ active }: NotchOperatorProps) {
             </p>
 
             {state.transcript ? <p className="notch-operator-heard">“{state.transcript}”</p> : null}
+
+            {state.phase === "choose" ? (
+                <ol className="notch-operator-steps" aria-label="Pieces of work">
+                    {state.options.map((option, index) => (
+                        <li key={option.id} className="notch-operator-step is-pending">
+                            <button
+                                type="button"
+                                className="notch-operator-btn"
+                                onClick={() => dispatch({ type: "workSetChosen", set: option })}
+                            >
+                                {index + 1}. {option.title}
+                            </button>
+                            <span className="notch-operator-step-detail">
+                                {option.items.map((item) => item.label).join(" · ")}
+                            </span>
+                            <span className="notch-operator-step-detail">{option.reason}</span>
+                        </li>
+                    ))}
+                </ol>
+            ) : null}
 
             {state.steps.length > 0 ? (
                 <ol className="notch-operator-steps" aria-label="Plan">
@@ -424,6 +485,11 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                             Send now
                         </button>
                     </>
+                ) : null}
+                {state.phase === "choose" ? (
+                    <button type="button" className="notch-operator-btn" onClick={() => void stopRun()}>
+                        Cancel
+                    </button>
                 ) : null}
                 {state.phase === "plan" ? (
                     <>
