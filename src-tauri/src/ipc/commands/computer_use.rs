@@ -2749,4 +2749,257 @@ mod tests {
         .unwrap();
         assert_eq!(failed["reconnect"], true);
     }
+
+    fn work_item(id: &str, label: &str) -> WorkItem {
+        WorkItem {
+            memory_id: id.into(),
+            label: label.into(),
+            kind: crate::workset::ItemKind::Url,
+            reopen_rank: 4,
+            app_name: "Google Chrome".into(),
+            host: Some("canvas.example".into()),
+            page: None,
+            captured_at: 1,
+        }
+    }
+
+    fn work_set(ids: &[&str]) -> WorkSet {
+        WorkSet {
+            id: "ws".into(),
+            title: "Assignment 3".into(),
+            reason: "r".into(),
+            score: 1.0,
+            items: ids
+                .iter()
+                .map(|id| work_item(id, &id.to_uppercase()))
+                .collect(),
+        }
+    }
+
+    type Events = Arc<Mutex<Vec<ComputerUseEvent>>>;
+
+    /// A run context that records its events and starts a plan when shown.
+    fn work_set_run(
+        guards: Guards,
+        dir: &Path,
+    ) -> (RunContext, Events, mpsc::UnboundedReceiver<RunCommand>) {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let events: Events = Arc::default();
+        let recorded = events.clone();
+        let ctx = RunContext {
+            run_id: "w".to_string(),
+            journal: Journal::new(dir.join("journal.jsonl")),
+            guards,
+            request: "pull up everything related to the assignment".to_string(),
+            emit: Arc::new(move |event| {
+                if matches!(event, ComputerUseEvent::Planned { .. }) {
+                    let _ = commands.send(RunCommand::Start);
+                }
+                recorded.lock().unwrap().push(event);
+            }),
+        };
+        (ctx, events, receiver)
+    }
+
+    fn fake_open(
+        opened: Arc<Mutex<Vec<String>>>,
+    ) -> impl FnMut(WorkItem) -> std::future::Ready<ItemOutcome> {
+        move |item| {
+            opened.lock().unwrap().push(item.memory_id.clone());
+            let outcome = if item.memory_id == "b" {
+                crate::memory::reopen::ReopenOutcome::Missing {
+                    path: "/Users/k/b.pdf".into(),
+                }
+            } else {
+                crate::memory::reopen::ReopenOutcome::Opened
+            };
+            let verdict = plan::verify_reopen(&outcome);
+            std::future::ready(ItemOutcome {
+                memory_id: item.memory_id,
+                label: item.label,
+                kind: Some(item.kind),
+                ok: verdict.ok,
+                detail: verdict.detail,
+                outcome: Some(outcome),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_work_set_opens_every_item_and_judges_each_from_its_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let result = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "b", "c"])),
+            receiver,
+            fake_open(opened.clone()),
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *opened.lock().unwrap(),
+            ["a", "b", "c"],
+            "a failed item does not stop the rest"
+        );
+        let events = events.lock().unwrap();
+        match &events[0] {
+            ComputerUseEvent::Planned {
+                steps, auto_start, ..
+            } => {
+                assert!(auto_start, "three plain reopens start by themselves");
+                assert_eq!(steps[0].action, StepAction::ReopenMemory);
+                assert_eq!(steps[0].label, "Open A");
+                assert_eq!(steps[1].item.as_ref().unwrap().memory_id, "b");
+            }
+            other => panic!("expected the plan first, got {other:?}"),
+        }
+        let done: Vec<(usize, bool, bool)> = events
+            .iter()
+            .filter_map(|event| match event {
+                ComputerUseEvent::StepDone {
+                    index, ok, checked, ..
+                } => Some((*index, *ok, *checked)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(done, [(0, true, true), (1, false, false), (2, true, true)]);
+        match events.last().unwrap() {
+            ComputerUseEvent::Finished { ok, summary, .. } => {
+                assert!(!ok);
+                assert_eq!(
+                    summary,
+                    "Opened: A, C. Not opened: B (b.pdf is no longer there)."
+                );
+            }
+            other => panic!("expected the end, got {other:?}"),
+        }
+        let journal = journal_lines(&dir.path().join("journal.jsonl"));
+        let outcomes: Vec<&str> = journal
+            .iter()
+            .map(|line| line["outcome"].as_str().unwrap())
+            .collect();
+        assert_eq!(outcomes, ["ok", "failed", "ok"]);
+        assert!(journal.iter().all(|line| line["tool"] == "reopen_memory"));
+    }
+
+    #[test]
+    fn more_than_three_reopens_wait_for_a_tap() {
+        let request = "pull up everything related to the assignment";
+        let open = Guards::open();
+        let three = plan::from_work_set(&work_set(&["a", "b", "c"]));
+        assert!(plan_starts_by_itself(&three, request, &open));
+        let four = plan::from_work_set(&work_set(&["a", "b", "c", "d"]));
+        assert!(!plan_starts_by_itself(&four, request, &open));
+        let blocked = Guards {
+            halt: Arc::new(|| None),
+            off_limits: Arc::new(|app| app == "Google Chrome"),
+        };
+        assert!(!plan_starts_by_itself(&three, request, &blocked));
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_request_offers_a_choice_and_opens_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let options = vec![work_set(&["a"]), work_set(&["b"])];
+        let result = run_work_set(
+            ctx,
+            Resolution::Ambiguous(options.clone()),
+            receiver,
+            fake_open(opened.clone()),
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(opened.lock().unwrap().is_empty());
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(&events[..], [ComputerUseEvent::Choose { options: shown, .. }] if *shown == options)
+        );
+        let none = run_work_set(
+            work_set_run(Guards::open(), dir.path()).0,
+            Resolution::None {
+                why: "Nothing FNDR remembers matches \u{201c}tax\u{201d}.".into(),
+            },
+            mpsc::unbounded_channel().1,
+            fake_open(opened.clone()),
+        )
+        .await;
+        assert!(matches!(none, Err(RunError::Failed(why)) if why.contains("tax")));
+    }
+
+    #[tokio::test]
+    async fn stop_and_a_halt_end_a_work_set_before_the_next_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+
+        // Stopped while the plan card is showing: nothing opens.
+        let (commands, receiver) = mpsc::unbounded_channel::<RunCommand>();
+        drop(commands);
+        let (ctx, _, _) = work_set_run(Guards::open(), dir.path());
+        let ctx = RunContext {
+            emit: Arc::new(|_| {}),
+            ..ctx
+        };
+        let stopped = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a"])),
+            receiver,
+            fake_open(opened.clone()),
+        )
+        .await;
+        assert_eq!(stopped, Err(RunError::Stopped));
+        assert!(opened.lock().unwrap().is_empty());
+
+        // Actions switched off after the first item: the second never opens.
+        let switched_off = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = switched_off.clone();
+        let guards = Guards {
+            halt: Arc::new(move || {
+                flag.load(std::sync::atomic::Ordering::SeqCst)
+                    .then(|| ACTIONS_OFF.to_string())
+            }),
+            off_limits: Arc::new(|_| false),
+        };
+        let (ctx, _, receiver) = work_set_run(guards, dir.path());
+        let record = opened.clone();
+        let halted = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "c"])),
+            receiver,
+            move |item| {
+                switched_off.store(true, std::sync::atomic::Ordering::SeqCst);
+                fake_open(record.clone())(item)
+            },
+        )
+        .await;
+        assert_eq!(halted, Err(RunError::Failed(ACTIONS_OFF.to_string())));
+        assert_eq!(*opened.lock().unwrap(), ["a"]);
+    }
+
+    #[test]
+    fn a_choice_and_a_reopen_step_serialize_in_the_shape_the_notch_reads() {
+        let choose = serde_json::to_value(ComputerUseEvent::Choose {
+            run_id: "r".into(),
+            options: vec![work_set(&["a"])],
+        })
+        .unwrap();
+        assert_eq!(choose["kind"], "choose");
+        assert_eq!(choose["runId"], "r");
+        assert_eq!(choose["options"][0]["items"][0]["memoryId"], "a");
+        let planned = serde_json::to_value(ComputerUseEvent::Planned {
+            run_id: "r".into(),
+            auto_start: true,
+            steps: step_views(&plan::from_work_set(&work_set(&["a"]))),
+        })
+        .unwrap();
+        assert_eq!(planned["steps"][0]["action"], "reopen_memory");
+        assert_eq!(planned["steps"][0]["item"]["host"], "canvas.example");
+        let plain = serde_json::to_value(step_views(&plan::parse_plan(
+            r#"{"steps":[{"action":"open_app","label":"x","app":"Notes","url":"","goal":"","check":"frontmost"}]}"#,
+        ).unwrap())).unwrap();
+        assert!(plain[0].get("item").is_none());
+    }
 }
