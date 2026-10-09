@@ -153,6 +153,7 @@ export function MemoryCardsPanel({
     const [showVaultMenu, setShowVaultMenu] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [reloadCount, setReloadCount] = useState(0);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
     const [vaultQuery, setVaultQuery] = useState("");
@@ -219,6 +220,19 @@ export function MemoryCardsPanel({
                         .includes(needle))
         );
     }, [cards, timeFilter, perspectiveFilter, vaultQuery]);
+
+    const filtersActive =
+        vaultQuery.trim().length > 0 ||
+        appFilter !== APP_FILTER_ALL ||
+        timeFilter !== TIME_FILTER_ALL ||
+        perspectiveFilter !== PERSPECTIVE_FILTER_ALL;
+
+    const clearFilters = () => {
+        setVaultQuery("");
+        setAppFilter(APP_FILTER_ALL);
+        setTimeFilter(TIME_FILTER_ALL);
+        setPerspectiveFilter(PERSPECTIVE_FILTER_ALL);
+    };
 
     const vaultDays = useMemo(
         () => groupVaultMemories(filteredCards.slice(0, renderedCardLimit), Date.now()),
@@ -347,7 +361,7 @@ export function MemoryCardsPanel({
         return () => {
             cancelled = true;
         };
-    }, [isVisible, appFilter]);
+    }, [isVisible, appFilter, reloadCount]);
 
     useEffect(() => {
         if (!isVisible || !isVaultFeature) return;
@@ -817,7 +831,7 @@ export function MemoryCardsPanel({
                 </section>
                 )}
                 {loading && cards.length === 0 && (
-                    <div className="memory-cards-state">
+                    <div className="memory-cards-state" role="status">
                         <ThinkingIndicator state="searching" size="md" />
                         <p>Loading memory cards...</p>
                     </div>
@@ -830,14 +844,26 @@ export function MemoryCardsPanel({
                 )}
 
                 {error && filteredCards.length === 0 && (
-                    <div className="memory-cards-state">
-                        <p>{error}</p>
+                    <div className="memory-cards-state" role="alert">
+                        <p>Memories could not be loaded: {error}</p>
+                        <button type="button" className="ui-action-btn" onClick={() => setReloadCount((count) => count + 1)}>
+                            Try again
+                        </button>
                     </div>
                 )}
 
                 {!loading && !error && filteredCards.length === 0 && (
                     <div className="memory-cards-state">
-                        <p>No memory cards yet for this filter.</p>
+                        {filtersActive ? (
+                            <>
+                                <p>No memories match these filters.</p>
+                                <button type="button" className="ui-action-btn" onClick={clearFilters}>
+                                    Clear filters
+                                </button>
+                            </>
+                        ) : (
+                            <p>No memories yet. While capture is on, FNDR saves moments from your work here.</p>
+                        )}
                     </div>
                 )}
 

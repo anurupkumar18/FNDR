@@ -105,6 +105,36 @@ describe("MemoryCardsPanel", () => {
         expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
     });
 
+    it("offers Try again when the vault cannot load, and loads again on it", async () => {
+        vi.mocked(listMemoryCards).mockRejectedValueOnce(new Error("store busy")).mockResolvedValueOnce([card(1)]);
+        renderVault();
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Memories could not be loaded: store busy");
+        fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+
+        expect(await screen.findByText("Memory 1")).toBeInTheDocument();
+        expect(listMemoryCards).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells an empty vault from a filter with no matches, and clears filters in one click", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+        renderVault();
+        await screen.findByText("Memory 1");
+
+        fireEvent.change(screen.getByRole("searchbox", { name: "Filter memories by text" }), {
+            target: { value: "nothing like this" },
+        });
+        expect(screen.getByText("No memories match these filters.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+        expect(screen.getByText("Memory 1")).toBeInTheDocument();
+
+        cleanup();
+        vi.mocked(listMemoryCards).mockResolvedValue([]);
+        renderVault();
+        expect(await screen.findByText(/No memories yet\. While capture is on/)).toBeInTheDocument();
+    });
+
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
         vi.mocked(listMemoryCards).mockResolvedValue([]);
         const onClose = vi.fn();
