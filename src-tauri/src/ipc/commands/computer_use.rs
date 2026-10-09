@@ -442,6 +442,8 @@ pub(crate) struct Session {
     operator_thread: String,
     /// The person said no to an action during the turn in progress.
     declined: bool,
+    /// What the operator said about the last operate step it finished.
+    last_report: Option<String>,
 }
 
 impl Session {
@@ -502,6 +504,7 @@ impl Session {
             server,
             next_id: 1_000,
             declined: false,
+            last_report: None,
         })
     }
 
@@ -832,14 +835,38 @@ fn record_tool_result(
 
 // MARK: - A run
 
-fn plan_request_text(transcript: &str, snippets: &[memory::MemorySnippet]) -> String {
-    if snippets.is_empty() {
-        format!("Request: {transcript}")
-    } else {
-        format!(
-            "Request: {transcript}\n\nMemory snippets:\n{}",
+fn plan_request_text(
+    transcript: &str,
+    snippets: &[memory::MemorySnippet],
+    in_front: Option<&str>,
+) -> String {
+    let mut text = format!("Request: {transcript}");
+    if let Some(app) = in_front {
+        // The name only, so "this page" has something to mean.
+        text.push_str(&format!("\nIn front: {app}"));
+    }
+    if !snippets.is_empty() {
+        text.push_str(&format!(
+            "\n\nMemory snippets:\n{}",
             memory::format_block(snippets)
-        )
+        ));
+    }
+    text
+}
+
+/// The app the person is looking at, for the planner. Never an app FNDR may
+/// not read, and never FNDR itself.
+fn app_in_front(seen: &plan::Observation, guards: &Guards) -> Option<String> {
+    let app = seen.frontmost_app.trim();
+    (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
+}
+
+/// What a run adds to "Done" when its last operate step reported something:
+/// the answer to a request that only reads, in the model's words and marked so.
+fn with_report(summary: String, report: Option<&str>) -> String {
+    match report.map(str::trim).filter(|report| !report.is_empty()) {
+        Some(report) => format!("{summary} Reported: {}", truncate(report, 400)),
+        None => summary,
     }
 }
 
@@ -1093,9 +1120,15 @@ async fn attempt_step(
             )
             .await
             .map_err(|_| RunError::Failed(format!("\"{}\" took too long.", step.label)))??;
-            let reported_done = serde_json::from_str::<Value>(&report)
-                .ok()
+            let report = serde_json::from_str::<Value>(&report).ok();
+            let reported_done = report
+                .as_ref()
                 .and_then(|value| value.get("done").and_then(Value::as_bool));
+            session.last_report = report
+                .as_ref()
+                .filter(|_| reported_done == Some(true))
+                .and_then(|value| value.get("detail").and_then(Value::as_str))
+                .map(str::to_string);
             let mut seen = native::observe(media_app).await;
             // Poll only a player that answered: an unreadable one stays unreadable.
             if media_app.is_some() && seen.media_playing == Some(false) {
@@ -1169,7 +1202,8 @@ async fn run_with_snippets(
     }
     let mut observed = Observed::default();
 
-    let request = plan_request_text(&transcript, &snippets);
+    let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
+    let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
         MODEL_HOST,
@@ -1275,7 +1309,10 @@ async fn run_with_snippets(
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: plan::with_left_out_note(format!("Done: {}.", done.join(", ")), &ctx.request),
+        summary: plan::with_left_out_note(
+            with_report(format!("Done: {}.", done.join(", ")), session.last_report.as_deref()),
+            &ctx.request,
+        ),
     });
     session.server.shutdown().await;
     Ok(())
@@ -1728,7 +1765,7 @@ mod tests {
     #[test]
     fn memories_reach_the_planner_only_when_retrieved() {
         assert_eq!(
-            plan_request_text("open Spotify", &[]),
+            plan_request_text("open Spotify", &[], None),
             "Request: open Spotify"
         );
         let snippet = memory::MemorySnippet {
@@ -1739,8 +1776,33 @@ mod tests {
             timestamp: 1_790_000_000_000,
             text: "played".into(),
         };
-        let text = plan_request_text("play the song from yesterday", &[snippet]);
+        let text = plan_request_text("play the song from yesterday", &[snippet], Some("Music"));
         assert!(text.contains("Memory snippets:\n[1] 2026-10-05 21:00 | Spotify | Blinding Lights"));
+        assert!(text.starts_with("Request: play the song from yesterday\nIn front: Music\n"));
+    }
+
+    #[test]
+    fn the_planner_learns_the_app_in_front_unless_it_is_off_limits() {
+        let seen = |app: &str| plan::Observation {
+            frontmost_app: app.to_string(),
+            ..Default::default()
+        };
+        let mut guards = Guards::open();
+        assert_eq!(app_in_front(&seen("Google Chrome"), &guards).as_deref(), Some("Google Chrome"));
+        assert_eq!(app_in_front(&seen(""), &guards), None);
+        guards.off_limits = Arc::new(|app| app == "1Password");
+        assert_eq!(app_in_front(&seen("1Password"), &guards), None);
+    }
+
+    #[test]
+    fn a_run_that_only_read_shows_what_was_reported() {
+        // Live run, 2026-10-08: "summarize the article" ended in a bare "Done".
+        assert_eq!(
+            with_report("Done: Summarize article.".into(), Some(" It argues X. ")),
+            "Done: Summarize article. Reported: It argues X."
+        );
+        assert_eq!(with_report("Done: Open Chrome.".into(), None), "Done: Open Chrome.");
+        assert_eq!(with_report("Done.".into(), Some("  ")), "Done.");
     }
 
     #[test]
