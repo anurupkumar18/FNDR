@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::operator::mcp::{AppRef, Desktop, Limits};
+
 /// The most windows one layout may hold. More is refused, by policy and here.
 pub const MAX_WINDOWS: usize = 6;
 
@@ -173,6 +175,412 @@ pub fn nearest_screen(frame: Rect, screens: &[Screen]) -> Option<usize> {
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(at, _)| at)
+}
+
+/// One window of an app, as the Mac reports it.
+pub struct Window<H> {
+    pub title: String,
+    pub frame: Rect,
+    pub minimized: bool,
+    pub handle: H,
+}
+
+/// A window as FNDR listed it. `id` is valid only in the list it came from:
+/// ids keep counting up across lists, so an id from an older list is refused
+/// by number alone.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WindowRef {
+    pub id: u64,
+    pub app: String,
+    pub bundle: String,
+    pub title: String,
+    pub frame: Rect,
+    /// Index into the displays listed with it, `None` when off every display.
+    pub display: Option<usize>,
+    pub minimized: bool,
+}
+
+/// What became of one window.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Placed {
+    pub id: u64,
+    pub app: String,
+    pub title: String,
+    /// Where FNDR asked the window to go.
+    pub asked: Rect,
+    /// Where the window says it is afterwards. An app may keep a minimum
+    /// size, so this can differ from `asked`.
+    pub now: Option<Rect>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutOutcome {
+    /// Every window named was tried; each says how it went.
+    Arranged(Vec<Placed>),
+    /// Nothing was moved.
+    Refused(String),
+}
+
+/// A window a call names: its id from the latest list and the app it is
+/// said to belong to, which must be the app FNDR listed it under.
+#[derive(Debug, Clone, Copy)]
+pub struct Target<'a> {
+    pub id: u64,
+    pub app: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Change {
+    Move { x: f64, y: f64 },
+    Resize { width: f64, height: f64 },
+}
+
+struct Listing<H> {
+    first: u64,
+    windows: Vec<(WindowRef, H)>,
+}
+
+/// The latest window list and the frames windows had before FNDR first moved
+/// them, for `restore_previous`.
+pub struct Windows<H> {
+    listing: Option<Listing<H>>,
+    next_id: u64,
+    previous: Vec<(H, Rect)>,
+}
+
+impl<H> Default for Windows<H> {
+    fn default() -> Self {
+        Self {
+            listing: None,
+            next_id: 1,
+            previous: Vec::new(),
+        }
+    }
+}
+
+/// Why FNDR will not arrange this app's windows: FNDR itself, the blocklist,
+/// or an app on the policy's sensitive list.
+pub(crate) fn off_limits(app: &AppRef, limits: &Limits) -> Option<String> {
+    limits.refusal(app).or_else(|| {
+        (crate::operator::policy::is_sensitive_app(&app.name)
+            || crate::operator::policy::is_sensitive_app(&app.bundle))
+        .then(|| format!("{} is off limits to Notch Do.", app.name))
+    })
+}
+
+impl<H: Clone + PartialEq> Windows<H> {
+    /// Lists the windows of `app`, or of every app FNDR may operate, and
+    /// makes this the list later calls name windows from.
+    pub fn list<D: Desktop<Handle = H>>(
+        &mut self,
+        desktop: &mut D,
+        limits: &Limits,
+        app: Option<&str>,
+    ) -> Result<(Vec<WindowRef>, Vec<Screen>), String> {
+        let running = desktop.list_apps();
+        let apps = match app.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => {
+                let found = crate::operator::mcp::resolve_app(&running, name, limits)?;
+                if let Some(reason) = off_limits(&found, limits) {
+                    return Err(reason);
+                }
+                vec![found]
+            }
+            None => {
+                let mut allowed: Vec<AppRef> = running
+                    .into_iter()
+                    .filter(|app| off_limits(app, limits).is_none())
+                    .collect();
+                allowed.dedup_by_key(|app| app.pid);
+                allowed
+            }
+        };
+        let screens = desktop.screens();
+        let first = self.next_id;
+        let mut windows = Vec::new();
+        for app in &apps {
+            let found = match desktop.windows(app) {
+                Ok(found) => found,
+                Err(error) if apps.len() == 1 => return Err(error),
+                Err(_) => continue,
+            };
+            for window in found {
+                let id = first + windows.len() as u64;
+                windows.push((
+                    WindowRef {
+                        id,
+                        app: app.name.clone(),
+                        bundle: app.bundle.clone(),
+                        title: window.title,
+                        frame: window.frame,
+                        display: screen_holding(window.frame, &screens),
+                        minimized: window.minimized,
+                    },
+                    window.handle,
+                ));
+            }
+        }
+        self.next_id = first + windows.len() as u64;
+        let refs = windows.iter().map(|(window, _)| window.clone()).collect();
+        self.listing = Some(Listing { first, windows });
+        Ok((refs, screens))
+    }
+
+    /// Where each target sits in the current list, refused unless every one
+    /// is from that list, belongs to the app named and can be moved.
+    fn locate(&self, targets: &[Target]) -> Result<Vec<usize>, String> {
+        if targets.is_empty() {
+            return Err("Name at least one window.".to_string());
+        }
+        if targets.len() > MAX_WINDOWS {
+            return Err(format!("A layout holds at most {MAX_WINDOWS} windows."));
+        }
+        let listing = self
+            .listing
+            .as_ref()
+            .ok_or("Call list_windows before moving a window.")?;
+        let mut found = Vec::with_capacity(targets.len());
+        for target in targets {
+            let at = target
+                .id
+                .checked_sub(listing.first)
+                .map(|at| at as usize)
+                .filter(|at| *at < listing.windows.len())
+                .ok_or_else(|| {
+                    format!(
+                        "Window {} is not in the current list of windows. Call list_windows again.",
+                        target.id
+                    )
+                })?;
+            let window = &listing.windows[at].0;
+            let app = AppRef {
+                pid: 0,
+                name: window.app.clone(),
+                bundle: window.bundle.clone(),
+            };
+            if !crate::operator::mcp::app_matches(&app, target.app) {
+                return Err(format!(
+                    "Window {} belongs to {}, not {}.",
+                    target.id,
+                    window.app,
+                    target.app.trim()
+                ));
+            }
+            if window.minimized {
+                return Err(format!("Window {} is minimized.", target.id));
+            }
+            if found.contains(&at) {
+                return Err(format!("Window {} is named twice.", target.id));
+            }
+            found.push(at);
+        }
+        Ok(found)
+    }
+
+    /// Puts `targets` into `layout`, in order, on `display` (an index into
+    /// the displays) or on the display holding the first of them.
+    pub fn arrange<D: Desktop<Handle = H>>(
+        &mut self,
+        desktop: &mut D,
+        targets: &[Target],
+        layout: Layout,
+        display: Option<usize>,
+    ) -> LayoutOutcome {
+        let found = match self.locate(targets) {
+            Ok(found) => found,
+            Err(reason) => return LayoutOutcome::Refused(reason),
+        };
+        let current = match self.current_frames(desktop, &found) {
+            Ok(current) => current,
+            Err(reason) => return LayoutOutcome::Refused(reason),
+        };
+        let asked: Vec<Option<Rect>> = if layout == Layout::RestorePrevious {
+            let listing = self.listing.as_ref().expect("located");
+            found
+                .iter()
+                .map(|at| {
+                    let handle = &listing.windows[*at].1;
+                    self.previous
+                        .iter()
+                        .find(|(seen, _)| seen == handle)
+                        .map(|(_, frame)| *frame)
+                })
+                .collect()
+        } else {
+            let screens = desktop.screens();
+            let screen = match display {
+                Some(at) => match screens.get(at) {
+                    Some(screen) => *screen,
+                    None => {
+                        return LayoutOutcome::Refused(format!("There is no display {}.", at + 1))
+                    }
+                },
+                None => match nearest_screen(current[0], &screens) {
+                    Some(at) => screens[at],
+                    None => return LayoutOutcome::Refused("No display was found.".to_string()),
+                },
+            };
+            match frames(layout, screen.visible, found.len()) {
+                Ok(cells) => cells.into_iter().map(Some).collect(),
+                Err(reason) => return LayoutOutcome::Refused(reason),
+            }
+        };
+        let placed = found
+            .iter()
+            .zip(current)
+            .zip(asked)
+            .map(|((at, before), asked)| match asked {
+                Some(asked) => self.set(
+                    desktop,
+                    *at,
+                    before,
+                    asked,
+                    layout == Layout::RestorePrevious,
+                ),
+                None => {
+                    let window = &self.listing.as_ref().expect("located").windows[*at].0;
+                    Placed {
+                        id: window.id,
+                        app: window.app.clone(),
+                        title: window.title.clone(),
+                        asked: before,
+                        now: Some(before),
+                        error: Some(
+                            "FNDR has not moved this window, so there is nothing to put back."
+                                .to_string(),
+                        ),
+                    }
+                }
+            })
+            .collect();
+        self.listing = None;
+        LayoutOutcome::Arranged(placed)
+    }
+
+    /// Moves or resizes one window, kept inside the visible part of the
+    /// display it lands on.
+    pub fn place<D: Desktop<Handle = H>>(
+        &mut self,
+        desktop: &mut D,
+        target: Target,
+        change: Change,
+    ) -> LayoutOutcome {
+        let found = match self.locate(&[target]) {
+            Ok(found) => found,
+            Err(reason) => return LayoutOutcome::Refused(reason),
+        };
+        let before = match self.current_frames(desktop, &found) {
+            Ok(current) => current[0],
+            Err(reason) => return LayoutOutcome::Refused(reason),
+        };
+        let wanted = match change {
+            Change::Move { x, y } => Rect::new(x, y, before.width, before.height),
+            Change::Resize { width, height } => Rect::new(before.x, before.y, width, height),
+        };
+        let numbers = [wanted.x, wanted.y, wanted.width, wanted.height];
+        if numbers.iter().any(|n| !n.is_finite()) || wanted.width < 1.0 || wanted.height < 1.0 {
+            return LayoutOutcome::Refused(
+                "Give whole, positive sizes and a position.".to_string(),
+            );
+        }
+        let screens = desktop.screens();
+        let asked = match nearest_screen(wanted, &screens) {
+            Some(at) => clamp(wanted, screens[at].visible),
+            None => return LayoutOutcome::Refused("No display was found.".to_string()),
+        };
+        let placed = self.set(desktop, found[0], before, asked, false);
+        self.listing = None;
+        LayoutOutcome::Arranged(vec![placed])
+    }
+
+    /// Each window's frame now; refuses, and drops the list, when one is gone.
+    fn current_frames<D: Desktop<Handle = H>>(
+        &mut self,
+        desktop: &mut D,
+        found: &[usize],
+    ) -> Result<Vec<Rect>, String> {
+        let listing = self.listing.as_ref().expect("located");
+        let mut frames = Vec::with_capacity(found.len());
+        for at in found {
+            let (window, handle) = &listing.windows[*at];
+            match desktop.frame(handle) {
+                Some(frame) => frames.push(frame),
+                None => {
+                    let reason = format!("Window {} is gone. Call list_windows again.", window.id);
+                    self.listing = None;
+                    return Err(reason);
+                }
+            }
+        }
+        Ok(frames)
+    }
+
+    fn set<D: Desktop<Handle = H>>(
+        &mut self,
+        desktop: &mut D,
+        at: usize,
+        before: Rect,
+        asked: Rect,
+        restoring: bool,
+    ) -> Placed {
+        let (window, handle) = self.listing.as_ref().expect("located").windows[at].clone();
+        let remembered = self.previous.iter().position(|(seen, _)| *seen == handle);
+        let result = desktop.set_frame(&handle, asked);
+        let now = desktop.frame(&handle);
+        let placed = Placed {
+            id: window.id,
+            app: window.app,
+            title: window.title,
+            asked,
+            now,
+            error: result.err(),
+        };
+        match (restoring, remembered) {
+            (true, Some(position)) if placed.error.is_none() => {
+                self.previous.remove(position);
+            }
+            (false, None) => {
+                self.previous.push((handle, before));
+            }
+            _ => {}
+        }
+        placed
+    }
+}
+
+static SHARED: once_cell::sync::Lazy<parking_lot::Mutex<Windows<crate::accessibility::AxElement>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(Windows::default()));
+
+/// Lists windows for code inside FNDR, such as a work set that has just
+/// opened its documents. `app` narrows the list to one app. The ids are
+/// valid for the next `arrange` call only.
+///
+/// The caller keeps the run's guards: nothing is listed or moved while
+/// Private Mode is on or actions are switched off, the same as every Notch Do
+/// action (`limits` comes from `Limits::from_settings`).
+pub fn list_windows(app: Option<&str>, limits: &Limits) -> Result<Vec<WindowRef>, String> {
+    SHARED
+        .lock()
+        .list(&mut crate::accessibility::AxDesktop, limits, app)
+        .map(|(windows, _)| windows)
+}
+
+/// Puts the windows from the latest `list_windows` into `layout`, in order,
+/// on the display holding the first of them. `RestorePrevious` puts them back
+/// where they were before FNDR first moved them.
+pub fn arrange(windows: &[WindowRef], layout: Layout) -> LayoutOutcome {
+    let targets: Vec<Target> = windows
+        .iter()
+        .map(|window| Target {
+            id: window.id,
+            app: &window.app,
+        })
+        .collect();
+    SHARED
+        .lock()
+        .arrange(&mut crate::accessibility::AxDesktop, &targets, layout, None)
 }
 
 #[cfg(test)]
