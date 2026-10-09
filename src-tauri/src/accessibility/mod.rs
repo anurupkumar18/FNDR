@@ -4,7 +4,10 @@
 //! 1. Identify the currently focused input field's label in any app
 //! 2. Inject text directly into that field without requiring keyboard focus
 
+mod operate;
 mod text_tree;
+
+pub use operate::AxDesktop;
 
 use crate::ocr::{OcrConfig, OcrEngine};
 use objc2_app_kit::NSWorkspace;
@@ -709,7 +712,7 @@ unsafe fn enable_manual_accessibility(application: AXUIElementRef) {
 }
 
 /// An owned AXUIElement reference, released on drop.
-struct AxElement(AXUIElementRef);
+pub struct AxElement(AXUIElementRef);
 
 impl Drop for AxElement {
     fn drop(&mut self) {

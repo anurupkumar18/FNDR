@@ -134,7 +134,7 @@ pub(crate) fn parse_lsappinfo(out: &str) -> Option<(i32, String, String)> {
 
 /// Which app LaunchServices has in front. Current even in a process whose main
 /// run loop is not spinning, where `NSWorkspace.frontmostApplication` goes stale.
-fn lsappinfo_front() -> Option<(i32, String, String)> {
+pub(crate) fn lsappinfo_front() -> Option<(i32, String, String)> {
     let run = |args: &[&str]| -> Option<String> {
         let output = std::process::Command::new("/usr/bin/lsappinfo")
             .args(args)
