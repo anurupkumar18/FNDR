@@ -147,3 +147,16 @@ Accepted by the owner. Two lines of the amendment above change:
 
 - The plan card starts the run by itself only when no step in it can need a yes (opening an app, a link the person's words account for, playback in a media app). Any other plan waits for a tap or "go".
 - Speech never approves an action. A pending approval is answered with a tap or a key; speech can decline it or stop the run. "Stop" is also heard behind a lead-in such as "please".
+
+## Amendment 2026-10-08: Notch Do talks back
+
+Directed by the owner ("computer use should work like Jarvis, pulling up things, talking back to me") and decided under the delegation rule in `AGENTS.md`. It replaces "Notch Do does not speak" in the 2026-10-06 amendment and, for Notch Do only, the spoken-answers and review rules above. Home/Search, Screen Guide and Notch Ask keep them: no spoken answers unless opted in.
+
+- Notch Do speaks short plain status while it works: what it understood and how many steps, each step as it starts, a retry, a step that failed, anything it left out or refused, and the end. The end says how many steps FNDR checked itself and which are only as the model reported, and that nothing is undone automatically. The lines are composed in code from the run's state (`src/domains/notch/doNarration.ts`); no model writes them.
+- It is on by default for Notch Do, with a mute switch in the notch (remembered in the webview, `fndr.notch.do.muted`). Muting, Stop, a new utterance, a failure of the microphone and closing the notch cancel speech at once.
+- Speech is the webview's system-voice synthesis (`notchSpeech.ts`). It runs in the FNDR process, so there is no child process to orphan, and no text goes to a cloud service.
+- The final transcript is still shown on the heard/plan card, which is the review step; it is no longer a separate gate. A plan in which no step can need a yes starts by itself after 1.5 s (unchanged, ADR 024). A plan that can need a yes waits for Start. Any ask-first action is announced aloud and needs a visible Allow; a spoken "no" declines, a spoken "yes" still approves nothing (ADR 024). The policy in `operator/policy.rs`, Private Mode and the blocklist are unchanged, and the person can always Stop, by voice or button.
+- The microphone stays open while FNDR talks so "stop" works. Heard text that only repeats what FNDR just said is dropped as echo, except stop, no and go.
+- One microphone owner is unchanged (`voice/mod.rs`, surface `notch_do`).
+
+Follow-ups: a spoken yes/no for approvals needs a speaker-independent way to tell the person from the room, which the voice stack does not offer, so it is not built. A persisted Settings switch (today the mute is per webview) needs a field in `config.rs` and `set_screen_guide_settings`. Real audio output has not been heard in the packaged app.
