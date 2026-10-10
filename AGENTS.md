@@ -34,14 +34,14 @@ A failing check is reported as failing, with its output. A test that fails in an
 Several agent sessions and people work in this one checkout at the same time.
 
 - Check the branch before you commit. Commit by path. Where a file also holds someone else's uncommitted lines, stage only your own hunks.
-- Never stash, reset, switch branches or create a worktree unless the owner says so.
+- Never stash, reset or switch branches in the shared checkout. When the owner authorizes parallel work, use an isolated worktree if the shared checkout is unsafe for the change; leave other sessions' files alone.
 - Rust builds are heavy on this machine: run one at a time, with `CARGO_BUILD_JOBS=2`.
 - The disk is small. Check `df -h ~` before a long build; under 15 GB free, run `make clean-test-binaries` (removes linked test executables older than a day from the shared build cache). Delete your own scratch copies when you finish.
 - Another session's uncommitted work can break the Rust build. `make test-clean FILES="<your changed files>"` runs the library tests on the committed tree plus only your files, in a scratch copy. Integration tests under `src-tauri/tests` run in the checkout.
 - Format only what you changed: `rustfmt --edition 2021 --check <file>`, then fix your own lines. `cargo fmt` rewrites the whole crate, other sessions' files included. The frontend has no formatter config: match the file by hand and do not run prettier.
 - A tool that rewrites a database refuses the real profile unless told otherwise. Rewriting the owner's vault needs FNDR closed, a backup first, and the owner's go-ahead.
-- When `git merge` or `git pull` is refused because another session has uncommitted work in files the incoming commits touch, do not wait and do not stash: `scripts/dev/publish-merged.sh "what this publishes"` test-merges in memory, runs the checks on an export of the merged tree, and pushes the merge as a commit object. The checkout is not moved and fast-forwards later.
-- `git push origin` pushes to GitLab and GitHub. One can reject while the other reports "Everything up-to-date", so confirm with `git ls-remote origin main`.
+- When `git merge` or `git pull` is refused because another session has uncommitted work in files the incoming commits touch, `scripts/dev/publish-merged.sh "what this publishes"` needs neither a stash nor a worktree: it test-merges in memory, runs the checks on an export of the merged tree, and pushes the merge as a commit object. The checkout is not moved and fast-forwards later. It stops on a real conflict.
+- `git push origin` pushes to GitLab and GitHub. Verify both tips with `git ls-remote origin refs/heads/main` and `git ls-remote gh refs/heads/main`. If one rejects, fetch and merge in an isolated worktree; never force-push or reset the shared checkout.
 - Commits, merge requests and tickets carry no AI attribution and no co-author trailer.
 - New text in docs, tickets and commit messages uses no em or en dashes.
 
