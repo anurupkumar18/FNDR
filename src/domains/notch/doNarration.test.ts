@@ -180,6 +180,27 @@ describe("narrating a work set", () => {
         expect(said?.text).toBe("Which one? The choices are on screen.");
     });
 
+    it("says how the windows were arranged ahead of what opened, and why not when they were not", () => {
+        const finish = (summary: string) =>
+            lines(
+                { type: "planRequested", runId: "r1", transcript: "pull up the assignment side by side" },
+                event({ kind: "planned", runId: "r1", autoStart: true, steps: [CANVAS, PDF].map(reopen) }),
+                event({ kind: "finished", runId: "r1", ok: true, summary }),
+            )[2]?.text;
+        expect(finish("Arranged side by side. Opened: Assignment 3, reading.pdf, page 4.")).toMatch(/^Done\. Arranged side by side\. Opened/);
+        expect(finish("Not arranged: FNDR is private right now. Opened: Assignment 3.")).toMatch(
+            /^Done\. Not arranged: FNDR is private right now\. Opened: Assignment 3\./,
+        );
+    });
+
+    it("says a saved set's name and how to bring it back", () => {
+        const said = lines(
+            { type: "planRequested", runId: "r2", transcript: "save this as capstone demo prep" },
+            event({ kind: "finished", runId: "r2", ok: true, summary: "Saved as \u201ccapstone demo prep\u201d. Say \u201copen capstone demo prep\u201d to bring it back." }),
+        )[1];
+        expect(said?.text).toBe("Done. Saved as \u201ccapstone demo prep\u201d. Say \u201copen capstone demo prep\u201d to bring it back.");
+    });
+
     it("names files, folders and apps", () => {
         expect(spokenItem({ ...DOC, kind: "file", label: "budget.xlsx" })).toBe("the file budget.xlsx");
         expect(spokenItem({ ...DOC, kind: "folder", label: "Lab 3" })).toBe("the Lab 3 folder");
