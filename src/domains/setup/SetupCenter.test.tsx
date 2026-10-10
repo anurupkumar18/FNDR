@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/plugin-updater", () => updater);
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@/shared/utils/openExternalUrl", () => ({ openExternalUrl: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/domains/screen-guide/OperatorPermissions", () => ({ OperatorPermissions: () => <div>permissions</div> }));
+vi.mock("./CalendarMeetingPrep", () => ({ CalendarMeetingPrep: () => <div>calendar</div> }));
 
 import { SetupCenter } from "./SetupCenter";
 
