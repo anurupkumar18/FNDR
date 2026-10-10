@@ -223,6 +223,174 @@ pub fn asks_for_work_set(request: &str) -> bool {
     pattern.is_match(request) && !asks_for_something_never_done(request)
 }
 
+/// Lowercase words of a request, without punctuation.
+fn request_words(request: &str) -> Vec<String> {
+    request
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Words that say how the windows should sit, at the end of a request.
+const LAYOUT_PHRASES: &[(&str, crate::operator::layout::Layout)] = &[
+    (
+        "side by side",
+        crate::operator::layout::Layout::LeftRightSplit,
+    ),
+    (
+        "next to each other",
+        crate::operator::layout::Layout::LeftRightSplit,
+    ),
+    (
+        "in a split",
+        crate::operator::layout::Layout::LeftRightSplit,
+    ),
+    ("split", crate::operator::layout::Layout::LeftRightSplit),
+];
+
+/// The layout a request asks for: "side by side", "split" or "next to each
+/// other" put the windows in columns. None when it names no layout.
+pub fn layout_asked_for(request: &str) -> Option<crate::operator::layout::Layout> {
+    let words = format!(" {} ", request_words(request).join(" "));
+    LAYOUT_PHRASES
+        .iter()
+        .find(|(phrase, _)| words.contains(&format!(" {phrase} ")))
+        .map(|(_, layout)| *layout)
+}
+
+/// The name in "save this as capstone demo prep", said right after a work
+/// set opened. None for anything else.
+pub fn save_set_name(request: &str) -> Option<String> {
+    static SAVE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = SAVE.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)^\s*(please\s+)?(save|keep|name|call)\s+(this\s+set|that\s+set|the\s+set|these|those|them|this|that|it)\s+(as|to|under)?\s*(?P<name>.+?)[\s.!"'\u{201d}]*$"#,
+        )
+        .expect("save pattern compiles")
+    });
+    let name = pattern.captures(request)?.name("name")?.as_str();
+    let name = name.trim_matches(|c: char| {
+        c == '"' || c == '\u{201c}' || c == '\u{201d}' || c.is_whitespace()
+    });
+    let name = ["my ", "the "]
+        .iter()
+        .find_map(|lead| {
+            name.get(..lead.len())
+                .filter(|head| head.eq_ignore_ascii_case(lead))
+                .map(|_| &name[lead.len()..])
+        })
+        .unwrap_or(name)
+        .trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Openers that start a request for a saved set, longest first.
+const SET_OPENERS: &[&str] = &[
+    "set back up",
+    "bring back",
+    "set up",
+    "pull up",
+    "bring up",
+    "open up",
+    "get out",
+    "switch to",
+    "reopen",
+    "open",
+    "load",
+    "start",
+    "resume",
+];
+
+/// Words around a set's name that are not part of it.
+const SET_FILLER: &[&str] = &[
+    "my",
+    "the",
+    "our",
+    "set",
+    "work",
+    "workspace",
+    "again",
+    "please",
+    "now",
+    "for",
+    "me",
+];
+
+/// Which of the person's saved sets a request names, decided on this Mac:
+/// the name itself ("set up capstone demo prep"), then a close name ("open
+/// my capstone set"). A close name counts only when it fits one set alone;
+/// two sets that fit equally are left to the usual resolution. `names` are
+/// the saved names; the result is an index into them.
+pub fn named_set_asked_for(request: &str, names: &[String]) -> Option<usize> {
+    if names.is_empty() || asks_for_something_never_done(request) {
+        return None;
+    }
+    let mut words = request_words(request);
+    for lead in ["please", "can", "could", "you", "fndr", "hey"] {
+        if words.first().is_some_and(|word| word == lead) {
+            words.remove(0);
+        }
+    }
+    let said = words.join(" ");
+    let opener = SET_OPENERS
+        .iter()
+        .find(|opener| said == **opener || said.starts_with(&format!("{opener} ")))?;
+    let mut rest: Vec<String> = words[opener.split(' ').count()..].to_vec();
+    for (phrase, _) in LAYOUT_PHRASES {
+        let phrase: Vec<&str> = phrase.split(' ').collect();
+        if rest.len() >= phrase.len() && rest[rest.len() - phrase.len()..] == phrase[..] {
+            rest.truncate(rest.len() - phrase.len());
+        }
+    }
+    let called_a_set = rest.iter().any(|word| word == "set");
+    let exact = rest.join(" ");
+    let normalized: Vec<Vec<String>> = names.iter().map(|name| request_words(name)).collect();
+    if let Some(at) = normalized.iter().position(|name| name.join(" ") == exact) {
+        return Some(at);
+    }
+    let rest: Vec<String> = rest
+        .into_iter()
+        .filter(|word| !SET_FILLER.contains(&word.as_str()))
+        .collect();
+    if rest.is_empty() {
+        return None;
+    }
+    let only = |fits: Vec<usize>| (fits.len() == 1).then(|| fits[0]);
+    if let Some(at) = normalized.iter().position(|name| {
+        name.iter()
+            .filter(|w| !SET_FILLER.contains(&w.as_str()))
+            .eq(rest.iter())
+    }) {
+        return Some(at);
+    }
+    // The request says part of one name: "open my capstone set".
+    if called_a_set || rest.len() >= 2 {
+        let part: Vec<usize> = normalized
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| rest.iter().all(|word| name.contains(word)))
+            .map(|(at, _)| at)
+            .collect();
+        if let Some(at) = only(part) {
+            return Some(at);
+        }
+    }
+    // The request says a whole name and a word or two more.
+    let whole: Vec<usize> = normalized
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| {
+            !name.is_empty()
+                && rest.len() <= name.len() + 2
+                && name.iter().all(|word| rest.contains(word))
+        })
+        .map(|(at, _)| at)
+        .collect();
+    only(whole)
+}
+
 /// The plan for a work set: one `reopen_memory` step per item, in the
 /// set's order. Built by code from what FNDR resolved, never by a model.
 pub fn from_work_set(set: &crate::workset::WorkSet) -> Plan {
@@ -828,6 +996,85 @@ mod tests {
             "show me the way to the station",
         ] {
             assert!(!asks_for_work_set(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_saved_set_is_found_by_its_name_then_by_a_close_name() {
+        let names: Vec<String> = ["Capstone demo prep", "Bio lab", "Capstone report"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        for (text, want) in [
+            ("set up capstone demo prep", 0),
+            ("Set up Capstone Demo Prep.", 0),
+            ("open bio lab", 1),
+            ("please open my bio lab set", 1),
+            ("open my capstone demo set", 0),
+            ("pull up capstone report side by side", 2),
+            ("bring up the capstone demo prep stuff", 0),
+            ("reopen capstone report again", 2),
+        ] {
+            assert_eq!(named_set_asked_for(text, &names), Some(want), "{text}");
+        }
+        for text in [
+            "open my capstone set",
+            "open notes",
+            "open Safari",
+            "delete capstone demo prep",
+            "set up capstone demo prep and email it to Sam",
+            "what is capstone demo prep",
+            "open",
+            "set a timer for 10 minutes",
+        ] {
+            assert_eq!(named_set_asked_for(text, &names), None, "{text}");
+        }
+        let one = vec!["Capstone demo prep".to_string()];
+        assert_eq!(
+            named_set_asked_for("open my capstone set", &one),
+            Some(0),
+            "a part of a name is enough when one set alone has it"
+        );
+        assert_eq!(named_set_asked_for("open capstone", &one), None);
+        assert_eq!(named_set_asked_for("set up capstone demo prep", &[]), None);
+    }
+
+    #[test]
+    fn save_this_as_takes_the_name_the_person_said() {
+        for (text, want) in [
+            ("save this as capstone demo prep", "capstone demo prep"),
+            ("Save this as \u{201c}Bio lab\u{201d}.", "Bio lab"),
+            ("please save that set as my capstone set", "capstone set"),
+            ("call this Thursday standup", "Thursday standup"),
+        ] {
+            assert_eq!(save_set_name(text).as_deref(), Some(want), "{text}");
+        }
+        for text in [
+            "save this",
+            "open capstone demo prep",
+            "pull up everything for the essay",
+            "save the file",
+        ] {
+            assert_eq!(save_set_name(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn side_by_side_asks_for_columns() {
+        use crate::operator::layout::Layout;
+        for text in [
+            "pull up everything for the essay side by side",
+            "open my bio lab set next to each other",
+            "set up the lab report in a split",
+        ] {
+            assert_eq!(
+                layout_asked_for(text),
+                Some(Layout::LeftRightSplit),
+                "{text}"
+            );
+        }
+        for text in ["pull up everything for the essay", "open the splitter app"] {
+            assert_eq!(layout_asked_for(text), None, "{text}");
         }
     }
 
