@@ -68,10 +68,10 @@ const POLL_MS = 500;
 let previewProvider: ReturnType<typeof createLocalNeuralProvider> | null = null;
 
 const defaultNeural: NeuralVoiceControls = {
-    status: ttsStatus,
-    voices: ttsVoices,
-    install: ttsInstall,
-    remove: ttsRemove,
+    status: async () => ttsStatus(),
+    voices: async () => ttsVoices(),
+    install: async (consent) => ttsInstall(consent),
+    remove: async () => ttsRemove(),
     preview(voiceId, rate) {
         previewProvider ??= createLocalNeuralProvider();
         previewProvider.cancel();
@@ -103,13 +103,14 @@ function NeuralVoiceRow({
     const [voices, setVoices] = useState<TtsVoices | null>(null);
     const [asking, setAsking] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [unavailable, setUnavailable] = useState(false);
 
     useEffect(() => {
         let live = true;
         void neural
             .status()
             .then((next) => live && setStatus(next))
-            .catch((reason) => live && setError(errorText(reason)));
+            .catch(() => live && setUnavailable(true));
         void neural
             .voices()
             .then((next) => live && setVoices(next))
@@ -142,7 +143,9 @@ function NeuralVoiceRow({
     const size = status ? megabytes(status.totalBytes) : "";
     const chosen = voice || voices?.defaultVoice || "";
     let body: JSX.Element | null = null;
-    if (!status) {
+    if (unavailable) {
+        body = <small>Not available in this version.</small>;
+    } else if (!status) {
         body = <small>Checking…</small>;
     } else if (status.state === "ready") {
         body = (

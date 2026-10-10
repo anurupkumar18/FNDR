@@ -50,7 +50,12 @@ export interface LocalNeuralDeps {
     now?: () => number;
 }
 
-const defaultIpc: LocalNeuralIpc = { status: ttsStatus, synthesize: ttsSynthesize, cancel: ttsCancel };
+/** Wrapped, so a module that mocks the IPC layer without these still loads. */
+const defaultIpc: LocalNeuralIpc = {
+    status: async () => ttsStatus(),
+    synthesize: async (text, voice, speed) => ttsSynthesize(text, voice, speed),
+    cancel: async () => ttsCancel(),
+};
 
 /** Splits a line into sentences, keeping "Dr. Smith" and "e.g. this" whole. */
 export function splitSentences(text: string): string[] {
