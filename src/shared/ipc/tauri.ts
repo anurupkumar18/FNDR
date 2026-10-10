@@ -2252,6 +2252,68 @@ export async function voiceOutStop(): Promise<void> {
     return invoke<void>("voice_out_stop");
 }
 
+// The on-device neural voice, Kokoro-82M (ADR 030).
+
+export type TtsState = "not_installed" | "downloading" | "ready" | "error";
+
+export interface TtsStatus {
+    state: TtsState;
+    detail: string | null;
+    downloadedBytes: number;
+    totalBytes: number;
+    /** The model is in memory now. */
+    loaded: boolean;
+}
+
+export interface TtsVoice {
+    id: string;
+    name: string;
+    accent: "us" | "gb";
+    gender: "female" | "male";
+    /** The model card's grade for the voice's training data. */
+    grade: string;
+}
+
+export interface TtsVoices {
+    voices: TtsVoice[];
+    defaultVoice: string;
+}
+
+export interface TtsClip {
+    /** A 24 kHz mono 16-bit WAV. */
+    wav: ArrayBuffer;
+    durationMs: number;
+}
+
+export async function ttsStatus(): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_status");
+}
+
+export async function ttsVoices(): Promise<TtsVoices> {
+    return invoke<TtsVoices>("tts_voices");
+}
+
+/** Starts the one-time download; `consent` is the person's answer to the prompt. */
+export async function ttsInstall(consent: boolean): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_install", { consent });
+}
+
+export async function ttsRemove(): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_remove");
+}
+
+export async function ttsCancel(): Promise<void> {
+    return invoke<void>("tts_cancel");
+}
+
+/** Speech for `text`, synthesized on this Mac. */
+export async function ttsSynthesize(text: string, voice?: string, speed?: number): Promise<TtsClip> {
+    const raw = await invoke<ArrayBuffer | number[]>("tts_synthesize", { text, voice: voice ?? null, speed: speed ?? null });
+    const wav = raw instanceof ArrayBuffer ? raw : new Uint8Array(raw).buffer;
+    const samples = Math.max(0, wav.byteLength - 44) / 2;
+    return { wav, durationMs: Math.round((samples / 24_000) * 1000) };
+}
+
 // Notch Do's voice (ADR 020 amendment, 2026-10-09).
 
 /** Esc pressed in another app while a Notch Do run works or waits on an approval. */
@@ -2746,6 +2808,8 @@ export interface VoiceOutputSettings {
     /** A macOS voice identifier; empty means the best one installed. */
     system_voice: string;
     rate: number;
+    /** A Kokoro voice id for the on-device neural voice; empty means its default. */
+    neural_voice?: string;
 }
 
 export async function getVoiceOutputSettings(): Promise<VoiceOutputSettings> {

@@ -793,7 +793,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
-    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1 };
+    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1, neural_voice: "" };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
     let screenGuideDiagnosticStatus: Omit<
@@ -1372,9 +1372,29 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     provider: settings.provider,
                     system_voice: typeof settings.system_voice === "string" ? settings.system_voice : "",
                     rate: Math.min(2, Math.max(0.5, settings.rate)),
+                    neural_voice: typeof settings.neural_voice === "string" ? settings.neural_voice : "",
                 };
                 return { ...voiceOutputSettings };
             }
+            case "tts_status":
+                // The browser preview has no model; speech falls back to the Mac's voices.
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_voices":
+                return {
+                    voices: [
+                        { id: "af_heart", name: "Heart", accent: "us", gender: "female", grade: "A" },
+                        { id: "bf_emma", name: "Emma", accent: "gb", gender: "female", grade: "B-" },
+                    ],
+                    defaultVoice: "af_heart",
+                };
+            case "tts_install":
+                throw new Error("The browser preview cannot download the on-device voice.");
+            case "tts_remove":
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_cancel":
+                return null;
+            case "tts_synthesize":
+                throw new Error("The browser preview has no on-device voice.");
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
             case "get_screen_guide_diagnostic_status":
