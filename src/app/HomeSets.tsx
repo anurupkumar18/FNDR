@@ -58,17 +58,16 @@ export function HomeSets({ refreshKey, arrange = false }: HomeSetsProps) {
                                 label="Open"
                                 arrange={arrange}
                                 load={async () => set.items.length > 0 ? set.items : { why: "Nothing in this set can be reopened now." }}
-                            />
-                            {confirming === set.id ? (
-                                <div className="home-set-confirm">
-                                    <button type="button" aria-label={`Yes, delete ${set.name}`} onClick={() => void remove(set)}>Delete</button>
-                                    <button type="button" onClick={() => setConfirming(null)}>Keep</button>
-                                </div>
-                            ) : (
-                                <button type="button" className="home-set-delete" aria-label={`Delete ${set.name}`} onClick={() => setConfirming(set.id)}>
-                                    Delete
-                                </button>
-                            )}
+                            >
+                                {confirming === set.id ? (
+                                    <>
+                                        <button type="button" aria-label={`Yes, delete ${set.name}`} onClick={() => void remove(set)}>Delete</button>
+                                        <button type="button" onClick={() => setConfirming(null)}>Keep</button>
+                                    </>
+                                ) : (
+                                    <button type="button" aria-label={`Delete ${set.name}`} onClick={() => setConfirming(set.id)}>Delete</button>
+                                )}
+                            </WorkSetOpener>
                         </li>
                     ))}
                 </ul>

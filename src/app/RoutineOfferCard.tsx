@@ -36,11 +36,9 @@ export function RoutineOfferCard({ arrange = false }: { arrange?: boolean }) {
         <section className="home-routine" aria-labelledby="home-routine-title">
             <h2 id="home-routine-title">{offer.label}</h2>
             <p className="home-quiet">{offer.reason}</p>
-            <div className="home-routine-actions">
-                <WorkSetOpener name={offer.label} label="Start" arrange={arrange} load={() => offerItems(offer)} />
+            <WorkSetOpener name={offer.label} label="Start" arrange={arrange} load={() => offerItems(offer)}>
                 <button
                     type="button"
-                    className="home-routine-dismiss"
                     onClick={() => {
                         setOffer(null);
                         void dismissRoutineOffer(offer.id).catch(() => undefined);
@@ -48,7 +46,7 @@ export function RoutineOfferCard({ arrange = false }: { arrange?: boolean }) {
                 >
                     Not now
                 </button>
-            </div>
+            </WorkSetOpener>
         </section>
     );
 }

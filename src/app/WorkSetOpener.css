@@ -1,18 +1,5 @@
 .work-set { margin-top: 10px; }
-.work-set button {
-    min-height: 36px;
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-elevated);
-    color: var(--text-primary);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-}
-.work-set button:hover:not(:disabled) { background: var(--surface-hover); }
-.work-set button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.work-set button:disabled { opacity: 0.6; cursor: default; }
+.work-set-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .work-set .work-set-open,
 .work-set .work-set-primary {
     border-color: color-mix(in srgb, var(--accent) 55%, var(--border));

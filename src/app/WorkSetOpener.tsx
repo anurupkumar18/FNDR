@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { completeTodo, openWorkSet, reopenMemory, type WorkItem, type WorkItemOutcome } from "@/shared/ipc/tauri";
 import { asksBeforeOpening, layoutFor, OUTCOME_LABEL, outcomeStatus } from "./homeWorkSet";
 import "./WorkSetOpener.css";
@@ -22,6 +22,8 @@ interface WorkSetOpenerProps {
      * backend can place every window, so Stop cannot fall between items.
      */
     arrange?: boolean;
+    /** Other actions shown beside the button, before any result, so the tab order matches the eye. */
+    children?: ReactNode;
 }
 
 type Phase =
@@ -40,7 +42,7 @@ const NOT_OPENED = "FNDR could not open this item.";
  * more tap, Stop works before and between items, and each item's result is
  * FNDR's typed outcome.
  */
-export function WorkSetOpener({ name, load, label = "Open all", taskId, continueMemoryId, onTaskDone, arrange = false }: WorkSetOpenerProps) {
+export function WorkSetOpener({ name, load, label = "Open all", taskId, continueMemoryId, onTaskDone, arrange = false, children }: WorkSetOpenerProps) {
     const [phase, setPhase] = useState<Phase>({ kind: "idle" });
     const [taskState, setTaskState] = useState<"open" | "saving" | "done" | "error">("open");
     const [continueState, setContinueState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
@@ -146,15 +148,18 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
 
     return (
         <div className="work-set">
-            <button
-                type="button"
-                className="work-set-open"
-                aria-label={`${label} for ${name}`}
-                disabled={busy || phase.kind === "confirm"}
-                onClick={() => void start()}
-            >
-                {label}
-            </button>
+            <div className="work-set-row">
+                <button
+                    type="button"
+                    className="work-set-open"
+                    aria-label={`${label} for ${name}`}
+                    disabled={busy || phase.kind === "confirm"}
+                    onClick={() => void start()}
+                >
+                    {label}
+                </button>
+                {children}
+            </div>
             {phase.kind === "finding" && <p className="work-set-note" role="status">Finding what to reopen…</p>}
             {phase.kind === "none" && <p className="work-set-note" role="status">{phase.why}</p>}
             {phase.kind === "confirm" && (
