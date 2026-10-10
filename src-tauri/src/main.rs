@@ -85,6 +85,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -501,13 +502,12 @@ fn main() {
                                 } else {
                                     "🌙 FNDR Evening Recap"
                                 };
-                                let _ = notif_handle.emit(
-                                    "fndr_notification",
-                                    serde_json::json!({
-                                        "title": title,
-                                        "body": briefing,
-                                        "kind": "briefing",
-                                    }),
+                                fndr_lib::notify::send(
+                                    &notif_handle,
+                                    &notif_state,
+                                    "briefing",
+                                    title,
+                                    &briefing,
                                 );
                                 tracing::info!("Sent {} briefing notification", mode);
                                 briefing_sent_today = true;
@@ -547,13 +547,12 @@ fn main() {
                                         stale.len(),
                                         titles.join(", ")
                                     );
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "📋 Stale Tasks",
-                                            "body": body,
-                                            "kind": "stale_tasks",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "stale_tasks",
+                                        "📋 Stale Tasks",
+                                        &body,
                                     );
                                 }
                             }
@@ -579,13 +578,12 @@ fn main() {
                                 let unique: std::collections::HashSet<_> =
                                     recent_app_switches.iter().collect();
                                 if unique.len() >= APP_SWITCH_UNIQUE_THRESHOLD {
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "🔀 High Context Switching",
-                                            "body": "You've been switching between many apps. Want to refocus?",
-                                            "kind": "context_switch",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "context_switch",
+                                        "🔀 High Context Switching",
+                                        "You've been switching between many apps. Want to refocus?",
                                     );
                                     recent_app_switches.clear();
                                 }
