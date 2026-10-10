@@ -37,7 +37,7 @@ const READERS: Record<string, string> = {
     "ipc/commands/quality.rs": "shown in diagnostics: memory_is_visible or memory_is_permitted",
     "main.rs": "shown: the toast goes through proactive::pick_suggestion; the decay job shows nothing",
     "resume/mod.rs": "shown: memory_is_visible",
-    "mcp/mod.rs": "served to agents: the MCP lane's own visibility checks and tests",
+    "mcp/mod.rs": "served to agents: load_memories_for_results (memory_is_visible); the health check reads one timestamp",
     // Never shown as read: linking, repair, review and indexing.
     "capture/clipboard.rs": "internal: links a clipboard copy to the newest capture",
     "capture/mod.rs": "internal: duplicate and merge detection at capture",
