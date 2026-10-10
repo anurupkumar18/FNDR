@@ -42,3 +42,7 @@ Kokoro fp32 on the existing `ort`, a permissive grapheme-to-phoneme step ported 
 
 - No sample was heard: the WAVs were written to the session scratchpad and nobody has listened to them, so nothing here says how natural any model sounds.
 - No clean-machine run and no 4-thread run.
+
+## Addendum (2026-10-10): verdict superseded
+
+The NO-GO above is superseded by ADR 030 (`docs/decisions/030-offline-neural-voice.md`). misaki's English G2P reads from Apache-2.0 dictionaries and needs espeak-ng only as an optional fallback, so FNDR ported it to Rust without espeak and runs Kokoro through the existing `ort`. Latency is met by streaming sentence by sentence, and by the `uint8f16` export, which is the fastest variant on the ONNX Runtime 1.24 that `ort` bundles (RTF about 0.19 against 0.52 for the 8-bit one). The memory figure above still applies while the model is loaded; it is dropped after five idle minutes.
