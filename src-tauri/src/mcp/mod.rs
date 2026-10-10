@@ -724,11 +724,25 @@ fn to_status(rt: &McpRuntime) -> McpServerStatus {
 // Discovery file
 // ---------------------------------------------------------------------------
 
+/// Where the discovery file and the bearer token live: `~/.fndr`. Tests get
+/// one fixed folder of their own, so a test run never rewrites or removes the
+/// files of an FNDR that is running on the same machine and leaves no new
+/// folder behind on each run.
+fn fndr_home() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join("fndr-mcp-test")
+    }
+    #[cfg(not(test))]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".fndr")
+    }
+}
+
 fn discovery_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".fndr")
-        .join("mcp.json")
+    fndr_home().join("mcp.json")
 }
 
 fn write_discovery(
@@ -6991,7 +7005,10 @@ mod tests {
         ));
     }
 
+    // The MCP server is one process-wide singleton (`MCP_RUNTIME`). Every test
+    // that starts or stops it shares the `mcp_server` key so they never overlap.
     #[test]
+    #[serial_test::serial(mcp_server)]
     fn localhost_handshake_bypasses_auth_but_tools_call_requires_token() {
         std::env::remove_var("FNDR_MCP_REQUIRE_AUTH");
         let app_state = build_test_app_state();
@@ -7267,6 +7284,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(mcp_server)]
     fn hermes_token_is_limited_by_the_server_to_its_four_read_tools() {
         let dir = tempdir().expect("temporary profile");
         let app_state = related_test_state(dir.path());
@@ -7368,6 +7386,13 @@ mod tests {
             assert_eq!(hermes_read_token().as_deref(), Some(read_token.as_str()));
             let _ = stop().await;
         });
+    }
+
+    #[test]
+    fn tests_keep_the_discovery_file_and_token_out_of_the_real_home() {
+        let home = dirs::home_dir().expect("home directory").join(".fndr");
+        assert!(!discovery_path().starts_with(&home));
+        assert!(!token::token_path().starts_with(&home));
     }
 
     #[test]
