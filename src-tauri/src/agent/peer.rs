@@ -127,7 +127,13 @@ fn parse_task(task: &Value) -> Result<SentTask, String> {
                 .join("\n\n")
         })
         .filter(|text| !text.is_empty())
-        .map(|text| bounded_peer_text(&text));
+        .map(|text| bounded_peer_text(&text))
+        .or_else(|| {
+            let message = &task["status"]["message"];
+            (message["role"] == "ROLE_AGENT")
+                .then(|| text_from_parts(&message["parts"]))
+                .flatten()
+        });
     Ok(SentTask {
         task_id: task_id.to_string(),
         state: state.to_string(),
@@ -765,7 +771,8 @@ mod tests {
         assert_eq!(request["params"]["id"], "peer-task-1");
         assert_eq!(request["params"]["historyLength"], 0);
         let response = json!({"jsonrpc":"2.0","id":"req-1","result":{"task":{
-            "id":"peer-task-1","status":{"state":"TASK_STATE_COMPLETED"},
+            "id":"peer-task-1","status":{"state":"TASK_STATE_COMPLETED",
+                "message":{"role":"ROLE_AGENT","parts":[{"text":"Progress note"}]}},
             "artifacts":[{"parts":[{"text":"Finished report"}]}]
         }}});
         let task = parse_get_response("req-1", "peer-task-1", &response).unwrap();
@@ -775,6 +782,34 @@ mod tests {
             "code":-32001,"message":"Task not found"
         }});
         assert!(parse_get_response("req-1", "peer-task-1", &missing).is_err());
+    }
+
+    #[test]
+    fn get_task_shows_agent_status_message_when_no_artifact_exists() {
+        let response = json!({"jsonrpc":"2.0","id":"req-1","result":{"task":{
+            "id":"peer-task-1","status":{
+                "state":"TASK_STATE_INPUT_REQUIRED",
+                "message":{"role":"ROLE_AGENT","parts":[{"text":"Which date should the report cover?"}]}
+            }
+        }}});
+        let task = parse_get_response("req-1", "peer-task-1", &response).unwrap();
+        assert_eq!(task.state, "TASK_STATE_INPUT_REQUIRED");
+        assert_eq!(
+            task.output_text.as_deref(),
+            Some("Which date should the report cover?")
+        );
+    }
+
+    #[test]
+    fn get_task_does_not_display_a_user_status_message_as_peer_output() {
+        let response = json!({"jsonrpc":"2.0","id":"req-1","result":{"task":{
+            "id":"peer-task-1","status":{
+                "state":"TASK_STATE_WORKING",
+                "message":{"role":"ROLE_USER","parts":[{"text":"Original task text"}]}
+            }
+        }}});
+        let task = parse_get_response("req-1", "peer-task-1", &response).unwrap();
+        assert!(task.output_text.is_none());
     }
 
     #[test]
