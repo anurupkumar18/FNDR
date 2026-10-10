@@ -129,6 +129,31 @@ pub(crate) fn memory_is_permitted(record: &MemoryRecord, blocklist: &[String]) -
         )
 }
 
+/// The same access policy for a search result. Surfaces that read results in
+/// bulk (the briefing, the Daily Summary) use it, so a memory from an app or
+/// a page blocked since it was captured is hidden there as it is in Search.
+pub(crate) fn result_is_permitted(result: &SearchResult, blocklist: &[String]) -> bool {
+    let context = if result.is_agent_note() {
+        format!(
+            "{}\n{}\n{}",
+            result.window_title, result.clean_text, result.project
+        )
+    } else {
+        result.window_title.clone()
+    };
+    !result.is_soft_deleted
+        && !crate::privacy::Blocklist::is_internal_app(
+            &result.app_name,
+            result.bundle_id.as_deref(),
+        )
+        && !crate::privacy::Blocklist::is_blocked(&result.app_name, blocklist)
+        && !crate::privacy::Blocklist::is_context_blocked(
+            result.url.as_deref(),
+            Some(&context),
+            blocklist,
+        )
+}
+
 pub async fn memory_source_statements(
     state: &AppState,
     memory_id: &str,
@@ -918,6 +943,32 @@ mod tests {
             &words,
             0.0
         ));
+    }
+
+    #[test]
+    fn a_result_from_an_app_or_page_blocked_since_is_not_permitted() {
+        let result = |app: &str, title: &str, url: Option<&str>| SearchResult {
+            app_name: app.to_string(),
+            window_title: title.to_string(),
+            url: url.map(str::to_string),
+            ..Default::default()
+        };
+        let blocklist = ["Messages".to_string(), "bank.example.com".to_string()];
+        assert!(result_is_permitted(
+            &result("Pages", "Lab 5", None),
+            &blocklist
+        ));
+        assert!(!result_is_permitted(
+            &result("Messages", "Riya", None),
+            &blocklist
+        ));
+        assert!(!result_is_permitted(
+            &result("Safari", "Accounts", Some("https://bank.example.com/home")),
+            &blocklist
+        ));
+        let mut deleted = result("Pages", "Lab 5", None);
+        deleted.is_soft_deleted = true;
+        assert!(!result_is_permitted(&deleted, &[]));
     }
 
     #[test]
