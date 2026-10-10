@@ -1,4 +1,4 @@
-import type { Task, ThreadDigest, WorkItemOutcome, WorkSet, WorkSetResolution } from "@/shared/ipc/tauri";
+import type { Task, ThreadDigest, WorkItemOutcome, WorkSet, WorkSetLayout, WorkSetResolution } from "@/shared/ipc/tauri";
 import { isSuggestion } from "@/domains/workspace/todoSuggestions";
 
 const HOUR = 60 * 60 * 1000;
@@ -51,8 +51,6 @@ export const OUTCOME_LABEL: Record<OutcomeStatus, string> = {
     needs_permission: "Needs permission",
     failed: "Not opened",
 };
-
-export type WorkSetLayout = "left_right_split" | "top_bottom_split" | "thirds" | "grid2x2" | "maximize";
 
 /** "Arrange side by side" picks the layout that fits the number of windows. */
 export function layoutFor(itemCount: number): WorkSetLayout {

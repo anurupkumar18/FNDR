@@ -71,6 +71,27 @@ describe("Open all", () => {
         expect(invoke).toHaveBeenCalledTimes(4);
     });
 
+    it("opens the set in one call with a layout when asked to arrange side by side", async () => {
+        vi.mocked(invoke).mockResolvedValue([
+            { ...opened("a"), arrangement: { arranged: true, layout: "left_right_split", detail: "Arranged" } },
+            { ...opened("b"), arrangement: { arranged: true, layout: "left_right_split", detail: "Arranged" } },
+        ]);
+        render(<WorkSetOpener name="Parser" arrange load={async () => [item("a"), item("b")]} />);
+        fireEvent.click(screen.getByRole("button", { name: "Open all for Parser" }));
+        expect(await screen.findByText("Opened 2 of 2, arranged side by side")).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledOnce();
+        expect(invoke).toHaveBeenCalledWith("open_work_set", { memoryIds: ["a", "b"], layout: "left_right_split" });
+    });
+
+    it("says why windows were not arranged", async () => {
+        vi.mocked(invoke).mockResolvedValue([
+            { ...opened("a"), arrangement: { arranged: false, layout: "maximize", detail: "FNDR needs Accessibility permission to move windows." } },
+        ]);
+        render(<WorkSetOpener name="Parser" arrange load={async () => [item("a")]} />);
+        fireEvent.click(screen.getByRole("button", { name: "Open all for Parser" }));
+        expect(await screen.findByText("FNDR needs Accessibility permission to move windows.")).toBeInTheDocument();
+    });
+
     it("cancels at the question without opening anything", async () => {
         render(<WorkSetOpener name="Lab 4" load={async () => ["a", "b", "c", "d"].map(item)} />);
         fireEvent.click(screen.getByRole("button", { name: "Open all for Lab 4" }));

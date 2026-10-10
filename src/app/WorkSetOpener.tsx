@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { completeTodo, openWorkSet, reopenMemory, type WorkItem, type WorkItemOutcome } from "@/shared/ipc/tauri";
-import { asksBeforeOpening, OUTCOME_LABEL, outcomeStatus } from "./homeWorkSet";
+import { asksBeforeOpening, layoutFor, OUTCOME_LABEL, outcomeStatus } from "./homeWorkSet";
 import "./WorkSetOpener.css";
 
 export type WorkSetLoad = () => Promise<WorkItem[] | { why: string }>;
@@ -17,6 +17,11 @@ interface WorkSetOpenerProps {
     /** The thread's latest source, reopened by "Continue where you left off". */
     continueMemoryId?: string;
     onTaskDone?: () => void;
+    /**
+     * Arrange the windows side by side. The set then opens in one call so the
+     * backend can place every window, so Stop cannot fall between items.
+     */
+    arrange?: boolean;
 }
 
 type Phase =
@@ -35,7 +40,7 @@ const NOT_OPENED = "FNDR could not open this item.";
  * more tap, Stop works before and between items, and each item's result is
  * FNDR's typed outcome.
  */
-export function WorkSetOpener({ name, load, label = "Open all", taskId, continueMemoryId, onTaskDone }: WorkSetOpenerProps) {
+export function WorkSetOpener({ name, load, label = "Open all", taskId, continueMemoryId, onTaskDone, arrange = false }: WorkSetOpenerProps) {
     const [phase, setPhase] = useState<Phase>({ kind: "idle" });
     const [taskState, setTaskState] = useState<"open" | "saving" | "done" | "error">("open");
     const [continueState, setContinueState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
@@ -59,6 +64,18 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
         stopRef.current = false;
         const outcomes: WorkItemOutcome[] = [];
         setPhase({ kind: "opening", items, outcomes, stopping: false });
+        if (arrange) {
+            try {
+                const rows = await openWorkSet(items.map((item) => item.memoryId), layoutFor(items.length));
+                outcomes.push(...items.map((item) => (
+                    rows.find((row) => row.memoryId === item.memoryId) ?? { memoryId: item.memoryId, label: item.label, ok: false, detail: NOT_OPENED }
+                )));
+            } catch {
+                outcomes.push(...items.map((item) => ({ memoryId: item.memoryId, label: item.label, ok: false, detail: NOT_OPENED })));
+            }
+            if (mountedRef.current) setPhase({ kind: "done", items, outcomes, stopped: false });
+            return;
+        }
         for (const item of items) {
             if (stopRef.current) break;
             let outcome: WorkItemOutcome;
@@ -125,6 +142,7 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
     }
 
     const busy = phase.kind === "finding" || phase.kind === "opening";
+    const arrangement = phase.kind === "done" ? phase.outcomes.find((outcome) => outcome.arrangement)?.arrangement : undefined;
 
     return (
         <div className="work-set">
@@ -162,13 +180,16 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
                 <div className="work-set-panel">
                     <p className="work-set-note" role="status">
                         {phase.kind === "opening"
-                            ? phase.stopping
+                            ? arrange
+                                ? `Opening ${phase.items.length} together to arrange them…`
+                                : phase.stopping
                                 ? "Stopping after this item…"
                                 : `Opening ${Math.min(phase.outcomes.length + 1, phase.items.length)} of ${phase.items.length}…`
                             : phase.stopped
                               ? `Stopped after ${phase.outcomes.length} of ${phase.items.length}`
-                              : `Opened ${phase.outcomes.filter((outcome) => outcome.ok).length} of ${phase.items.length}`}
+                              : `Opened ${phase.outcomes.filter((outcome) => outcome.ok).length} of ${phase.items.length}${arrangement?.arranged ? ", arranged side by side" : ""}`}
                     </p>
+                    {arrangement && !arrangement.arranged && <p className="work-set-note">{arrangement.detail}</p>}
                     <ul className="work-set-items">
                         {phase.items.map((item, index) => {
                             const outcome = phase.outcomes[index];
@@ -186,7 +207,7 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
                         })}
                     </ul>
                     <div className="work-set-actions">
-                        {phase.kind === "opening" && (
+                        {phase.kind === "opening" && !arrange && (
                             <button type="button" onClick={stop} disabled={phase.stopping}>Stop</button>
                         )}
                         {phase.kind === "done" && taskId && taskState !== "done" && (
