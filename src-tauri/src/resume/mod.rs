@@ -18,6 +18,9 @@ const MAX_SUGGESTED_NEXT_STEPS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResumeThread {
+    /// The grouping key: what `what_changed_since` and `mark_thread_seen`
+    /// take. An identifier, never shown.
+    pub key: String,
     pub title: String,
     /// App of the newest memory, shown as a label beside the title.
     pub app_name: String,
@@ -33,7 +36,7 @@ pub struct ResumeThread {
 
 /// Groups a memory into a thread: its project, falling back to its
 /// session_key, then to the domain of its url, then to its app name.
-fn thread_key(record: &MemoryRecord) -> String {
+pub(crate) fn thread_key(record: &MemoryRecord) -> String {
     if !record.project.trim().is_empty() {
         return record.project.clone();
     }
@@ -52,7 +55,7 @@ fn thread_key(record: &MemoryRecord) -> String {
 
 /// What a person sees as the thread's name. The grouping key is an internal
 /// identifier (`google_chrome:title:grades_for_...`) and is never shown.
-fn thread_title(record: &MemoryRecord) -> String {
+pub(crate) fn thread_title(record: &MemoryRecord) -> String {
     let project = record.project.trim();
     if !project.is_empty() {
         return project.to_string();
@@ -198,6 +201,7 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
     let pack = pack_within_budget(candidates, budget_tokens);
 
     ResumeThread {
+        key: thread_key(newest),
         title,
         app_name: newest.app_name.trim().to_string(),
         last_state,
@@ -207,6 +211,17 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         evidence,
         pack,
     }
+}
+
+/// Whether a memory may shape a thread. Matches existing read-side
+/// admission before a row can influence thread state, suggestions or
+/// citations. Agent notes are not observed work and remain excluded by the
+/// remember contract. A downloaded file is a fact for search, not a piece of
+/// work to resume.
+pub(crate) fn admits(record: &MemoryRecord, blocklist: &[String]) -> bool {
+    crate::context_runtime::retrieve::memory_is_visible(record, blocklist)
+        && !record.source_type.trim().eq_ignore_ascii_case("agent")
+        && !record.snippet.starts_with("Downloaded: ")
 }
 
 /// Builds Resume Work threads from memories captured in the last `hours`
@@ -229,14 +244,7 @@ pub async fn build_resume_threads(
 
     let mut by_key: HashMap<String, Vec<MemoryRecord>> = HashMap::new();
     for record in records {
-        // Match existing read-side admission before a row can influence
-        // thread state, suggestions or citations. Agent notes are not
-        // observed work and remain excluded by the remember contract.
-        // A downloaded file is a fact for search, not a piece of work to resume.
-        if !crate::context_runtime::retrieve::memory_is_visible(&record, blocklist)
-            || record.source_type.trim().eq_ignore_ascii_case("agent")
-            || record.snippet.starts_with("Downloaded: ")
-        {
+        if !admits(&record, blocklist) {
             continue;
         }
         by_key.entry(thread_key(&record)).or_default().push(record);
@@ -441,6 +449,7 @@ mod tests {
 
         let thread = build_thread(vec![older, newer], now, 10_000);
 
+        assert_eq!(thread.key, "FNDR");
         assert_eq!(thread.title, "FNDR");
         assert_eq!(thread.last_state, "Looked at the merge decision path");
         assert_eq!(thread.age_minutes, 1);

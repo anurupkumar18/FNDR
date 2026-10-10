@@ -8,6 +8,7 @@ import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMem
 import { CopyForAgentButton } from "./CopyForAgentButton";
 import { SurfacingReason } from "./SurfacingReason";
 import { MemoryCard } from "./MemoryCard";
+import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./ExpandedMemoryCard.css";
 
 interface Props {
@@ -57,6 +58,7 @@ export function ExpandedMemoryCard({
         items: SourceStatementRef[];
     }>({ memoryId: card.id, status: "loading", items: [] });
     const closeButtonRef = useRef<HTMLButtonElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -97,23 +99,13 @@ export function ExpandedMemoryCard({
         };
     }, [card.id]);
 
-    useEffect(() => {
-        const previouslyFocused = document.activeElement as HTMLElement | null;
-        closeButtonRef.current?.focus();
-        return () => previouslyFocused?.focus();
-    }, [card.id]);
+    // Tab stays inside the card and Escape closes it; the Vault panel behind
+    // it is a modal too and leaves keys aimed at this card alone.
+    useModalFocus(true, dialogRef, closeButtonRef, onClose);
 
     useEffect(() => {
-        const handler = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                onClose();
-            }
-        };
-        window.addEventListener("keydown", handler, true);
-        return () => window.removeEventListener("keydown", handler, true);
-    }, [onClose]);
+        closeButtonRef.current?.focus();
+    }, [card.id]);
 
     const reasonNode = card.surfacing_reason ? (
         <SurfacingReason reason={card.surfacing_reason} />
@@ -261,6 +253,7 @@ export function ExpandedMemoryCard({
 
     return (
         <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={`Expanded memory: ${card.title}`}

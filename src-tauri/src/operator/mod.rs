@@ -3,6 +3,7 @@
 //! action gated by `policy` and written to `journal`.
 
 pub mod journal;
+pub mod layout;
 pub mod mcp;
 pub mod memory;
 pub mod native;

@@ -15,11 +15,17 @@
 //!   no longer says what FNDR printed, nothing happens.
 //! - FNDR itself and the person's blocklist are never read or operated.
 //! - No screenshots: text and structure only.
+//! - A window id belongs to the window list it was printed in, the same way an
+//!   element index belongs to its tree (`layout.rs`).
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
+
+use crate::operator::layout::{
+    Change, Layout, LayoutOutcome, Placed, Rect, Screen, Target, Window, WindowRef, Windows,
+};
 
 /// A running app, as the tools name it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +86,8 @@ pub struct Tree<H> {
 /// What the Mac lets the server do. Every method acts on exactly what it is
 /// given; none of them looks anything up by position or by label.
 pub trait Desktop {
-    type Handle;
+    /// An element or a window. Equal handles are the same thing on screen.
+    type Handle: Clone + PartialEq;
     fn list_apps(&mut self) -> Vec<AppRef>;
     fn read_tree(&mut self, app: &AppRef) -> Result<Tree<Self::Handle>, String>;
     /// What an element says now, in the form `read_tree` printed it.
@@ -96,6 +103,13 @@ pub trait Desktop {
     ) -> Result<(), String>;
     fn press_key(&mut self, app: &AppRef, key: &str) -> Result<(), String>;
     fn scroll(&mut self, app: &AppRef, direction: &str, pages: u32) -> Result<(), String>;
+    /// The app's windows, front first.
+    fn windows(&mut self, app: &AppRef) -> Result<Vec<Window<Self::Handle>>, String>;
+    /// Every display, the main one first.
+    fn screens(&mut self) -> Vec<Screen>;
+    /// Where a window is now, or `None` when it is gone.
+    fn frame(&mut self, window: &Self::Handle) -> Option<Rect>;
+    fn set_frame(&mut self, window: &Self::Handle, frame: Rect) -> Result<(), String>;
 }
 
 /// Apps the server will not read or operate.
@@ -106,7 +120,22 @@ pub struct Limits {
 }
 
 impl Limits {
-    fn refusal(&self, app: &AppRef) -> Option<String> {
+    /// FNDR's own process and the blocklist from the person's settings.
+    pub fn from_settings() -> Result<Limits, String> {
+        let config = crate::config::Config::load_or_create()
+            .map_err(|error| format!("could not read settings: {error}"))?;
+        Ok(Limits {
+            blocklist: config
+                .blocklist
+                .iter()
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect(),
+            own_pid: std::process::id() as i32,
+        })
+    }
+
+    pub(crate) fn refusal(&self, app: &AppRef) -> Option<String> {
         let off_limits = (self.own_pid > 0 && app.pid == self.own_pid)
             || crate::privacy::Blocklist::is_internal_app(&app.name, Some(&app.bundle))
             || crate::privacy::Blocklist::is_blocked(&app.name, &self.blocklist)
@@ -127,6 +156,7 @@ pub struct Server<D: Desktop> {
     limits: Limits,
     views: HashMap<i32, View<D::Handle>>,
     next_index: usize,
+    windows: Windows<D::Handle>,
 }
 
 /// Runs `fndr operator-mcp`: serves the tools on stdin and stdout until
@@ -144,14 +174,12 @@ pub fn run() -> i32 {
         eprintln!("fndr operator-mcp: actions are turned off in Settings.");
         return 1;
     }
-    let limits = Limits {
-        blocklist: config
-            .blocklist
-            .iter()
-            .map(|entry| entry.trim().to_string())
-            .filter(|entry| !entry.is_empty())
-            .collect(),
-        own_pid: std::process::id() as i32,
+    let limits = match Limits::from_settings() {
+        Ok(limits) => limits,
+        Err(error) => {
+            eprintln!("fndr operator-mcp: {error}");
+            return 1;
+        }
     };
     // Dies with its parent even if the pipe stays open (an orphan is
     // re-parented to launchd, pid 1).
@@ -179,6 +207,7 @@ impl<D: Desktop> Server<D> {
             limits,
             views: HashMap::new(),
             next_index: 0,
+            windows: Windows::default(),
         }
     }
 
@@ -235,11 +264,15 @@ impl<D: Desktop> Server<D> {
 
     fn call(&mut self, tool: &str, args: &Value) -> Result<String, String> {
         let text = |key: &str| args.get(key).and_then(Value::as_str);
-        if tool == "list_apps" {
-            return Ok(self.visible_apps());
+        match tool {
+            "list_apps" => return Ok(self.visible_apps()),
+            "list_windows" => return self.list_windows(text("app")),
+            "arrange_windows" => return self.arrange_windows(args),
+            _ => {}
         }
         let app = self.resolve(text("app").unwrap_or_default())?;
         match tool {
+            "move_window" | "resize_window" => self.place_window(tool, &app, args),
             "get_app_state" => self.get_app_state(&app),
             "click" => {
                 if args.get("element_index").is_none() {
@@ -316,25 +349,8 @@ impl<D: Desktop> Server<D> {
 
     /// The running app the name means, if FNDR may operate it.
     fn resolve(&mut self, name: &str) -> Result<AppRef, String> {
-        let wanted = name.trim().to_lowercase();
-        if wanted.is_empty() {
-            return Err("Name the app.".to_string());
-        }
         let apps = self.desktop.list_apps();
-        let by = |matches: &dyn Fn(&str) -> bool| {
-            apps.iter().find(|app| {
-                matches(&app.name.to_lowercase()) || matches(&app.bundle.to_lowercase())
-            })
-        };
-        let found = by(&|candidate| candidate == wanted)
-            .or_else(|| by(&|candidate| candidate.starts_with(&format!("{wanted} "))))
-            .or_else(|| by(&|candidate| candidate.split_whitespace().any(|word| word == wanted)))
-            .cloned()
-            .ok_or_else(|| format!("{name} is not running. Open it first."))?;
-        match self.limits.refusal(&found) {
-            Some(reason) => Err(reason),
-            None => Ok(found),
-        }
+        resolve_app(&apps, name, &self.limits)
     }
 
     fn get_app_state(&mut self, app: &AppRef) -> Result<String, String> {
@@ -412,9 +428,136 @@ impl<D: Desktop> Server<D> {
         Ok(at)
     }
 
+    fn list_windows(&mut self, app: Option<&str>) -> Result<String, String> {
+        let (windows, screens) = self.windows.list(&mut self.desktop, &self.limits, app)?;
+        let mut out = String::from("Displays:\n");
+        for (at, screen) in screens.iter().enumerate() {
+            out.push_str(&format!(
+                "display {}: {}\n",
+                at + 1,
+                rect_text(screen.visible)
+            ));
+        }
+        if windows.is_empty() {
+            out.push_str("No windows FNDR may arrange are open.\n");
+            return Ok(out);
+        }
+        out.push_str("Windows (ids belong to this list only):\n");
+        for window in &windows {
+            out.push_str(&window_line(window));
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    fn arrange_windows(&mut self, args: &Value) -> Result<String, String> {
+        let names: Vec<&str> = Layout::ALL.iter().map(|layout| layout.name()).collect();
+        let layout = args
+            .get("layout")
+            .and_then(Value::as_str)
+            .and_then(Layout::parse)
+            .ok_or_else(|| format!("layout must be one of {}.", names.join(", ")))?;
+        let entries = args
+            .get("windows")
+            .and_then(Value::as_array)
+            .ok_or("windows must be a list of {id, app} from list_windows.")?;
+        let mut targets = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let id = window_id(entry.get("id"))?;
+            let app = entry
+                .get("app")
+                .and_then(Value::as_str)
+                .filter(|app| !app.trim().is_empty())
+                .ok_or("Each window needs the app it belongs to.")?;
+            targets.push(Target { id, app });
+        }
+        let display = match args.get("display") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .and_then(|number| (number as usize).checked_sub(1))
+                    .ok_or("display must be a display number from list_windows.")?,
+            ),
+        };
+        let outcome = self
+            .windows
+            .arrange(&mut self.desktop, &targets, layout, display);
+        outcome_text(outcome)
+    }
+
+    fn place_window(&mut self, tool: &str, app: &AppRef, args: &Value) -> Result<String, String> {
+        if let Some(reason) = crate::operator::layout::off_limits(app, &self.limits) {
+            return Err(reason);
+        }
+        let id = window_id(args.get("window"))?;
+        let number = |key: &str| {
+            args.get(key)
+                .and_then(Value::as_f64)
+                .ok_or_else(|| format!("{tool} needs a number for {key}."))
+        };
+        let change = if tool == "move_window" {
+            Change::Move {
+                x: number("x")?,
+                y: number("y")?,
+            }
+        } else {
+            Change::Resize {
+                width: number("width")?,
+                height: number("height")?,
+            }
+        };
+        let target = Target { id, app: &app.name };
+        let outcome = self.windows.place(&mut self.desktop, target, change);
+        outcome_text(outcome)
+    }
+
     fn after_action(&mut self, app: &AppRef, done: String) -> Result<String, String> {
         self.views.remove(&app.pid);
         Ok(format!("{done} Call get_app_state to see the result."))
+    }
+}
+
+/// How strongly `wanted` names `app`: 3 for its name or bundle id, 2 for the
+/// first word of its name, 1 for any word of it, 0 for not at all.
+fn match_rank(app: &AppRef, wanted: &str) -> u8 {
+    let wanted = wanted.trim().to_lowercase();
+    if wanted.is_empty() {
+        return 0;
+    }
+    let rank = |candidate: String| {
+        if candidate == wanted {
+            3
+        } else if candidate.starts_with(&format!("{wanted} ")) {
+            2
+        } else if candidate.split_whitespace().any(|word| word == wanted) {
+            1
+        } else {
+            0
+        }
+    };
+    rank(app.name.to_lowercase()).max(rank(app.bundle.to_lowercase()))
+}
+
+/// Whether `wanted` names `app` the way a tool call may name it.
+pub(crate) fn app_matches(app: &AppRef, wanted: &str) -> bool {
+    match_rank(app, wanted) > 0
+}
+
+/// The running app `name` means, if FNDR may operate it. An exact name or
+/// bundle id wins over a first word, which wins over any word.
+pub(crate) fn resolve_app(apps: &[AppRef], name: &str, limits: &Limits) -> Result<AppRef, String> {
+    if name.trim().is_empty() {
+        return Err("Name the app.".to_string());
+    }
+    let found = (1..=3)
+        .rev()
+        .find_map(|wanted| apps.iter().find(|app| match_rank(app, name) == wanted))
+        .cloned()
+        .ok_or_else(|| format!("{name} is not running. Open it first."))?;
+    match limits.refusal(&found) {
+        Some(reason) => Err(reason),
+        None => Ok(found),
     }
 }
 
@@ -431,10 +574,113 @@ fn refuse_secure(description: &str) -> Result<(), String> {
     }
 }
 
+fn rect_text(rect: Rect) -> String {
+    // Adding zero turns -0 into 0.
+    let point = |n: f64| format!("{:.0}", n.round() + 0.0);
+    format!(
+        "{},{} {}x{}",
+        point(rect.x),
+        point(rect.y),
+        point(rect.width),
+        point(rect.height)
+    )
+}
+
+/// A title on one short line, with nothing that could close its quotes.
+fn quoted(title: &str) -> String {
+    let flat: String = title
+        .chars()
+        .map(|c| match c {
+            '"' => '\'',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    let words = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = words.chars().take(80).collect();
+    format!("\"{cut}\"")
+}
+
+fn window_line(window: &WindowRef) -> String {
+    let place = match window.display {
+        Some(at) => format!("display {}", at + 1),
+        None => "off screen".to_string(),
+    };
+    let minimized = if window.minimized { " minimized" } else { "" };
+    format!(
+        "window {} {} {} {} {place}{minimized}",
+        window.id,
+        window.app,
+        quoted(&window.title),
+        rect_text(window.frame)
+    )
+}
+
+fn window_id(value: Option<&Value>) -> Result<u64, String> {
+    match value {
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| "Name a window by its id from list_windows.".to_string())
+}
+
+fn placed_line(placed: &Placed) -> String {
+    let head = format!(
+        "window {} {} {}",
+        placed.id,
+        placed.app,
+        quoted(&placed.title)
+    );
+    if let Some(error) = &placed.error {
+        return format!("{head} not moved: {error}");
+    }
+    let Some(now) = placed.now else {
+        return format!("{head} moved, then could not be read back");
+    };
+    let off = [
+        now.x - placed.asked.x,
+        now.y - placed.asked.y,
+        now.width - placed.asked.width,
+        now.height - placed.asked.height,
+    ]
+    .iter()
+    .any(|delta| delta.abs() >= 1.0);
+    if off {
+        format!(
+            "{head} now {} (asked for {})",
+            rect_text(now),
+            rect_text(placed.asked)
+        )
+    } else {
+        format!("{head} now {}", rect_text(now))
+    }
+}
+
+fn outcome_text(outcome: LayoutOutcome) -> Result<String, String> {
+    let placed = match outcome {
+        LayoutOutcome::Refused(reason) => return Err(reason),
+        LayoutOutcome::Arranged(placed) => placed,
+    };
+    let lines: Vec<String> = placed.iter().map(placed_line).collect();
+    let text = format!(
+        "{}\nCall list_windows again before the next window change.",
+        lines.join("\n")
+    );
+    if placed.iter().all(|placed| placed.error.is_some()) {
+        Err(text)
+    } else {
+        Ok(text)
+    }
+}
+
 fn tool_definitions() -> Value {
     let app = json!({ "type": "string", "description": "App name or bundle id." });
     let element =
         json!({ "type": "string", "description": "element_index from the latest get_app_state." });
+    let window =
+        json!({ "type": "integer", "description": "Window id from the latest list_windows." });
+    let layouts: Vec<&str> = Layout::ALL.iter().map(|layout| layout.name()).collect();
     json!([
         {
             "name": "list_apps",
@@ -471,6 +717,38 @@ fn tool_definitions() -> Value {
             "description": "Scrolls the front window by pages.",
             "inputSchema": { "type": "object", "properties": { "app": app, "direction": { "type": "string", "enum": ["up", "down", "left", "right"] }, "pages": { "type": "integer" } }, "required": ["app", "direction"] },
         },
+        {
+            "name": "list_windows",
+            "description": "Lists open windows with ids, frames and displays, for one app or every app. Ids belong to this list only.",
+            "inputSchema": { "type": "object", "properties": { "app": app } },
+        },
+        {
+            "name": "arrange_windows",
+            "description": "Arranges up to six windows, in order, on one display. left_right_split puts the first on the left. restore_previous puts windows back where they were before FNDR moved them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "layout": { "type": "string", "enum": layouts },
+                    "windows": {
+                        "type": "array",
+                        "maxItems": crate::operator::layout::MAX_WINDOWS,
+                        "items": { "type": "object", "properties": { "id": window, "app": app }, "required": ["id", "app"] },
+                    },
+                    "display": { "type": "integer", "description": "Display number from list_windows. Defaults to the first window's display." },
+                },
+                "required": ["layout", "windows"],
+            },
+        },
+        {
+            "name": "move_window",
+            "description": "Moves a window's top-left corner to x, y in screen points. It is kept on the visible part of a display.",
+            "inputSchema": { "type": "object", "properties": { "app": app, "window": window, "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["app", "window", "x", "y"] },
+        },
+        {
+            "name": "resize_window",
+            "description": "Resizes a window in screen points. It is kept on the visible part of its display.",
+            "inputSchema": { "type": "object", "properties": { "app": app, "window": window, "width": { "type": "number" }, "height": { "type": "number" } }, "required": ["app", "window", "width", "height"] },
+        },
     ])
 }
 
@@ -488,7 +766,27 @@ mod tests {
         apps: Vec<AppRef>,
         lines: Rc<RefCell<Vec<&'static str>>>,
         log: Rc<RefCell<Vec<String>>>,
+        windows: Rc<RefCell<Vec<FakeWindow>>>,
     }
+
+    #[derive(Clone)]
+    struct FakeWindow {
+        pid: i32,
+        title: &'static str,
+        frame: Rect,
+        minimized: bool,
+        open: bool,
+    }
+
+    /// A laptop display and, to its right and 200 points higher, an external one.
+    const LAPTOP: Screen = Screen {
+        frame: Rect::new(0.0, 0.0, 1512.0, 982.0),
+        visible: Rect::new(0.0, 33.0, 1512.0, 879.0),
+    };
+    const EXTERNAL: Screen = Screen {
+        frame: Rect::new(1512.0, -200.0, 1920.0, 1080.0),
+        visible: Rect::new(1512.0, -175.0, 1920.0, 1055.0),
+    };
 
     impl Fake {
         fn new(lines: Vec<&'static str>) -> Self {
@@ -503,9 +801,47 @@ mod tests {
                     app(11, "FNDR", "com.fndr.app"),
                     app(12, "Vault", "com.example.vault"),
                     app(13, "Spotify", "com.spotify.client"),
+                    app(14, "TextEdit", "com.apple.TextEdit"),
+                    app(15, "Preview", "com.apple.Preview"),
+                    app(16, "1Password 7", "com.agilebits.onepassword7"),
                 ],
                 lines: Rc::new(RefCell::new(lines)),
                 log: Rc::new(RefCell::new(Vec::new())),
+                windows: Rc::new(RefCell::new(
+                    [
+                        (
+                            14,
+                            "Essay.txt",
+                            Rect::new(100.0, 100.0, 600.0, 500.0),
+                            false,
+                        ),
+                        (
+                            14,
+                            "Notes \"draft\"\n2",
+                            Rect::new(200.0, 150.0, 500.0, 400.0),
+                            false,
+                        ),
+                        (
+                            15,
+                            "Reading.pdf",
+                            Rect::new(2000.0, 0.0, 800.0, 900.0),
+                            false,
+                        ),
+                        (15, "Old.pdf", Rect::new(0.0, 0.0, 400.0, 400.0), true),
+                        (11, "FNDR", Rect::new(0.0, 0.0, 400.0, 400.0), false),
+                        (12, "Vault", Rect::new(0.0, 0.0, 400.0, 400.0), false),
+                        (16, "1Password", Rect::new(0.0, 0.0, 400.0, 400.0), false),
+                    ]
+                    .into_iter()
+                    .map(|(pid, title, frame, minimized)| FakeWindow {
+                        pid,
+                        title,
+                        frame,
+                        minimized,
+                        open: true,
+                    })
+                    .collect(),
+                )),
             }
         }
         fn done(&self) -> Vec<String> {
@@ -568,6 +904,38 @@ mod tests {
             self.log
                 .borrow_mut()
                 .push(format!("scroll {direction} {pages}"));
+            Ok(())
+        }
+        fn windows(&mut self, app: &AppRef) -> Result<Vec<Window<usize>>, String> {
+            Ok(self
+                .windows
+                .borrow()
+                .iter()
+                .enumerate()
+                .filter(|(_, window)| window.pid == app.pid && window.open)
+                .map(|(handle, window)| Window {
+                    title: window.title.to_string(),
+                    frame: window.frame,
+                    minimized: window.minimized,
+                    handle,
+                })
+                .collect())
+        }
+        fn screens(&mut self) -> Vec<Screen> {
+            vec![LAPTOP, EXTERNAL]
+        }
+        fn frame(&mut self, window: &usize) -> Option<Rect> {
+            let windows = self.windows.borrow();
+            windows
+                .get(*window)
+                .filter(|window| window.open)
+                .map(|window| window.frame)
+        }
+        fn set_frame(&mut self, window: &usize, frame: Rect) -> Result<(), String> {
+            self.log
+                .borrow_mut()
+                .push(format!("frame {window} {}", rect_text(frame)));
+            self.windows.borrow_mut()[*window].frame = frame;
             Ok(())
         }
     }
@@ -922,6 +1290,318 @@ mod tests {
             call(&mut server, "get_app_state", json!({"app": "Photoshop"}))
                 .unwrap_err()
                 .contains("not running")
+        );
+    }
+
+    fn frame_of(fake: &Fake, handle: usize) -> String {
+        rect_text(fake.windows.borrow()[handle].frame)
+    }
+
+    /// The id printed for the window titled `title` in a list_windows text.
+    fn id_in(list: &str, title: &str) -> u64 {
+        list.lines()
+            .find(|line| line.contains(&format!("\"{title}\"")))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|id| id.parse().ok())
+            .unwrap_or_else(|| panic!("{title} not in {list}"))
+    }
+
+    #[test]
+    fn lists_windows_of_apps_fndr_may_operate_with_ids_frames_and_displays() {
+        let (mut server, _) = server(SHOP.to_vec());
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        assert!(
+            list.starts_with(
+                "Displays:\ndisplay 1: 0,33 1512x879\ndisplay 2: 1512,-175 1920x1055\n"
+            ),
+            "{list}"
+        );
+        assert!(
+            list.contains("window 1 TextEdit \"Essay.txt\" 100,100 600x500 display 1\n"),
+            "{list}"
+        );
+        assert!(
+            list.contains("TextEdit \"Notes 'draft' 2\" 200,150 500x400 display 1"),
+            "{list}"
+        );
+        assert!(
+            list.contains("Preview \"Reading.pdf\" 2000,0 800x900 display 2\n"),
+            "{list}"
+        );
+        assert!(
+            list.contains("\"Old.pdf\" 0,0 400x400 display 1 minimized"),
+            "{list}"
+        );
+        for hidden in ["FNDR", "Vault", "1Password"] {
+            assert!(
+                !list.contains(&format!("\"{hidden}\"")),
+                "{hidden} listed: {list}"
+            );
+        }
+        let one = call(&mut server, "list_windows", json!({"app": "preview"})).unwrap();
+        assert!(
+            one.contains("Reading.pdf") && !one.contains("Essay.txt"),
+            "{one}"
+        );
+        for app in ["FNDR", "Vault", "1Password"] {
+            let refused = call(&mut server, "list_windows", json!({"app": app})).unwrap_err();
+            assert!(refused.contains("off limits"), "{app}: {refused}");
+        }
+    }
+
+    #[test]
+    fn arranges_a_doc_left_and_a_pdf_right_then_puts_them_back() {
+        let (mut server, fake) = server(SHOP.to_vec());
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let (essay, pdf) = (id_in(&list, "Essay.txt"), id_in(&list, "Reading.pdf"));
+        let done = call(
+            &mut server,
+            "arrange_windows",
+            json!({"layout": "left_right_split", "windows": [{"id": essay, "app": "TextEdit"}, {"id": pdf, "app": "Preview"}]}),
+        )
+        .unwrap();
+        assert!(done.contains("\"Essay.txt\" now 0,33 756x879"), "{done}");
+        assert_eq!(rect_text(Rect::new(-0.0, -0.4, 10.0, 10.0)), "0,0 10x10");
+        assert!(
+            done.contains("\"Reading.pdf\" now 756,33 756x879"),
+            "laid out on the first window's display: {done}"
+        );
+        assert_eq!(
+            (frame_of(&fake, 0), frame_of(&fake, 2)),
+            ("0,33 756x879".into(), "756,33 756x879".into())
+        );
+
+        // A second layout still restores to where FNDR found them.
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let (essay, pdf) = (id_in(&list, "Essay.txt"), id_in(&list, "Reading.pdf"));
+        call(
+            &mut server,
+            "arrange_windows",
+            json!({"layout": "top_bottom_split", "windows": [{"id": pdf, "app": "Preview"}, {"id": essay, "app": "TextEdit"}], "display": 2}),
+        )
+        .unwrap();
+        assert_eq!(frame_of(&fake, 2), "1512,-175 1920x527");
+        assert_eq!(frame_of(&fake, 0), "1512,352 1920x528");
+
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let (essay, pdf) = (id_in(&list, "Essay.txt"), id_in(&list, "Reading.pdf"));
+        let back = json!({"layout": "restore_previous", "windows": [{"id": essay, "app": "TextEdit"}, {"id": pdf, "app": "Preview"}]});
+        call(&mut server, "arrange_windows", back.clone()).unwrap();
+        assert_eq!(
+            (frame_of(&fake, 0), frame_of(&fake, 2)),
+            ("100,100 600x500".into(), "2000,0 800x900".into())
+        );
+
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let essay = id_in(&list, "Essay.txt");
+        let again = call(
+            &mut server,
+            "arrange_windows",
+            json!({"layout": "restore_previous", "windows": [{"id": essay, "app": "TextEdit"}]}),
+        )
+        .unwrap_err();
+        assert!(again.contains("nothing to put back"), "{again}");
+    }
+
+    #[test]
+    fn a_window_id_from_an_older_list_or_another_app_is_refused() {
+        let (mut server, fake) = server(SHOP.to_vec());
+        let arrange = |server: &mut Server<Fake>, windows: Value| {
+            call(
+                server,
+                "arrange_windows",
+                json!({"layout": "maximize", "windows": windows}),
+            )
+        };
+        let none = arrange(&mut server, json!([{"id": 1, "app": "TextEdit"}])).unwrap_err();
+        assert!(none.contains("list_windows"), "{none}");
+
+        let old = call(&mut server, "list_windows", json!({})).unwrap();
+        let new = call(&mut server, "list_windows", json!({})).unwrap();
+        let stale = id_in(&old, "Essay.txt");
+        assert_ne!(stale, id_in(&new, "Essay.txt"), "ids keep counting");
+        let refused = arrange(&mut server, json!([{"id": stale, "app": "TextEdit"}])).unwrap_err();
+        assert!(refused.contains("not in the current list"), "{refused}");
+        assert!(arrange(&mut server, json!([{"id": 999, "app": "TextEdit"}])).is_err());
+
+        let essay = id_in(&new, "Essay.txt");
+        let other = arrange(&mut server, json!([{"id": essay, "app": "Preview"}])).unwrap_err();
+        assert!(other.contains("belongs to TextEdit"), "{other}");
+        let twice = arrange(
+            &mut server,
+            json!([{"id": essay, "app": "TextEdit"}, {"id": essay, "app": "TextEdit"}]),
+        )
+        .unwrap_err();
+        assert!(twice.contains("twice"), "{twice}");
+        let minimized = arrange(
+            &mut server,
+            json!([{"id": id_in(&new, "Old.pdf"), "app": "Preview"}]),
+        )
+        .unwrap_err();
+        assert!(minimized.contains("minimized"), "{minimized}");
+        let seven: Vec<Value> = (0..7)
+            .map(|_| json!({"id": essay, "app": "TextEdit"}))
+            .collect();
+        assert!(arrange(&mut server, Value::Array(seven))
+            .unwrap_err()
+            .contains("at most 6"));
+        let no_app = arrange(&mut server, json!([{"id": essay}])).unwrap_err();
+        assert!(no_app.contains("app it belongs to"), "{no_app}");
+        let unknown = call(
+            &mut server,
+            "arrange_windows",
+            json!({"layout": "cascade", "windows": [{"id": essay, "app": "TextEdit"}]}),
+        )
+        .unwrap_err();
+        assert!(unknown.contains("left_right_split"), "{unknown}");
+        let thirds = call(&mut server, "arrange_windows", json!({"layout": "grid2x2", "windows": [{"id": essay, "app": "TextEdit"}], "display": 3})).unwrap_err();
+        assert!(thirds.contains("no display 3"), "{thirds}");
+
+        // A window closed since the list is refused, not guessed.
+        fake.windows.borrow_mut()[0].open = false;
+        let gone = arrange(&mut server, json!([{"id": essay, "app": "TextEdit"}])).unwrap_err();
+        assert!(gone.contains("is gone"), "{gone}");
+        assert!(fake.done().is_empty(), "nothing moved: {:?}", fake.done());
+
+        // Any change drops the list, like an element tree.
+        fake.windows.borrow_mut()[0].open = true;
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let essay = id_in(&list, "Essay.txt");
+        arrange(&mut server, json!([{"id": essay, "app": "TextEdit"}])).unwrap();
+        let after = arrange(&mut server, json!([{"id": essay, "app": "TextEdit"}])).unwrap_err();
+        assert!(after.contains("list_windows"), "{after}");
+    }
+
+    #[test]
+    fn off_limits_windows_cannot_be_named_even_by_guessing_an_id() {
+        let (mut server, fake) = server(SHOP.to_vec());
+        let list = call(&mut server, "list_windows", json!({})).unwrap();
+        let ids: Vec<u64> = list
+            .lines()
+            .filter(|line| line.starts_with("window "))
+            .filter_map(|line| line.split_whitespace().nth(1)?.parse().ok())
+            .collect();
+        let next = ids.iter().max().unwrap() + 1;
+        for app in ["FNDR", "Vault", "1Password 7"] {
+            let refused = call(
+                &mut server,
+                "arrange_windows",
+                json!({"layout": "maximize", "windows": [{"id": next, "app": app}]}),
+            )
+            .unwrap_err();
+            assert!(
+                refused.contains("not in the current list"),
+                "{app}: {refused}"
+            );
+            let moved = call(
+                &mut server,
+                "move_window",
+                json!({"app": app, "window": next, "x": 0, "y": 0}),
+            )
+            .unwrap_err();
+            assert!(moved.contains("off limits"), "{app}: {moved}");
+        }
+        assert!(fake.done().is_empty());
+    }
+
+    #[test]
+    fn moving_and_resizing_keep_a_window_on_the_visible_part_of_a_display() {
+        let (mut server, fake) = server(SHOP.to_vec());
+        let mut step = |tool: &str, args: Value| {
+            let list = call(&mut server, "list_windows", json!({"app": "TextEdit"})).unwrap();
+            let mut args = args;
+            args["window"] = json!(id_in(&list, "Essay.txt"));
+            args["app"] = json!("TextEdit");
+            call(&mut server, tool, args)
+        };
+        step("move_window", json!({"x": 300, "y": 200})).unwrap();
+        assert_eq!(frame_of(&fake, 0), "300,200 600x500");
+        step("move_window", json!({"x": -400, "y": -50})).unwrap();
+        assert_eq!(
+            frame_of(&fake, 0),
+            "0,33 600x500",
+            "under the menu bar and off the left edge"
+        );
+        step("move_window", json!({"x": 1400, "y": 800})).unwrap();
+        assert_eq!(
+            frame_of(&fake, 0),
+            "1512,380 600x500",
+            "most of it lands on the second display"
+        );
+        step("resize_window", json!({"width": 5000, "height": 5000})).unwrap();
+        assert_eq!(frame_of(&fake, 0), "1512,-175 1920x1055");
+        step("resize_window", json!({"width": 640, "height": 480})).unwrap();
+        assert_eq!(frame_of(&fake, 0), "1512,-175 640x480");
+        assert!(step("resize_window", json!({"width": 0, "height": 480})).is_err());
+        assert!(step("move_window", json!({"x": "left", "y": 0})).is_err());
+        assert!(step("move_window", json!({"y": 0})).is_err());
+    }
+
+    #[test]
+    fn window_tools_are_served_with_shapes_policy_reads() {
+        let (mut server, _) = server(SHOP.to_vec());
+        let listed = server
+            .handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+            .unwrap();
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        let tool = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        let arrange = &tool("arrange_windows")["inputSchema"];
+        let layouts: Vec<&str> = arrange["properties"]["layout"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            layouts,
+            [
+                "left_right_split",
+                "top_bottom_split",
+                "thirds",
+                "grid2x2",
+                "maximize",
+                "restore_previous"
+            ]
+        );
+        assert_eq!(arrange["properties"]["windows"]["maxItems"], 6);
+        assert_eq!(
+            arrange["properties"]["windows"]["items"]["required"],
+            json!(["id", "app"])
+        );
+        assert_eq!(
+            tool("move_window")["inputSchema"]["required"],
+            json!(["app", "window", "x", "y"])
+        );
+        assert_eq!(
+            tool("resize_window")["inputSchema"]["required"],
+            json!(["app", "window", "width", "height"])
+        );
+        assert!(
+            tool("list_windows")["inputSchema"]["required"].is_null(),
+            "app is optional"
+        );
+
+        let observed = Observed::default();
+        let verdict = |tool: &str, args: Value| classify(tool, &args, &observed).risk;
+        assert_eq!(verdict("list_windows", json!({})), Risk::Runs);
+        assert_eq!(
+            verdict(
+                "arrange_windows",
+                json!({"layout": "left_right_split", "windows": [{"id": 1, "app": "TextEdit"}, {"id": 2, "app": "Preview"}]})
+            ),
+            Risk::Runs
+        );
+        assert_eq!(
+            verdict(
+                "move_window",
+                json!({"app": "TextEdit", "window": 1, "x": 0, "y": 0})
+            ),
+            Risk::Runs
         );
     }
 }

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, resultNote, type DoState } from "./doRun";
-import type { ComputerUseEvent } from "@/shared/ipc/tauri";
+import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, matchChoice, resultNote, workSetSummary, type DoState } from "./doRun";
+import type { ComputerUseEvent, WorkItem, WorkSet } from "@/shared/ipc/tauri";
+
+const CANVAS: WorkItem = { memoryId: "canvas", label: "Assignment 3", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "canvas.utah.edu", capturedAt: 3 };
+const PDF: WorkItem = { memoryId: "pdf", label: "reading.pdf, page 4", kind: "pdf_page", reopenRank: 7, appName: "Preview", page: 4, capturedAt: 2 };
+const DOC: WorkItem = { memoryId: "doc", label: "Lab report - Google Docs", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "docs.google.com", capturedAt: 1 };
+const set = (id: string, title: string, items: WorkItem[]): WorkSet => ({ id, title, reason: "Its titles mention assignment", score: 1, items });
+const BIO = set("bio", "Biology assignment 2", [CANVAS, PDF, DOC]);
+const CHEM = set("chem", "Chemistry assignment 4", [CANVAS, PDF, DOC, { ...DOC, memoryId: "sheet", label: "Data" }]);
+
 
 const PLANNED: ComputerUseEvent = {
     kind: "planned",
@@ -181,5 +189,71 @@ describe("doRunReducer", () => {
             event({ kind: "failed", runId: "r1", error: "401 Unauthorized", reconnect: true }),
         );
         expect(signedOut).toMatchObject({ phase: "failed", reconnect: true });
+    });
+});
+
+describe("work sets", () => {
+    const offered = () => run({ type: "planRequested", runId: "r1", transcript: "the assignment I was working on" }, event({ kind: "choose", runId: "r1", options: [BIO, CHEM] }));
+
+    it("shows the sets to choose between, and a pick becomes a plan card listing every place", () => {
+        const choosing = offered();
+        expect(choosing.phase).toBe("choose");
+        expect(choosing.options.map((o) => o.title)).toEqual(["Biology assignment 2", "Chemistry assignment 4"]);
+        const picked = doRunReducer(choosing, { type: "workSetChosen", set: BIO });
+        expect(picked.phase).toBe("plan");
+        expect(picked.options).toEqual([]);
+        expect(picked.steps.map((s) => s.label)).toEqual(["Open Assignment 3", "Open reading.pdf, page 4", "Open Lab report - Google Docs"]);
+        expect(picked.steps.every((s) => s.action === "reopen_memory")).toBe(true);
+        expect(picked.autoStart).toBe(true);
+        expect(doRunReducer(choosing, { type: "workSetChosen", set: CHEM }).autoStart).toBe(false);
+    });
+
+    it("keeps listening through a choice, and Stop clears it", () => {
+        const choosing = offered();
+        expect(doRunReducer(choosing, { type: "listening" })).toBe(choosing);
+        const stopped = doRunReducer(choosing, { type: "stopped" });
+        expect(stopped.phase).toBe("stopped");
+        expect(stopped.options).toEqual([]);
+    });
+
+    it("marks each place from what FNDR saw when it opened it", () => {
+        const picked = doRunReducer(offered(), { type: "workSetChosen", set: BIO });
+        const opening = doRunReducer(picked, { type: "workSetOpening" });
+        expect(opening.phase).toBe("running");
+        const done = doRunReducer(opening, {
+            type: "workSetOpened",
+            outcomes: [
+                { memoryId: "canvas", label: "Assignment 3", ok: true, detail: "Opened" },
+                { memoryId: "pdf", label: "reading.pdf, page 4", ok: false, detail: "reading.pdf is no longer there" },
+                { memoryId: "doc", label: "Lab report - Google Docs", ok: true, detail: "Opened" },
+            ],
+        });
+        expect(done.phase).toBe("finished");
+        expect(done.steps.map((s) => [s.status, s.checked])).toEqual([["done", true], ["failed", false], ["done", true]]);
+        expect(done.result).toEqual({
+            ok: false,
+            summary: "Opened: Assignment 3, Lab report - Google Docs. Not opened: reading.pdf, page 4 (reading.pdf is no longer there).",
+        });
+    });
+
+    it("narrows by words, picks the one clear set, or says why there is none", () => {
+        expect(doRunReducer(offered(), { type: "workSetResolved", resolution: { kind: "best", value: CHEM } }).phase).toBe("plan");
+        expect(doRunReducer(offered(), { type: "workSetResolved", resolution: { kind: "ambiguous", value: [CHEM, BIO] } }).options[0].id).toBe("chem");
+        const none = doRunReducer(offered(), { type: "workSetResolved", resolution: { kind: "none", value: { why: "Nothing matches." } } });
+        expect([none.phase, none.error]).toEqual(["failed", "Nothing matches."]);
+        expect(workSetSummary([{ memoryId: "a", label: "A", ok: true, detail: "Opened" }])).toBe("Opened: A.");
+    });
+
+    it("hears a pick by number or by name, and anything else as narrowing", () => {
+        const options = [BIO, CHEM];
+        for (const said of ["two", "2", "the second one", "number two", "chemistry"]) {
+            expect(matchChoice(said, options), said).toBe(1);
+        }
+        expect(matchChoice("the first", options)).toBe(0);
+        expect(matchChoice("the biology one", options)).toBe(0);
+        expect(matchChoice("assignment", options)).toBeNull();
+        expect(classifyUtterance("one", { choices: options })).toEqual({ kind: "choose", index: 0 });
+        expect(classifyUtterance("the one with the lab data", { choices: options })).toEqual({ kind: "refine", text: "the one with the lab data" });
+        expect(classifyUtterance("stop", { choices: options })).toEqual({ kind: "stop" });
     });
 });

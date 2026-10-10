@@ -4,7 +4,14 @@
  * notch only renders it (ADR-020 amendment, 2026-10-06).
  */
 
-import type { ComputerUseEvent, ComputerUseStepAction } from "@/shared/ipc/tauri";
+import type {
+    ComputerUseEvent,
+    ComputerUseStepAction,
+    WorkItem,
+    WorkItemOutcome,
+    WorkSet,
+    WorkSetResolution,
+} from "@/shared/ipc/tauri";
 
 /** Quiet after the last partial text that ends an utterance. */
 export const ENDPOINT_MS = 1200;
@@ -16,6 +23,10 @@ export const AUTO_START_MS = 1500;
 /** What was heard stays on screen this long before it is sent to be planned. */
 export const HEARD_MS = 1200;
 
+/** A work set of more than this many places waits for Start (ADR 027;
+ *  `MAX_AUTO_REOPENS` in computer_use.rs). */
+export const MAX_AUTO_REOPENS = 3;
+
 export type DoPhase =
     | "idle"
     | "listening"
@@ -24,6 +35,7 @@ export type DoPhase =
     | "mic_denied"
     | "voice_unavailable"
     | "planning"
+    | "choose"
     | "plan"
     | "running"
     | "finished"
@@ -41,6 +53,8 @@ export interface DoStep {
     detail?: string;
     /** FNDR saw this step's result itself; false means the model reported it. */
     checked?: boolean;
+    /** The place a `reopen_memory` step opens. */
+    item?: WorkItem;
 }
 
 export interface DoAction {
@@ -68,6 +82,10 @@ export interface DoState {
     usedMemories: number;
     /** The plan on the card may start by itself; otherwise it waits for a tap or "go". */
     autoStart: boolean;
+    /** Work sets that matched about equally, waiting for the person to pick one. */
+    options: WorkSet[];
+    /** A picked work set: FNDR opens it itself when the card starts. */
+    workSet: WorkSet | null;
 }
 
 export const initialDoState: DoState = {
@@ -85,6 +103,8 @@ export const initialDoState: DoState = {
     error: null,
     reconnect: false,
     usedMemories: 0,
+    options: [],
+    workSet: null,
 };
 
 export type DoInput =
@@ -98,6 +118,10 @@ export type DoInput =
     | { type: "redirectHeard"; text: string }
     | { type: "redirectDismissed" }
     | { type: "event"; event: ComputerUseEvent }
+    | { type: "workSetChosen"; set: WorkSet }
+    | { type: "workSetResolved"; resolution: WorkSetResolution }
+    | { type: "workSetOpening" }
+    | { type: "workSetOpened"; outcomes: WorkItemOutcome[] }
     | { type: "stopped" }
     | { type: "error"; message: string };
 
@@ -164,15 +188,46 @@ function applyEvent(state: DoState, event: ComputerUseEvent): DoState {
             return { ...state, phase: "finished", approval: null, current: null, result: { ok: event.ok, summary: event.summary } };
         case "stopped":
             return { ...state, phase: "stopped", approval: null, runId: null, current: null };
+        case "choose":
+            return { ...state, phase: "choose", options: event.options, steps: [], workSet: null };
         case "failed":
             return { ...state, phase: "failed", approval: null, error: event.error, reconnect: event.reconnect };
     }
 }
 
+/** The plan card for a picked work set: every place, listed. */
+function chooseSet(state: DoState, set: WorkSet): DoState {
+    return {
+        ...state,
+        phase: "plan",
+        options: [],
+        workSet: set,
+        current: null,
+        autoStart: set.items.length <= MAX_AUTO_REOPENS,
+        steps: set.items.map((item) => ({
+            label: `Open ${item.label}`,
+            action: "reopen_memory",
+            app: item.appName,
+            status: "pending",
+            attempt: 0,
+            item,
+        })),
+    };
+}
+
+/** The same summary a work set run on the Mac ends with. */
+export function workSetSummary(outcomes: WorkItemOutcome[]): string {
+    const opened = outcomes.filter((o) => o.ok).map((o) => o.label);
+    const missed = outcomes.filter((o) => !o.ok).map((o) => `${o.label} (${o.detail})`);
+    if (missed.length === 0) return `Opened: ${opened.join(", ")}.`;
+    if (opened.length === 0) return `Nothing opened: ${missed.join("; ")}.`;
+    return `Opened: ${opened.join(", ")}. Not opened: ${missed.join("; ")}.`;
+}
+
 export function doRunReducer(state: DoState, input: DoInput): DoState {
     switch (input.type) {
         case "listening":
-            return state.phase === "running" || state.phase === "plan" || state.phase === "planning"
+            return state.phase === "running" || state.phase === "plan" || state.phase === "planning" || state.phase === "choose"
                 ? state
                 : { ...initialDoState, phase: "listening" };
         case "partial":
@@ -199,8 +254,36 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
             return { ...state, redirect: null };
         case "event":
             return applyEvent(state, input.event);
+        case "workSetChosen":
+            return chooseSet(state, input.set);
+        case "workSetResolved": {
+            const resolution = input.resolution;
+            if (resolution.kind === "best") return chooseSet(state, resolution.value);
+            if (resolution.kind === "ambiguous") return { ...state, phase: "choose", partial: "", options: resolution.value };
+            return { ...state, phase: "failed", options: [], error: resolution.value.why };
+        }
+        case "workSetOpening":
+            return {
+                ...state,
+                phase: "running",
+                steps: state.steps.map((step) => ({ ...step, status: "running", attempt: 1 })),
+            };
+        case "workSetOpened": {
+            const steps = state.steps.map((step) => {
+                const outcome = input.outcomes.find((o) => o.memoryId === step.item?.memoryId);
+                if (!outcome) return { ...step, status: "pending" as const };
+                return { ...step, status: outcome.ok ? ("done" as const) : ("failed" as const), detail: outcome.detail, checked: outcome.ok };
+            });
+            return {
+                ...state,
+                phase: "finished",
+                steps,
+                workSet: null,
+                result: { ok: input.outcomes.every((o) => o.ok), summary: workSetSummary(input.outcomes) },
+            };
+        }
         case "stopped":
-            return { ...state, phase: "stopped", approval: null, redirect: null, runId: null, current: null, partial: "" };
+            return { ...state, phase: "stopped", approval: null, redirect: null, runId: null, current: null, partial: "", options: [], workSet: null };
         case "error":
             return { ...state, phase: "failed", error: input.message };
     }
@@ -225,6 +308,8 @@ export function resultNote(steps: DoStep[]): string {
 // MARK: - What a spoken phrase means
 
 export type UtteranceIntent =
+    | { kind: "choose"; index: number }
+    | { kind: "refine"; text: string }
     | { kind: "stop" }
     | { kind: "go" }
     | { kind: "decline" }
@@ -264,13 +349,50 @@ export function isStopPhrase(text: string): boolean {
     return saysStop(normalize(text));
 }
 
+const ORDINALS: string[][] = [
+    ["1", "one", "first"],
+    ["2", "two", "second", "to", "too"],
+    ["3", "three", "third"],
+];
+
+const NAME_FILLER = new Set(["the", "one", "that", "this", "with", "open", "number", "option", "please", "about"]);
+
+/** Which offered work set the person named: by number ("two", "the second
+ *  one") or by a word of its title ("the biology one"). Null when unclear. */
+export function matchChoice(text: string, options: { title: string }[]): number | null {
+    const said = normalize(text).split(" ").filter(Boolean);
+    // "the second one", "the biology one": a trailing "one" is not a number.
+    const words = said.filter(
+        (word, i) => !(word === "one" && i > 0 && i === said.length - 1 && !["number", "option"].includes(said[i - 1])),
+    );
+    if (words.length === 0) return null;
+    if (words.length <= 4) {
+        const byNumber = ORDINALS.findIndex(
+            (names, index) => index < options.length && words.some((word) => names.includes(word) && !(word === "to" && words.length > 1)),
+        );
+        if (byNumber >= 0) return byNumber;
+    }
+    const named = words.filter((word) => word.length >= 4 && !NAME_FILLER.has(word));
+    const scores = options.map((option) => {
+        const title = new Set(normalize(option.title).split(" "));
+        return named.filter((word) => title.has(word)).length;
+    });
+    const best = Math.max(0, ...scores);
+    if (best === 0 || scores.filter((score) => score === best).length > 1) return null;
+    return scores.indexOf(best);
+}
+
 export function classifyUtterance(
     text: string,
-    context: { awaitingApproval?: boolean; awaitingStart?: boolean; running?: boolean },
+    context: { awaitingApproval?: boolean; awaitingStart?: boolean; running?: boolean; choices?: { title: string }[] },
 ): UtteranceIntent | null {
     const normalized = normalize(text);
     if (!normalized) return null;
     if (saysStop(normalized)) return { kind: "stop" };
+    if (context.choices && context.choices.length > 0) {
+        const index = matchChoice(text, context.choices);
+        return index === null ? { kind: "refine", text: text.trim() } : { kind: "choose", index };
+    }
     if (context.awaitingApproval) {
         if (matchesShortPhrase(normalized, NO_PHRASES)) return { kind: "decline" };
         // A yes must be a tap: the microphone hears music, video and other people too.

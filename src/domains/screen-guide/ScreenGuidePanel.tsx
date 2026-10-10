@@ -1,4 +1,5 @@
 import { OperatorPermissions } from "./OperatorPermissions";
+import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
     armScreenGuideDiagnostic,
@@ -688,7 +689,7 @@ export function ScreenGuidePanel({
                             </strong>
                             <small>
                                 {computerUse && !computerUse.backend
-                                    ? "Nothing on this Mac can click and type for FNDR yet, so this cannot be turned on. It works with open-computer-use (npm install -g open-computer-use). The ChatGPT app's Computer Use is not supported: FNDR could not check its actions one by one."
+                                    ? "FNDR could not start its own way of clicking and typing on this Mac, so this stays off. The ChatGPT app's Computer Use is not supported: FNDR could not check its actions one by one."
                                     : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the name of the app in front, the on-screen text of the app being operated (and a picture of its window, if the helper has Screen Recording access), and up to 5 memory snippets when you refer to the past. Opening apps, playing media, following links and searching run without asking; other clicks, typing and links you did not ask for wait for your tap. Sending, deleting, buying, passwords, Terminal and blocklisted apps are always refused. Say “stop” anytime."}
                             </small>
                         </span>
@@ -717,6 +718,8 @@ export function ScreenGuidePanel({
                     </label>
                     {canOperateComputer ? <OperatorPermissions /> : null}
                 </section>
+
+                <VoiceOutputSection />
 
                 <section className="sg-ask-card">
                     <label htmlFor="sg-question">Ask about your display or find a named file</label>

@@ -5,7 +5,12 @@
 //! itself, so a click is never a screen position. Text typed without an
 //! element, keys and scrolling go to the app's own focus after FNDR has made
 //! that app frontmost and confirmed it stayed there. No pixels are read.
+//!
+//! Windows are moved through their AXPosition and AXSize. Display frames come
+//! from NSScreen on the main thread, or from CoreGraphics when the main thread
+//! does not answer.
 
+use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication};
@@ -16,14 +21,241 @@ use super::{
     enable_manual_accessibility, frontmost_pid, has_accessibility_permission, kCFBooleanTrue,
     str_to_cfstring, AXError, AXUIElementCreateApplication, AXUIElementRef,
     AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AxElement, AxTextTree,
-    CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFGetTypeID, CFRelease, CFRetain,
-    K_AX_ERROR_SUCCESS,
+    CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFBooleanGetTypeID,
+    CFBooleanGetValue, CFGetTypeID, CFRelease, CFRetain, K_AX_ERROR_SUCCESS,
 };
+use crate::operator::layout::{Rect, Screen, Window};
 use crate::operator::mcp::{AppRef, Desktop, Entry, Tree};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementPerformAction(element: AXUIElementRef, action: super::CFStringRef) -> AXError;
+    fn AXValueCreate(kind: u32, value: *const c_void) -> super::CFTypeRef;
+    fn AXValueGetValue(value: super::CFTypeRef, kind: u32, out: *mut c_void) -> bool;
+}
+
+const AX_VALUE_CG_POINT: u32 = 1;
+const AX_VALUE_CG_SIZE: u32 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CgPair {
+    a: f64,
+    b: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CgRect {
+    origin: CgPair,
+    size: CgPair,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CgRect;
+}
+
+extern "C" {
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+}
+
+/// A point or size attribute of a window.
+unsafe fn ax_pair(element: AXUIElementRef, attr: &str, kind: u32) -> Option<CgPair> {
+    let value = ax_copy_attr_value(element, attr).ok()?;
+    if value.is_null() {
+        return None;
+    }
+    let mut pair = CgPair::default();
+    let read = AXValueGetValue(value, kind, &mut pair as *mut CgPair as *mut c_void);
+    CFRelease(value);
+    read.then_some(pair)
+}
+
+unsafe fn set_ax_pair(
+    element: AXUIElementRef,
+    attr: &str,
+    kind: u32,
+    pair: CgPair,
+) -> Result<(), AXError> {
+    let value = AXValueCreate(kind, &pair as *const CgPair as *const c_void);
+    if value.is_null() {
+        return Err(-1);
+    }
+    let name = str_to_cfstring(attr);
+    let code = AXUIElementSetAttributeValue(element, name, value);
+    CFRelease(name);
+    CFRelease(value);
+    if code == K_AX_ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(code)
+    }
+}
+
+unsafe fn window_frame(window: AXUIElementRef) -> Option<Rect> {
+    let position = ax_pair(window, "AXPosition", AX_VALUE_CG_POINT)?;
+    let size = ax_pair(window, "AXSize", AX_VALUE_CG_SIZE)?;
+    Some(Rect::new(position.a, position.b, size.a, size.b))
+}
+
+unsafe fn ax_bool_attr(element: AXUIElementRef, attr: &str) -> bool {
+    match ax_copy_attr_value(element, attr) {
+        Ok(value) if !value.is_null() => {
+            let truth = CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+            CFRelease(value);
+            truth
+        }
+        _ => false,
+    }
+}
+
+/// Windows a person arranges: standard windows and dialogs, not palettes,
+/// sheets or the invisible helper windows some apps keep.
+fn is_arrangeable(role: Option<&str>, subrole: Option<&str>) -> bool {
+    role == Some("AXWindow")
+        && matches!(subrole, None | Some("AXStandardWindow") | Some("AXDialog"))
+}
+
+/// Converts NSScreen frames, measured up from the bottom of the main display,
+/// into Accessibility ones measured down from its top. The main display is
+/// the one at 0,0 and is put first.
+fn screens_from_appkit(frames: &[(Rect, Rect)]) -> Vec<Screen> {
+    let main_height = frames
+        .iter()
+        .find(|(frame, _)| frame.x == 0.0 && frame.y == 0.0)
+        .or(frames.first())
+        .map(|(frame, _)| frame.height)
+        .unwrap_or_default();
+    let flip = |rect: Rect| {
+        Rect::new(
+            rect.x,
+            main_height - rect.y - rect.height,
+            rect.width,
+            rect.height,
+        )
+    };
+    let mut screens: Vec<Screen> = frames
+        .iter()
+        .map(|(frame, visible)| Screen {
+            frame: flip(*frame),
+            visible: flip(*visible),
+        })
+        .collect();
+    screens.sort_by(|a, b| {
+        let main = |screen: &Screen| !(screen.frame.x == 0.0 && screen.frame.y == 0.0);
+        main(a)
+            .cmp(&main(b))
+            .then(a.frame.x.total_cmp(&b.frame.x))
+            .then(a.frame.y.total_cmp(&b.frame.y))
+    });
+    screens
+}
+
+/// Whole frame and visible frame of every NSScreen. Main thread only.
+fn appkit_frames() -> Option<Vec<(Rect, Rect)>> {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    objc2_foundation::MainThreadMarker::new()?;
+    let rect = |r: objc2_foundation::NSRect| {
+        Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height)
+    };
+    let mut frames = Vec::new();
+    unsafe {
+        // Walked with an enumerator: on macOS 27 the array's `count` has an
+        // encoding objc2 0.2 rejects (see `notch.rs`).
+        let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+        if screens.is_null() {
+            return None;
+        }
+        let walker: *mut AnyObject = msg_send![screens, objectEnumerator];
+        if walker.is_null() {
+            return None;
+        }
+        loop {
+            let screen: *mut AnyObject = msg_send![walker, nextObject];
+            if screen.is_null() {
+                break;
+            }
+            let screen = &*(screen as *const objc2_app_kit::NSScreen);
+            frames.push((rect(screen.frame()), rect(screen.visibleFrame())));
+        }
+    }
+    (!frames.is_empty()).then_some(frames)
+}
+
+extern "C" fn send_appkit_frames(context: *mut c_void) {
+    let sender = unsafe {
+        Box::from_raw(context as *mut std::sync::mpsc::SyncSender<Option<Vec<(Rect, Rect)>>>)
+    };
+    let _ = sender.send(appkit_frames());
+}
+
+/// The menu bar's height where AppKit cannot be asked. The Dock is not
+/// known there, so a window may then reach under it.
+const MENU_BAR_GUESS: f64 = 25.0;
+
+fn coregraphics_screens() -> Vec<Screen> {
+    let mut ids = [0u32; 16];
+    let mut count = 0u32;
+    if unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) } != 0 {
+        return Vec::new();
+    }
+    let mut screens: Vec<Screen> = ids[..count as usize]
+        .iter()
+        .map(|id| {
+            let bounds = unsafe { CGDisplayBounds(*id) };
+            let frame = Rect::new(
+                bounds.origin.a,
+                bounds.origin.b,
+                bounds.size.a,
+                bounds.size.b,
+            );
+            Screen {
+                frame,
+                visible: Rect::new(
+                    frame.x,
+                    frame.y + MENU_BAR_GUESS,
+                    frame.width,
+                    (frame.height - MENU_BAR_GUESS).max(1.0),
+                ),
+            }
+        })
+        .collect();
+    screens.sort_by(|a, b| {
+        let main = |screen: &Screen| !(screen.frame.x == 0.0 && screen.frame.y == 0.0);
+        main(a).cmp(&main(b)).then(a.frame.x.total_cmp(&b.frame.x))
+    });
+    screens
+}
+
+/// The displays, asked of AppKit on the main thread so the menu bar and the
+/// Dock are left out exactly.
+pub(crate) fn current_screens() -> Vec<Screen> {
+    if let Some(frames) = appkit_frames() {
+        return screens_from_appkit(&frames);
+    }
+    if objc2_foundation::MainThreadMarker::new().is_none() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Option<Vec<(Rect, Rect)>>>(1);
+        let context = Box::into_raw(Box::new(sender)) as *mut c_void;
+        unsafe {
+            dispatch_async_f(
+                &_dispatch_main_q as *const c_void,
+                context,
+                send_appkit_frames,
+            )
+        };
+        if let Ok(Some(frames)) = receiver.recv_timeout(Duration::from_millis(500)) {
+            return screens_from_appkit(frames.as_slice());
+        }
+    }
+    coregraphics_screens()
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -298,6 +530,76 @@ unsafe fn window_root(application: AXUIElementRef) -> Option<AxElement> {
 impl Desktop for AxDesktop {
     type Handle = AxElement;
 
+    fn windows(&mut self, app: &AppRef) -> Result<Vec<Window<AxElement>>, String> {
+        need_permission()?;
+        unsafe {
+            let application = AxElement(AXUIElementCreateApplication(app.pid));
+            if application.0.is_null() {
+                return Err(format!("{} cannot be read.", app.name));
+            }
+            AXUIElementSetMessagingTimeout(application.0, 1.5);
+            let list = ax_copy_attr_value(application.0, "AXWindows")
+                .map_err(|code| ax_failure(code, "listing windows"))?;
+            if list.is_null() {
+                return Ok(Vec::new());
+            }
+            let mut windows = Vec::new();
+            if CFGetTypeID(list) == CFArrayGetTypeID() {
+                for at in 0..CFArrayGetCount(list) {
+                    let raw = CFArrayGetValueAtIndex(list, at);
+                    if raw.is_null() {
+                        continue;
+                    }
+                    let window = AxElement(CFRetain(raw));
+                    let role = ax_string_attr(window.0, "AXRole");
+                    let subrole = ax_string_attr(window.0, "AXSubrole");
+                    if !is_arrangeable(role.as_deref(), subrole.as_deref()) {
+                        continue;
+                    }
+                    let Some(frame) = window_frame(window.0) else {
+                        continue;
+                    };
+                    windows.push(Window {
+                        title: ax_string_attr(window.0, "AXTitle").unwrap_or_default(),
+                        frame,
+                        minimized: ax_bool_attr(window.0, "AXMinimized"),
+                        handle: window,
+                    });
+                }
+            }
+            CFRelease(list);
+            Ok(windows)
+        }
+    }
+
+    fn screens(&mut self) -> Vec<Screen> {
+        current_screens()
+    }
+
+    fn frame(&mut self, window: &AxElement) -> Option<Rect> {
+        unsafe { window_frame(window.0) }
+    }
+
+    /// Size, then position, then size again: a window moved to a smaller
+    /// display may have been cut to fit before it got there.
+    fn set_frame(&mut self, window: &AxElement, frame: Rect) -> Result<(), String> {
+        need_permission()?;
+        let size = CgPair {
+            a: frame.width,
+            b: frame.height,
+        };
+        let position = CgPair {
+            a: frame.x,
+            b: frame.y,
+        };
+        unsafe {
+            set_ax_pair(window.0, "AXSize", AX_VALUE_CG_SIZE, size)
+                .and_then(|()| set_ax_pair(window.0, "AXPosition", AX_VALUE_CG_POINT, position))
+                .and_then(|()| set_ax_pair(window.0, "AXSize", AX_VALUE_CG_SIZE, size))
+                .map_err(|code| ax_failure(code, "moved"))
+        }
+    }
+
     fn list_apps(&mut self) -> Vec<AppRef> {
         let apps = unsafe { objc2_app_kit::NSWorkspace::sharedWorkspace().runningApplications() };
         (0..apps.count())
@@ -462,6 +764,42 @@ impl Desktop for AxDesktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appkit_frames_flip_into_accessibility_coordinates_with_the_main_display_first() {
+        // An external display above-right of a 1512x982 laptop, listed first.
+        let screens = screens_from_appkit(&[
+            (
+                Rect::new(1512.0, 102.0, 1920.0, 1080.0),
+                Rect::new(1512.0, 102.0, 1920.0, 1055.0),
+            ),
+            (
+                Rect::new(0.0, 0.0, 1512.0, 982.0),
+                Rect::new(0.0, 70.0, 1512.0, 879.0),
+            ),
+        ]);
+        assert_eq!(screens[0].frame, Rect::new(0.0, 0.0, 1512.0, 982.0));
+        assert_eq!(
+            screens[0].visible,
+            Rect::new(0.0, 33.0, 1512.0, 879.0),
+            "menu bar on top, Dock below"
+        );
+        assert_eq!(screens[1].frame, Rect::new(1512.0, -200.0, 1920.0, 1080.0));
+        assert_eq!(
+            screens[1].visible,
+            Rect::new(1512.0, -175.0, 1920.0, 1055.0)
+        );
+    }
+
+    #[test]
+    fn only_windows_a_person_arranges_are_listed() {
+        assert!(is_arrangeable(Some("AXWindow"), Some("AXStandardWindow")));
+        assert!(is_arrangeable(Some("AXWindow"), Some("AXDialog")));
+        assert!(is_arrangeable(Some("AXWindow"), None));
+        assert!(!is_arrangeable(Some("AXWindow"), Some("AXFloatingWindow")));
+        assert!(!is_arrangeable(Some("AXSheet"), None));
+        assert!(!is_arrangeable(None, None));
+    }
 
     #[test]
     fn roles_read_the_way_policy_expects() {

@@ -477,9 +477,20 @@ fn main() {
                     let mut recent_app_switches: std::collections::VecDeque<String> =
                         std::collections::VecDeque::with_capacity(APP_SWITCH_RECENT_CAPACITY);
 
+                    let mut signal_clock = fndr_lib::proactive_signals::SignalClock::default();
+
                     let mut interval = tokio::time::interval(PROACTIVE_NOTIFICATION_TICK);
                     loop {
                         interval.tick().await;
+
+                        // Stuck detector, thread updates and meeting prep:
+                        // each on its own cadence, switch and daily limit.
+                        fndr_lib::proactive_signals::run_due(
+                            &notif_handle,
+                            &notif_state,
+                            &mut signal_clock,
+                        )
+                        .await;
 
                         let now = chrono::Local::now();
                         let hour = now.hour();
@@ -732,6 +743,8 @@ fn main() {
             ipc::commands::get_runtime_metrics,
             ipc::commands::get_privacy_proof,
             ipc::commands::resume_work,
+            ipc::commands::what_changed_since,
+            ipc::commands::mark_thread_seen,
             ipc::commands::get_retention_days,
             ipc::commands::set_retention_days,
             ipc::commands::delete_older_than,
@@ -804,6 +817,12 @@ fn main() {
             ipc::commands::codex_login_start,
             ipc::commands::codex_login_cancel,
             ipc::commands::codex_logout,
+            ipc::commands::voice_out_status,
+            ipc::commands::voice_out_voices,
+            ipc::commands::voice_out_start,
+            ipc::commands::voice_out_speak,
+            ipc::commands::voice_out_cancel,
+            ipc::commands::voice_out_stop,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
             ipc::commands::set_computer_use_enabled,
@@ -814,6 +833,8 @@ fn main() {
             ipc::commands::computer_use_start,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
+            ipc::commands::resolve_work_set,
+            ipc::commands::open_work_set,
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
@@ -826,6 +847,8 @@ fn main() {
             // Auto-fill
             ipc::commands::get_autofill_settings,
             ipc::commands::set_autofill_settings,
+            ipc::commands::get_voice_output_settings,
+            ipc::commands::set_voice_output_settings,
             ipc::commands::set_autofill_overlay_ready,
             ipc::commands::take_pending_autofill_payload,
             ipc::commands::resolve_autofill,

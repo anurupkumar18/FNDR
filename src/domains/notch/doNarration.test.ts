@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { doRunReducer, initialDoState, type DoInput, type DoState } from "./doRun";
-import { isEchoOfSpeech, narrate } from "./doNarration";
-import type { ComputerUseEvent } from "@/shared/ipc/tauri";
+import { isEchoOfSpeech, narrate, spokenItem } from "./doNarration";
+import type { ComputerUseEvent, WorkItem, WorkSet } from "@/shared/ipc/tauri";
+
+const CANVAS: WorkItem = { memoryId: "canvas", label: "Assignment 3", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "canvas.utah.edu", capturedAt: 3 };
+const PDF: WorkItem = { memoryId: "pdf", label: "reading.pdf, page 4", kind: "pdf_page", reopenRank: 7, appName: "Preview", page: 4, capturedAt: 2 };
+const DOC: WorkItem = { memoryId: "doc", label: "Lab report - Google Docs", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "docs.google.com", capturedAt: 1 };
+const set = (id: string, title: string, items: WorkItem[]): WorkSet => ({ id, title, reason: "Its titles mention assignment", score: 1, items });
+const BIO = set("bio", "Biology assignment 2", [CANVAS, PDF, DOC]);
+const CHEM = set("chem", "Chemistry assignment 4", [CANVAS, PDF, DOC, { ...DOC, memoryId: "sheet", label: "Data" }]);
+
 
 const event = (e: ComputerUseEvent): DoInput => ({ type: "event", event: e });
 
@@ -142,5 +150,40 @@ describe("isEchoOfSpeech", () => {
     it("never swallows a stop", () => {
         expect(isEchoOfSpeech("stop", "I will stop here. Stop is easy.")).toBe(false);
         expect(isEchoOfSpeech("please cancel", "please cancel this")).toBe(false);
+    });
+});
+
+describe("narrating a work set", () => {
+    const reopen = (item: WorkItem) => ({ label: `Open ${item.label}`, action: "reopen_memory" as const, app: item.appName, item });
+
+    it("says what is opening in plain words", () => {
+        const said = lines(
+            { type: "planRequested", runId: "r1", transcript: "pull up the assignment" },
+            event({ kind: "planned", runId: "r1", autoStart: true, steps: [CANVAS, PDF, DOC].map(reopen) }),
+        )[1];
+        expect(said?.text).toBe("Opening your Canvas page, the PDF on page 4 and the doc.");
+    });
+
+    it("lists a longer set and waits for Start", () => {
+        const said = lines(
+            { type: "planRequested", runId: "r1", transcript: "pull up the assignment" },
+            event({ kind: "planned", runId: "r1", autoStart: false, steps: CHEM.items.map(reopen) }),
+        )[1];
+        expect(said?.text).toBe("four places to open: your Canvas page, the PDF on page 4, the doc and the doc. Tap Start when you are ready.");
+    });
+
+    it("reads out the choices with their numbers", () => {
+        const said = lines(
+            { type: "planRequested", runId: "r1", transcript: "the assignment" },
+            event({ kind: "choose", runId: "r1", options: [BIO, CHEM] }),
+        )[1];
+        expect(said?.text).toBe("That could be two pieces of work: one, Biology assignment 2; two, Chemistry assignment 4. Tap one or say its number.");
+    });
+
+    it("names files, folders and apps", () => {
+        expect(spokenItem({ ...DOC, kind: "file", label: "budget.xlsx" })).toBe("the file budget.xlsx");
+        expect(spokenItem({ ...DOC, kind: "folder", label: "Lab 3" })).toBe("the Lab 3 folder");
+        expect(spokenItem({ ...DOC, kind: "app", label: "Slack" })).toBe("Slack");
+        expect(spokenItem({ ...DOC, host: "github.com" })).toBe("your GitHub page");
     });
 });

@@ -98,3 +98,42 @@
 .fndr-voice-button[data-reduced-motion="true"] {
     transition: none;
 }
+
+.fndr-voice-output__controls {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+}
+
+.fndr-voice-output__select {
+    max-width: 14rem;
+    min-height: 2rem;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-size: 0.78rem;
+}
+
+.fndr-voice-output__select:focus-visible,
+.fndr-voice-output input[type="range"]:focus-visible {
+    outline: 2px solid var(--accent, currentColor);
+    outline-offset: 2px;
+}
+
+.fndr-voice-output__rate {
+    min-width: 2.5rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.fndr-voice-output__error {
+    margin: 0;
+    padding: 0 16px 12px;
+    color: var(--danger);
+    font-size: 0.72rem;
+}

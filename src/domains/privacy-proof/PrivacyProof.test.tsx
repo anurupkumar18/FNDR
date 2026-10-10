@@ -28,6 +28,11 @@ describe("PrivacyProof", () => {
         expect(screen.queryByText(/^noise/i)).not.toBeInTheDocument();
     });
 
+    it("starts an unknown reason with a capital and leaves the rest as written", () => {
+        render(<PrivacyProof proof={{ ...proof, skipped_by_reason: { new_reason_kind: 2 } }} />);
+        expect(screen.getByText("New reason kind")).toBeInTheDocument();
+    });
+
     it("labels process-lifetime counters as current-session activity", () => {
         render(<PrivacyProof proof={proof} />);
         expect(

@@ -60,6 +60,11 @@ export const baseline = {
         "setRetentionDays",
         "startMcpServer",
         "stopMcpServer",
-        "toggleNotchHud"
+        "toggleNotchHud",
+        // Proactive signals (2026-10-09): the Home thread view that calls these is
+        // the next wave's work and lives in src/app, outside this lane. Delete
+        // both lines when it lands.
+        "markThreadSeen",
+        "whatChangedSince"
     ],
 };

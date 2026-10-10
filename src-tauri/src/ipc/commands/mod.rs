@@ -8,7 +8,7 @@ pub use search::{
     search_raw_results, summarize_search, NeedsSignalCard,
 };
 
-mod memory;
+pub(crate) mod memory;
 pub use memory::*;
 
 mod quality;
@@ -28,6 +28,9 @@ pub use stats::*;
 
 mod autofill;
 pub use autofill::*;
+
+mod voice_output;
+pub use voice_output::*;
 
 mod omnibar;
 pub use omnibar::*;
@@ -53,8 +56,14 @@ pub use agent_chats::*;
 mod home;
 pub use home::*;
 
+mod proactive_signals;
+pub use proactive_signals::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
+
+mod speech_out;
+pub use speech_out::*;
 
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
@@ -62,8 +71,10 @@ pub use openclicky_bridge::*;
 mod computer_use;
 mod hermes_codex;
 mod setup_center;
+mod work_set;
 pub use computer_use::*;
 pub use setup_center::*;
+pub use work_set::*;
 
 mod agent;
 pub use agent::*;

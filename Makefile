@@ -37,6 +37,17 @@ scripts-test:
 test-clean:
 	./scripts/dev/test-clean.sh $(foreach file,$(FILES),-f "$(file)") $(FILTER)
 
+# Linked test and example executables pile up in the shared build cache, a
+# few hundred MB each, one set per source path that was ever built (this
+# checkout, the test-clean copy). Removes those older than a day; a stale one
+# is relinked in about a minute if it is ever needed. On 2026-10-09 this freed
+# 32 GB of a 67 GB cache.
+.PHONY: clean-test-binaries
+CARGO_SHARED_TARGET ?= $(HOME)/.cache/cargo-target-shared
+clean-test-binaries:
+	@find "$(CARGO_SHARED_TARGET)/debug/deps" "$(CARGO_SHARED_TARGET)/debug/examples" -maxdepth 1 -type f -perm +111 -size +100M -mtime +1 -delete 2>/dev/null; \
+	df -h "$(HOME)" | tail -1 | awk '{print $$4 " free"}'
+
 # The owner-vault quality gate: copies the vault, scores the copy
 # (examples/vault_qa.rs) and checks the scorecard against
 # scripts/audit/vault-quality-thresholds.json. Counts only; the real vault is

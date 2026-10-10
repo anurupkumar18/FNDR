@@ -695,6 +695,9 @@ extern "C" {
     fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
     fn CFArrayGetTypeID() -> usize;
+    fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> bool;
+    fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
+    fn CFBooleanGetTypeID() -> usize;
     static kCFBooleanTrue: CFTypeRef;
 }
 
@@ -721,6 +724,31 @@ impl Drop for AxElement {
         }
     }
 }
+
+impl Clone for AxElement {
+    fn clone(&self) -> Self {
+        if self.0.is_null() {
+            AxElement(self.0)
+        } else {
+            AxElement(unsafe { CFRetain(self.0) })
+        }
+    }
+}
+
+/// Two references to the same element on screen are equal (CFEqual).
+impl PartialEq for AxElement {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.is_null() || other.0.is_null() {
+            return self.0 == other.0;
+        }
+        unsafe { CFEqual(self.0, other.0) }
+    }
+}
+
+// An AXUIElement is a CoreFoundation object: retaining, releasing and
+// messaging it are safe from any thread. Window layout keeps the windows it
+// moved in a process-wide list (`operator::layout`), which needs this.
+unsafe impl Send for AxElement {}
 
 struct AxTextTree;
 

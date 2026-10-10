@@ -89,8 +89,15 @@ pub async fn reopen_memory(
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
         .ok_or_else(|| format!("Memory not found: {}", memory_id))?;
+    reopen_record(&record).await
+}
 
-    let target = resolve_reopen_target(&record);
+/// Opens what one memory points at: the shared core of `reopen_memory` and
+/// work sets, so every surface reopens and reports a memory the same way.
+pub(crate) async fn reopen_record(
+    record: &crate::storage::MemoryRecord,
+) -> Result<ReopenOutcome, String> {
+    let target = resolve_reopen_target(record);
     let app_name = record
         .reopen_app_name
         .as_deref()
@@ -123,7 +130,7 @@ pub async fn reopen_memory(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ResolvedReopenTarget {
+pub(crate) enum ResolvedReopenTarget {
     BrowserUrl(String),
     FilePath(PathBuf),
     AppBundle(String),
@@ -287,7 +294,9 @@ fn app_is_installed(_bundle_id: &str) -> bool {
     true
 }
 
-fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
+pub(crate) fn resolve_reopen_target(
+    record: &crate::storage::MemoryRecord,
+) -> Option<ResolvedReopenTarget> {
     if record.is_agent_note() {
         return None;
     }

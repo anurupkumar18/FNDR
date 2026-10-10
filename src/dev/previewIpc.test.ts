@@ -472,6 +472,18 @@ describe("development UI preview IPC", () => {
         await unlisten();
     });
 
+    it("models the Settings Updates section so it shows components, not a preview error", async () => {
+        const invoke = createPreviewIpcHandler();
+
+        await expect(invoke("setup_components")).resolves.toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: "hermes", state: "missing" })]),
+        );
+        await expect(invoke("computer_use_permissions", { probe: false })).resolves.toMatchObject({
+            accessibility: true,
+            backend: null,
+        });
+    });
+
     it("fails loudly when a screen needs an unmodeled command", async () => {
         const invoke = createPreviewIpcHandler();
 

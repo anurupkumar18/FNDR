@@ -98,3 +98,36 @@ Honest limits:
 - The old bundled launcher and open-computer-use remain as fallbacks, and can be forced with `FNDR_COMPUTER_USE`. They go when the twenty-task set passes (item 5).
 
 Still open for item 4: a full Codex session through the native server (the `live_notch_do_runs_the_example_request` run with `FNDR_COMPUTER_USE=fndr_native`), the twenty-task set, the fixture pages in a browser, whether Codex's own process chain keeps the Accessibility grant of the FNDR binary, and wheel scrolling.
+
+## Update 2026-10-09: window layout
+
+After a work set opens a doc, a PDF and a page, FNDR can put them side by side. The executor gains four tools and a Rust API, with the same rules as the element tools.
+
+Tools (`src-tauri/src/operator/mcp.rs`, Mac side in `src-tauri/src/accessibility/operate.rs`):
+
+- `list_windows(app?)`: each window's id, app, title, frame and display, and each display's visible frame. Without an app it lists every app FNDR may operate.
+- `arrange_windows(layout, windows: [{id, app}], display?)`: `layout` is one of `left_right_split`, `top_bottom_split`, `thirds`, `grid2x2`, `maximize`, `restore_previous`. The first window takes the left or top cell. The display defaults to the one holding most of the first window.
+- `move_window(app, window, x, y)` and `resize_window(app, window, width, height)`, kept on the visible part of the display the window lands on.
+
+How the rules are kept:
+
+- A window id is valid only for the list it came from. Ids keep counting up, so an id from an older list is refused by number alone, and any window change drops the list. A window closed since the list is refused, never guessed. A window named under an app it does not belong to, a minimized window, a window named twice and more than six windows are refused.
+- FNDR, the blocklist and the policy's sensitive apps (`policy::is_sensitive_app`) are never listed or moved, inside the server as well as by policy.
+- Moves are AXPosition and AXSize on the window FNDR listed. Frames are clamped to the display's visible frame (menu bar and Dock excluded), read from NSScreen on the main thread. Each move is read back and reported, so an app that keeps a minimum size shows where its window really went.
+- The frame a window had before FNDR first moved it is kept until `restore_previous` puts it back, however many layouts come in between.
+- No pixels are read.
+
+Policy (`operator/policy.rs`): `list_windows`, `arrange_windows`, `move_window` and `resize_window` run, because a layout changes nothing inside a window and can be undone with `restore_previous`. Each window in a layout names its app, so policy judges every app from the arguments alone: any sensitive app, more than six windows, no windows, or a layout FNDR does not know is never allowed; a window or a move without its app waits for a tap. The existing classifications are unchanged.
+
+For code inside FNDR, `src-tauri/src/operator/layout.rs`:
+
+```rust
+pub fn list_windows(app: Option<&str>, limits: &Limits) -> Result<Vec<WindowRef>, String>
+pub fn arrange(windows: &[WindowRef], layout: Layout) -> LayoutOutcome
+```
+
+`Limits::from_settings()` gives FNDR's own pid and the blocklist. The caller keeps the run's guards: nothing is listed or moved in Private Mode or with actions switched off. `LayoutOutcome` is `Refused(reason)` when nothing moved, or `Arranged(Vec<Placed>)` with each window's asked and read-back frame. The geometry (`frames`, `clamp`, `screen_holding`, `nearest_screen`) is pure and tested apart from the Mac.
+
+Checked: unit tests for every layout and window count, clamping and two displays; fake-desktop tests for the tools, stale and foreign ids, off-limits apps and restore; the real binary over a pipe; and by hand on TextEdit through the real Accessibility API on 2026-10-09: two documents listed, split left and right (read back as 0,40 900x1129 and 900,40 900x1129 on an 1800-point display with a 40-point menu bar), a stale id refused, a move far off screen clamped to the visible corner, and `restore_previous` put both back to their exact first frames.
+
+Not yet checked: a second physical display, the CoreGraphics fallback (used when the main thread does not answer within half a second; it guesses a 25-point menu bar and does not know the Dock), full-screen windows, and a Codex session that calls these tools.

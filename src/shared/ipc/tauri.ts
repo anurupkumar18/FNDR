@@ -292,6 +292,8 @@ export async function fndrTimeline(args?: {
 }
 
 export interface ResumeThread {
+    /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
+    key?: string;
     title: string;
     app_name?: string;
     last_state: string;
@@ -309,6 +311,32 @@ export interface ResumeThread {
 /** Recent observed work, with source citations; does not execute actions. */
 export async function resumeWork(): Promise<ResumeThread[]> {
     return invoke("resume_work", { hours: 24, budgetTokens: 800 });
+}
+
+/** What is new in a Resume Work thread since it was last marked seen. */
+export interface ThreadDigest {
+    thread_key: string;
+    title: string;
+    since_ms: number;
+    /** True when the thread was never marked seen; the digest then covers a day. */
+    first_view: boolean;
+    new_memories: number;
+    page_count: number;
+    pages: string[];
+    file_count: number;
+    files: string[];
+    task_count: number;
+    tasks: string[];
+    commit_count: number;
+    newest_memory_id: string | null;
+}
+
+export async function whatChangedSince(threadKey: string): Promise<ThreadDigest> {
+    return invoke<ThreadDigest>("what_changed_since", { threadKey });
+}
+
+export async function markThreadSeen(threadKey: string): Promise<void> {
+    return invoke("mark_thread_seen", { threadKey });
 }
 
 export async function fndrQualityStatus(): Promise<{
@@ -2151,6 +2179,57 @@ export async function codexLogout(): Promise<CodexAccountStatus> {
     return invoke<CodexAccountStatus>("codex_logout");
 }
 
+/** Why the ChatGPT plan's voice can or cannot speak now (ADR 028). */
+export type VoiceOutState =
+    | "ready"
+    | "not_installed"
+    | "broken"
+    | "signed_out"
+    | "unsupported"
+    | "near_limit"
+    | "over_limit"
+    | "private_mode";
+
+export interface VoiceOutStatus {
+    state: VoiceOutState;
+    detail: string | null;
+    /** The higher used share of the plan's two usage windows, 0 to 100. */
+    usedPercent: number | null;
+    /** Above this, FNDR speaks on the Mac instead. */
+    fallbackAbovePercent: number;
+    connected: boolean;
+}
+
+export interface VoiceOutVoices {
+    voices: string[];
+}
+
+export async function voiceOutStatus(): Promise<VoiceOutStatus> {
+    return invoke<VoiceOutStatus>("voice_out_status");
+}
+
+export async function voiceOutVoices(): Promise<VoiceOutVoices> {
+    return invoke<VoiceOutVoices>("voice_out_voices");
+}
+
+/** Sends the peer connection's SDP offer; resolves to Codex's SDP answer. */
+export async function voiceOutStart(sdpOffer: string, voice?: string): Promise<string> {
+    return invoke<string>("voice_out_start", { sdpOffer, voice: voice ?? null });
+}
+
+/** Hands FNDR-authored reply text to the connected voice. Never memory or screen text. */
+export async function voiceOutSpeak(text: string): Promise<void> {
+    return invoke<void>("voice_out_speak", { text });
+}
+
+export async function voiceOutCancel(): Promise<void> {
+    return invoke<void>("voice_out_cancel");
+}
+
+export async function voiceOutStop(): Promise<void> {
+    return invoke<void>("voice_out_stop");
+}
+
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {
     return invoke<string>("summarize_search", { query, resultsSnippets: snippets });
 }
@@ -2261,6 +2340,10 @@ export interface FndrNotificationPayload {
     title: string;
     body: string;
     kind: string;
+    /** The memory a "stuck" toast opens. */
+    memory_id?: string;
+    /** The Resume Work thread a "thread_update" or "meeting_prep" toast opens. */
+    thread_key?: string;
 }
 
 export function onProactiveSuggestion(
@@ -2615,6 +2698,23 @@ export async function setAutofillSettings(settings: AutofillSettings): Promise<A
     return invoke<AutofillSettings>("set_autofill_settings", { settings });
 }
 
+/** How FNDR speaks: `config.toml` [voice_output]. */
+export interface VoiceOutputSettings {
+    /** "auto" or a speech provider id (`src/shared/voice/speechProvider.ts`). */
+    provider: string;
+    /** A macOS voice identifier; empty means the best one installed. */
+    system_voice: string;
+    rate: number;
+}
+
+export async function getVoiceOutputSettings(): Promise<VoiceOutputSettings> {
+    return invoke<VoiceOutputSettings>("get_voice_output_settings");
+}
+
+export async function setVoiceOutputSettings(settings: VoiceOutputSettings): Promise<VoiceOutputSettings> {
+    return invoke<VoiceOutputSettings>("set_voice_output_settings", { settings });
+}
+
 export async function resolveAutofill(
     context: FieldContext,
     queryOverride?: string | null,
@@ -2859,7 +2959,58 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
-export type ComputerUseStepAction = "open_app" | "open_url" | "operate";
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate" | "reopen_memory";
+
+// Work sets (ADR 027): the places of one thread of work, resolved on the Mac.
+
+export type WorkItemKind = "url" | "file" | "pdf_page" | "app" | "folder";
+
+export interface WorkItem {
+    memoryId: string;
+    /** What the card shows: a page title, a file name, an app. */
+    label: string;
+    kind: WorkItemKind;
+    reopenRank: number;
+    appName: string;
+    /** The site of a link, without `www.`. */
+    host?: string;
+    page?: number;
+    capturedAt: number;
+}
+
+export interface WorkSet {
+    id: string;
+    title: string;
+    /** Why this set was chosen, composed from the evidence. */
+    reason: string;
+    score: number;
+    items: WorkItem[];
+}
+
+export type WorkSetResolution =
+    | { kind: "best"; value: WorkSet }
+    | { kind: "ambiguous"; value: WorkSet[] }
+    | { kind: "none"; value: { why: string } };
+
+export interface WorkItemOutcome {
+    memoryId: string;
+    label: string;
+    kind?: WorkItemKind;
+    /** FNDR opened it, judged from the typed outcome. */
+    ok: boolean;
+    detail: string;
+    outcome?: ReopenOutcome;
+}
+
+/** Which thread of work a request means. Reads only; nothing leaves the Mac. */
+export async function resolveWorkSet(query: string): Promise<WorkSetResolution> {
+    return invoke<WorkSetResolution>("resolve_work_set", { query });
+}
+
+/** Opens the places of a set the person picked, at most six. */
+export async function openWorkSet(memoryIds: string[]): Promise<WorkItemOutcome[]> {
+    return invoke<WorkItemOutcome[]>("open_work_set", { memoryIds });
+}
 export type ComputerUseRisk = "runs" | "confirm" | "never";
 
 export type ComputerUseEvent =
@@ -2867,7 +3018,7 @@ export type ComputerUseEvent =
     | {
           kind: "planned";
           runId: string;
-          steps: { label: string; action: ComputerUseStepAction; app: string }[];
+          steps: { label: string; action: ComputerUseStepAction; app: string; item?: WorkItem }[];
           /** No step can need a yes, so the plan may start by itself. */
           autoStart?: boolean;
       }
@@ -2880,6 +3031,8 @@ export type ComputerUseEvent =
     | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string; checked?: boolean }
     | { kind: "finished"; runId: string; ok: boolean; summary: string }
     | { kind: "stopped"; runId: string }
+    /** A work-set request matched more than one thread about equally; the person picks. */
+    | { kind: "choose"; runId: string; options: WorkSet[] }
     | { kind: "failed"; runId: string; error: string; reconnect: boolean };
 
 export interface ComputerUseStatus {

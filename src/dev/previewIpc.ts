@@ -14,6 +14,7 @@ import type {
     RuntimeMetricsSnapshot,
     ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
+    VoiceOutputSettings,
     Stats,
     Task,
     WeeklyWrapped,
@@ -154,9 +155,32 @@ const previewMemoryCards: MemoryCard[] = [
         source_count: 1,
         raw_snippets: [],
         activity_type: "docs",
+        // What a session row adds up: files, and what its moments record.
+        files_touched: ["beta-demo-script.md"],
+        decision_count: index === 0 ? 1 : 0,
+        next_step_count: index === 1 ? 1 : 0,
         enrichment_status: "reviewed_local",
         storage_outcome: "enriched_memory_card",
     })),
+    // Another app, no project, same file within minutes: the Vault links the two sessions.
+    {
+        id: "memory-beta-script-terminal",
+        title: "Counted the words in the demo script",
+        summary: "Ran a word count on the demo script to check it fits four minutes.",
+        display_summary: "Ran a word count on the demo script: 520 words, about four minutes.",
+        action: "Ran a command",
+        context: ["Terminal"],
+        timestamp: previewNow - 26.3 * 60 * 60 * 1000,
+        app_name: "Terminal",
+        window_title: "wc beta-demo-script.md",
+        score: 0.8,
+        source_count: 1,
+        raw_snippets: [],
+        files_touched: ["beta-demo-script.md"],
+        activity_type: "coding",
+        enrichment_status: "reviewed_local",
+        storage_outcome: "enriched_memory_card",
+    },
     {
         id: "memory-beta-rubric",
         title: "Checked the Beta judging rubric",
@@ -734,6 +758,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
+    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1 };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
     let screenGuideDiagnosticStatus: Omit<
@@ -810,6 +835,29 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return undefined;
             case "get_fun_greeting":
                 return "Good evening, Anurup.";
+            case "what_changed_since": {
+                const threadKey =
+                    typeof payload === "object" && payload !== null && "threadKey" in payload
+                        ? String((payload as { threadKey?: unknown }).threadKey)
+                        : "";
+                return {
+                    thread_key: threadKey,
+                    title: "FNDR",
+                    since_ms: Date.now() - 3 * 60 * 60 * 1000,
+                    first_view: false,
+                    new_memories: 6,
+                    page_count: 1,
+                    pages: ["Tauri notification plugin docs"],
+                    file_count: 2,
+                    files: ["notify.rs", "main.rs"],
+                    task_count: 1,
+                    tasks: ["Add a test for the toast target"],
+                    commit_count: 1,
+                    newest_memory_id: "preview-memory-1",
+                };
+            }
+            case "mark_thread_seen":
+                return undefined;
             case "get_app_names":
                 return ["Visual Studio Code", "Google Chrome", "Terminal", "Figma"];
             case "get_privacy_alerts":
@@ -1222,6 +1270,20 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 // Deliberate no-op: never hand a path to the OS from the browser preview.
                 return undefined;
             }
+            case "get_voice_output_settings":
+                return { ...voiceOutputSettings };
+            case "set_voice_output_settings": {
+                const settings = payloadRecord(payload)?.settings as Partial<VoiceOutputSettings> | undefined;
+                if (!settings || typeof settings.provider !== "string" || typeof settings.rate !== "number") {
+                    throw new Error("Preview set_voice_output_settings requires provider and rate.");
+                }
+                voiceOutputSettings = {
+                    provider: settings.provider,
+                    system_voice: typeof settings.system_voice === "string" ? settings.system_voice : "",
+                    rate: Math.min(2, Math.max(0.5, settings.rate)),
+                };
+                return { ...voiceOutputSettings };
+            }
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
             case "get_screen_guide_diagnostic_status":
@@ -1430,8 +1492,71 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 run.remote_state = "TASK_STATE_CANCELED";
                 return { run: clonePreview(run), output_text: null };
             }
+            case "resolve_work_set": {
+                // Preview: the newest cards with a reopen target, as one set.
+                const items = previewCards
+                    .filter((card) => Boolean(card.reopen_target))
+                    .slice(0, 3)
+                    .map((card) => ({
+                        memoryId: card.id,
+                        label: card.title,
+                        kind: "url" as const,
+                        reopenRank: 4,
+                        appName: card.app_name,
+                        capturedAt: card.timestamp,
+                    }));
+                return items.length > 0
+                    ? { kind: "best", value: { id: "preview-set", title: items[0].label, reason: "Preview", score: 1, items } }
+                    : { kind: "none", value: { why: "Nothing FNDR remembers matches that." } };
+            }
+            case "open_work_set": {
+                // Preview never launches anything; it reports what would open.
+                const ids = (payloadRecord(payload)?.memoryIds as string[] | undefined) ?? [];
+                return ids.slice(0, 6).map((memoryId) => {
+                    const card = previewCards.find((row) => row.id === memoryId);
+                    return card
+                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" } }
+                        : { memoryId, label: "", ok: false, detail: "FNDR no longer has this memory" };
+                });
+            }
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
+            case "computer_use_permissions":
+                return {
+                    accessibility: true,
+                    screenRecording: true,
+                    automationMedia: null,
+                    backend: null,
+                    backendReady: null,
+                    backendDetail: null,
+                };
+            case "setup_components":
+                return [
+                    {
+                        id: "codex",
+                        name: "Codex",
+                        purpose: "Signs in to ChatGPT for Hermes and Notch Do.",
+                        required: false,
+                        state: "ready",
+                        version: "0.45.0",
+                        detail: null,
+                        action: null,
+                        url: null,
+                    },
+                    {
+                        id: "hermes",
+                        name: "Hermes Agent",
+                        purpose: "Answers questions with the memories you attach.",
+                        required: false,
+                        state: "missing",
+                        version: null,
+                        detail: "Not installed yet.",
+                        action: "install",
+                        url: null,
+                    },
+                ];
+            case "install_component":
+                return null;
             case "openclicky_bridge_status":
                 return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
             case "list_agent_chats":
@@ -1497,6 +1622,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 return null;
             }
+            case "voice_out_status":
+                // The browser preview has no Codex; speech falls back to the Mac's voices.
+                return {
+                    state: "not_installed",
+                    detail: "The browser preview has no Codex.",
+                    usedPercent: null,
+                    fallbackAbovePercent: 95,
+                    connected: false,
+                };
+            case "voice_out_voices":
+                return { voices: [] };
+            case "voice_out_start":
+                throw new Error("The browser preview has no Codex.");
+            case "voice_out_speak":
+                throw new Error("The ChatGPT voice is not connected.");
+            case "voice_out_cancel":
+            case "voice_out_stop":
+                return null;
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);
