@@ -2252,6 +2252,25 @@ export async function voiceOutStop(): Promise<void> {
     return invoke<void>("voice_out_stop");
 }
 
+// Notch Do's voice (ADR 020 amendment, 2026-10-09).
+
+/** Esc pressed in another app while a Notch Do run works or waits on an approval. */
+export const NOTCH_DO_ESCAPE_EVENT = "notch-do://escape";
+
+/** The persisted mute, or null while it has never been set in `config.toml`. */
+export async function getNotchDoMuted(): Promise<boolean | null> {
+    return invoke<boolean | null>("get_notch_do_muted");
+}
+
+export async function setNotchDoMuted(muted: boolean): Promise<boolean> {
+    return invoke<boolean>("set_notch_do_muted", { muted });
+}
+
+/** Watches for Esc outside the notch while a run works; FNDR's own key presses are ignored. */
+export async function setNotchEscapeMonitor(active: boolean): Promise<void> {
+    return invoke<void>("set_notch_escape_monitor", { active });
+}
+
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {
     return invoke<string>("summarize_search", { query, resultsSnippets: snippets });
 }

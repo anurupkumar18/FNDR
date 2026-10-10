@@ -833,6 +833,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     };
     let previewBlocklist = ["1Password", "bank.example"];
     let previewAgentNotesEnabled = false;
+    let previewNotchDoMuted: boolean | null = null;
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let calendarMeetingPrep = false;
@@ -934,6 +935,20 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "get_notch_do_muted":
+                return previewNotchDoMuted;
+            case "set_notch_do_muted": {
+                const muted = typeof payload === "object" && payload !== null && "muted" in payload
+                    ? (payload as { muted?: unknown }).muted
+                    : null;
+                if (typeof muted !== "boolean") {
+                    throw new Error("Preview set_notch_do_muted requires a boolean.");
+                }
+                previewNotchDoMuted = muted;
+                return muted;
+            }
+            case "set_notch_escape_monitor":
+                return undefined;
             case "set_agent_notes_enabled": {
                 const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
                     ? (payload as { enabled?: unknown }).enabled
