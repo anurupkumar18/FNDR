@@ -1,5 +1,7 @@
 //! The files the on-device voice needs, fetched once with the person's
-//! consent: Kokoro-82M v1.0 (8-bit ONNX export), a curated set of English
+//! consent: Kokoro-82M v1.0 (the ONNX export's 8-bit weights with fp16
+//! activations, the fastest variant on the `ort` runtime FNDR bundles, ADR
+//! 030), a curated set of English
 //! voice packs, and misaki's pronunciation dictionaries. Every file is pinned
 //! to a commit and a SHA-256; a download resumes from its `.partial` file and
 //! is checked before it is moved into place. Nothing is fetched after that.
@@ -12,7 +14,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 pub const MODEL_FOLDER: &str = "kokoro-82m-v1.0";
-pub const MODEL_FILE: &str = "model_quantized.onnx";
+pub const MODEL_FILE: &str = "model_uint8f16.onnx";
 const MARKER_FILE: &str = "install.json";
 
 const HF: &str =
@@ -159,9 +161,9 @@ pub const ARTIFACTS: &[Artifact] = &[
     Artifact {
         path: MODEL_FILE,
         url_base: HF,
-        remote: "onnx/model_quantized.onnx",
-        sha256: "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478",
-        size: 92_361_116,
+        remote: "onnx/model_uint8f16.onnx",
+        sha256: "883333e03c597584b532eebea0f8310f25f0c9ade58fe864792c12d969944a9a",
+        size: 114_209_226,
     },
     Artifact {
         path: "us_gold.json",
@@ -457,7 +459,7 @@ async fn run_inner(app_data_dir: &Path) -> Result<(), String> {
         set_progress(|p| p.downloaded = done);
     }
     let marker = serde_json::json!({
-        "model": "hexgrad/Kokoro-82M v1.0 (onnx-community export, 8-bit)",
+        "model": "hexgrad/Kokoro-82M v1.0 (onnx-community export, uint8f16)",
         "consented_at_ms": chrono::Utc::now().timestamp_millis(),
         "files": ARTIFACTS.iter().map(|a| a.path).collect::<Vec<_>>(),
     });
@@ -507,9 +509,9 @@ mod tests {
     }
 
     #[test]
-    fn the_download_is_about_a_hundred_and_twelve_megabytes() {
+    fn the_download_is_about_a_hundred_and_thirty_four_megabytes() {
         let mb = total_bytes() / 1_000_000;
-        assert!((105..=120).contains(&mb), "{mb} MB");
+        assert!((130..=138).contains(&mb), "{mb} MB");
     }
 
     #[test]
