@@ -84,6 +84,132 @@ pub enum Resolution {
     },
 }
 
+/// How long after a set opened "save this as" still means that set.
+const SAVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// What the last work set opened in this session held, for "save this as".
+/// Kept in memory only; it is gone when FNDR quits.
+static LAST_OPENED: parking_lot::Mutex<Option<(Vec<String>, std::time::Instant)>> =
+    parking_lot::Mutex::new(None);
+
+/// The memories the last work set opened, if that was recent.
+pub fn last_opened() -> Option<Vec<String>> {
+    LAST_OPENED
+        .lock()
+        .as_ref()
+        .filter(|(_, at)| at.elapsed() <= SAVE_WINDOW)
+        .map(|(ids, _)| ids.clone())
+}
+
+fn private(state: &AppState) -> bool {
+    state.is_incognito.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// After a set opened: remembers it for "save this as", notes the time on
+/// the saved set holding `requested`, and logs the opening for routines.
+/// Nothing is remembered or logged while FNDR is private.
+pub fn note_opened(
+    state: &AppState,
+    requested: &[String],
+    opened: &[String],
+    label: &str,
+    source: routines::Source,
+) {
+    if opened.is_empty() || private(state) {
+        return;
+    }
+    *LAST_OPENED.lock() = Some((opened.to_vec(), std::time::Instant::now()));
+    let now = chrono::Utc::now().timestamp_millis();
+    let set_id = named::mark_opened(&state.state_store, requested, now);
+    routines::record(state, set_id.as_deref(), requested, label, source);
+}
+
+/// Opens memories by id, then arranges their windows when `layout` is
+/// given. The arrangement rides on each opened item; it never turns the
+/// opens into an error.
+pub async fn open_and_arrange(
+    state: &AppState,
+    memory_ids: &[String],
+    layout: Option<crate::operator::layout::Layout>,
+    source: routines::Source,
+) -> Vec<ItemOutcome> {
+    let mut outcomes = open_ids(state, memory_ids).await;
+    let opened: Vec<String> = outcomes
+        .iter()
+        .filter(|outcome| outcome.ok)
+        .map(|outcome| outcome.memory_id.clone())
+        .collect();
+    if let (Some(layout), false) = (layout, opened.is_empty()) {
+        let apps = state
+            .store
+            .get_memories_by_ids(&opened)
+            .await
+            .unwrap_or_default();
+        let windows: Vec<arrange::Opened> = outcomes
+            .iter()
+            .filter(|outcome| outcome.ok)
+            .map(|outcome| arrange::Opened {
+                app: apps
+                    .get(&outcome.memory_id)
+                    .and_then(rank::item_of)
+                    .map(|(_, item)| item.app_name)
+                    .unwrap_or_default(),
+                label: outcome.label.clone(),
+            })
+            .collect();
+        let arrangement = arrange::after_open(state, windows, layout).await;
+        for outcome in outcomes.iter_mut().filter(|outcome| outcome.ok) {
+            outcome.arrangement = Some(arrangement.clone());
+        }
+    }
+    let label = outcomes
+        .iter()
+        .find(|outcome| outcome.ok)
+        .map(|outcome| outcome.label.clone())
+        .unwrap_or_default();
+    note_opened(state, memory_ids, &opened, &label, source);
+    outcomes
+}
+
+/// The saved set a request names, resolved now: `None` when it names none.
+/// A named set is planned from what FNDR saved, with no search and no model.
+pub async fn resolve_named(state: &AppState, request: &str) -> Option<Resolution> {
+    let sets = match named::load(&state.state_store) {
+        Ok(sets) => sets,
+        Err(error) => {
+            tracing::warn!(%error, "workset:named_load_failed");
+            return None;
+        }
+    };
+    let names: Vec<String> = sets.iter().map(|set| set.name.clone()).collect();
+    let set = &sets[crate::operator::plan::named_set_asked_for(request, &names)?];
+    if private(state) {
+        return Some(Resolution::None {
+            why: "FNDR is private right now, so it does not open saved sets.".to_string(),
+        });
+    }
+    let records = match state.store.get_memories_by_ids(&set.memory_ids).await {
+        Ok(records) => records,
+        Err(error) => {
+            return Some(Resolution::None {
+                why: format!("FNDR could not read its memories: {error}"),
+            })
+        }
+    };
+    let blocklist = state.config.read().blocklist.clone();
+    let shown = named::present(set, &records, &blocklist);
+    Some(if shown.items.is_empty() {
+        Resolution::None {
+            why: format!(
+                "Nothing in \u{201c}{}\u{201d} can be reopened now: its memories were deleted or are private.",
+                shown.name
+            ),
+        }
+    } else {
+        Resolution::Best(named::as_work_set(&shown))
+    })
+}
+
 /// Words in a request that say when, for the search's time filter.
 fn time_filter(query: &str) -> Option<String> {
     let lower = query.to_lowercase();
