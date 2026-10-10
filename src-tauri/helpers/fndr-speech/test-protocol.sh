@@ -10,6 +10,14 @@ swiftc -parse-as-library \
     "$helper_dir/StreamingTranscript.swift" \
     "$helper_dir/streaming-transcript-test.swift" \
     -o "$transcript_test"
+
+stop_word_test=$(mktemp "${TMPDIR:-/tmp}/fndr-speech-stop-word.XXXXXX")
+trap 'rm -f "$binary" "$transcript_test" "$stop_word_test"' EXIT
+swiftc -parse-as-library \
+    "$helper_dir/StreamingTranscript.swift" \
+    "$helper_dir/stop-word-matcher-test.swift" \
+    -o "$stop_word_test"
+"$stop_word_test"
 "$transcript_test"
 
 swiftc "$helper_dir/main.swift" "$helper_dir/StreamingTranscript.swift" \
