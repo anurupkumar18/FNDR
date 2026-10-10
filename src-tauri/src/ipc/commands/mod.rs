@@ -68,6 +68,9 @@ pub use codex_account::*;
 mod speech_out;
 pub use speech_out::*;
 
+mod tts;
+pub use tts::*;
+
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
 
