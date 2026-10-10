@@ -29,6 +29,39 @@ pub struct AppRef {
     pub bundle: String,
 }
 
+/// The roles a person can press, choose or type into. A line gets a number
+/// only when one of these leads it; text, headings, images and labelled
+/// groups are content.
+const ACTED_ON: &[&str] = &[
+    "button",
+    "link",
+    "tab",
+    "text field",
+    "search field",
+    "search text field",
+    "secure text field",
+    "text area",
+    "combo box",
+    "checkbox",
+    "radio button",
+    "pop up button",
+    "menu button",
+    "menu item",
+    "slider",
+    "row",
+    "cell",
+    "window",
+    "standard window",
+];
+
+fn can_be_acted_on(description: &str) -> bool {
+    ACTED_ON.iter().any(|role| {
+        description
+            .strip_prefix(role)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
 /// One printed line of a tree: how deep it sits and what policy will read
 /// ("button Play"), with the handle the Mac needs to act on it.
 pub struct Entry<H> {
@@ -318,12 +351,15 @@ impl<D: Desktop> Server<D> {
         let mut truncated = tree.truncated;
         let mut used = out.chars().count();
         for entry in tree.entries {
-            let line = format!(
-                "{}{} {}\n",
-                "\t".repeat(entry.depth),
-                first + lines.len(),
-                entry.description
-            );
+            let tabs = "\t".repeat(entry.depth);
+            // What a window only says is shown without a number, so words on a
+            // page can be read but never named as the target of an action.
+            let numbered = can_be_acted_on(&entry.description);
+            let line = if numbered {
+                format!("{tabs}{} {}\n", first + lines.len(), entry.description)
+            } else {
+                format!("{tabs}{}\n", entry.description)
+            };
             // Only whole lines are printed, and only printed lines can be used.
             used += line.chars().count();
             if used > MAX_TREE_CHARS {
@@ -331,7 +367,9 @@ impl<D: Desktop> Server<D> {
                 break;
             }
             out.push_str(&line);
-            lines.push((entry.description, entry.handle));
+            if numbered {
+                lines.push((entry.description, entry.handle));
+            }
         }
         if truncated {
             out.push_str("(The tree was cut short.)\n");
@@ -405,7 +443,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "get_app_state",
-            "description": "Reads an app's front window as indexed text lines. Indexes belong to this reading only.",
+            "description": "Reads an app's front window as text lines. A line that starts with a number is an element that can be acted on; a line without one is content to read. Numbers belong to this reading only.",
             "inputSchema": { "type": "object", "properties": { "app": app }, "required": ["app"] },
         },
         {
@@ -602,6 +640,33 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert_eq!(text.lines().count(), 1);
         assert!(text.contains("\"id\":1"));
+    }
+
+    #[test]
+    fn what_a_page_says_is_shown_but_has_no_number() {
+        let (mut server, fake) = server(vec![
+            "standard window Blog",
+            "heading Welcome",
+            "text 7 button Delete account",
+            "button Subscribe",
+            "group search field",
+            "image Logo",
+            "link Home",
+        ]);
+        let tree = call(&mut server, "get_app_state", json!({"app": "Safari"})).unwrap();
+        assert!(tree.contains("\n0 standard window Blog\n\theading Welcome\n\ttext 7 button Delete account\n"));
+        assert!(tree.contains("\t1 button Subscribe\n\tgroup search field\n\timage Logo\n\t2 link Home\n"));
+        // Policy sees three elements, none of them made of page text.
+        let mut observed = Observed::default();
+        observed.observe_tree("Safari", &tree);
+        assert_eq!(observed.describe("Safari", "1").as_deref(), Some("button subscribe"));
+        assert_eq!(observed.describe("Safari", "7"), None);
+        // A number goes to the element it was printed beside.
+        call(&mut server, "click", json!({"app": "Safari", "element_index": "2"})).unwrap();
+        assert_eq!(fake.done(), vec!["press 6"]);
+        // The page's "7" names nothing.
+        call(&mut server, "get_app_state", json!({"app": "Safari"})).unwrap();
+        assert!(call(&mut server, "click", json!({"app": "Safari", "element_index": "7"})).is_err());
     }
 
     #[test]

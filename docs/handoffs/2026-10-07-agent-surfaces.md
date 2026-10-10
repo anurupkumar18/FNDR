@@ -51,10 +51,9 @@ Everything below is on `main` and pushed to both remotes.
 State on 2026-10-08, end of day: Kunj landed the ADR 026 executor the same evening (`src-tauri/src/operator/mcp.rs`, `src-tauri/src/accessibility/operate.rs`, started as `fndr operator-mcp`, preferred over the helpers in `computer_use.rs`), plus spoken progress in the notch. A second implementation written in this lane in parallel was withdrawn before it was pushed. Do not rebuild it.
 
 1. **Run the six fixture cases on the new executor.** The live runs in the evidence file were all on `open-computer-use`. Same harness, same pages; record which backend ran.
-2. **Collapse elements Chrome reports more than once.** Chrome lists its toolbar under several parents, so a reading carries each toolbar element about four times (seen live with a prototype reader). `read_tree` in `accessibility/operate.rs` has no check for an element it has already visited; a `CFHash` set fixes it.
-3. **Decide whether page text keeps a number.** The executor numbers static text, headings, images and any labelled group. The policy no longer lets such a line pose as a search box (`FIELD_ROLES`, a field's role must lead its line), but a numbered line is still something the model can ask to press. Listing page text without a number removes the question.
-4. The twenty-task set (`docs/evidence/W03/notch-do-task-set.md`) on the executor, then remove `open-computer-use` support (ADR 026, item 5).
-5. Shrink `src/shared/ipc/ipcDriftBaseline.ts`: 51 unused wrappers and 3 uncalled commands, most outside this lane. Take them a module at a time with the module's owner.
+2. Done 2026-10-09: an element reported under several parents is printed once, and page text is printed without a number (ADR 026, "How each rule is kept").
+3. The twenty-task set (`docs/evidence/W03/notch-do-task-set.md`) on the executor, then remove `open-computer-use` support (ADR 026, item 5).
+4. Shrink `src/shared/ipc/ipcDriftBaseline.ts`: 51 unused wrappers and 3 uncalled commands, most outside this lane. Take them a module at a time with the module's owner.
 
 ## How to run a live Notch Do check
 
