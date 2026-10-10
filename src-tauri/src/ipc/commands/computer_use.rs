@@ -1237,30 +1237,77 @@ async fn run(
     commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
-    if plan::asks_for_work_set(&transcript) {
+    if let Some(name) = plan::save_set_name(&transcript) {
+        return save_last_set(&state, &ctx, &name);
+    }
+    let named = crate::workset::resolve_named(&state, &transcript).await;
+    if named.is_some() || plan::asks_for_work_set(&transcript) {
         (ctx.emit)(ComputerUseEvent::Planning {
             run_id: ctx.run_id.clone(),
             used_memories: 0,
         });
-        let resolution = crate::workset::resolve(&state, &transcript).await;
-        return run_work_set(ctx, resolution, commands, move |item| {
-            let state = state.clone();
-            async move {
-                let id = item.memory_id.clone();
-                crate::workset::open_items(&state, &[item])
-                    .await
-                    .pop()
-                    .unwrap_or(ItemOutcome {
-                        memory_id: id,
-                        label: String::new(),
-                        kind: None,
-                        ok: false,
-                        detail: "Nothing was opened".to_string(),
-                        outcome: None,
-                        arrangement: None,
-                    })
-            }
-        })
+        let resolution = match named {
+            Some(resolution) => resolution,
+            None => crate::workset::resolve(&state, &transcript).await,
+        };
+        let layout = plan::layout_asked_for(&transcript);
+        let open_state = state.clone();
+        return run_work_set(
+            ctx,
+            resolution,
+            commands,
+            move |item| {
+                let state = open_state.clone();
+                async move {
+                    let id = item.memory_id.clone();
+                    crate::workset::open_items(&state, &[item])
+                        .await
+                        .pop()
+                        .unwrap_or(ItemOutcome {
+                            memory_id: id,
+                            label: String::new(),
+                            kind: None,
+                            ok: false,
+                            detail: "Nothing was opened".to_string(),
+                            outcome: None,
+                            arrangement: None,
+                        })
+                }
+            },
+            move |set, opened| async move {
+                let requested: Vec<String> = set
+                    .items
+                    .iter()
+                    .map(|item| item.memory_id.clone())
+                    .collect();
+                let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
+                let arranged = match layout {
+                    Some(layout) => {
+                        let windows = opened
+                            .iter()
+                            .map(|item| crate::workset::arrange::Opened {
+                                app: item.app_name.clone(),
+                                label: item.label.clone(),
+                            })
+                            .collect();
+                        Some(
+                            crate::workset::arrange::after_open(&state, windows, layout)
+                                .await
+                                .sentence(),
+                        )
+                    }
+                    None => None,
+                };
+                crate::workset::note_opened(
+                    &state,
+                    &requested,
+                    &ids,
+                    &set.title,
+                    crate::workset::routines::Source::Notch,
+                );
+                arranged
+            },
+        )
         .await;
     }
     let snippets = if plan::refers_to_past(&transcript) {
@@ -1271,19 +1318,47 @@ async fn run(
     run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
 }
 
+/// "Save this as <name>": saves the set this session opened last, on this
+/// Mac, with no planner turn.
+fn save_last_set(state: &AppState, ctx: &RunContext, name: &str) -> Result<(), RunError> {
+    if let Some(reason) = (ctx.guards.halt)() {
+        return Err(RunError::Failed(reason));
+    }
+    let ids = crate::workset::last_opened().ok_or_else(|| {
+        RunError::Failed(
+            "Open a work set first, then say \u{201c}save this as\u{201d} and a name.".to_string(),
+        )
+    })?;
+    let saved =
+        crate::workset::named::save(&state.state_store, name, &ids).map_err(RunError::Failed)?;
+    (ctx.emit)(ComputerUseEvent::Finished {
+        run_id: ctx.run_id.clone(),
+        ok: true,
+        summary: format!(
+            "Saved as \u{201c}{}\u{201d}. Say \u{201c}open {}\u{201d} to bring it back.",
+            saved.name, saved.name
+        ),
+    });
+    Ok(())
+}
+
 /// A work-set request (ADR 027): resolved on this Mac, planned by code from
 /// what FNDR resolved, and opened through the reopen core. No Codex session
 /// and no cloud call. A failed item does not stop the others; Stop and a
-/// halt do.
-async fn run_work_set<F, Fut>(
+/// halt do. `finish` gets the set and the items that opened, arranges and
+/// logs them, and may return a sentence that leads the summary.
+async fn run_work_set<F, Fut, G, GFut>(
     ctx: RunContext,
     resolution: Resolution,
     mut commands: mpsc::UnboundedReceiver<RunCommand>,
     mut open: F,
+    finish: G,
 ) -> Result<(), RunError>
 where
     F: FnMut(WorkItem) -> Fut,
     Fut: std::future::Future<Output = ItemOutcome>,
+    G: FnOnce(WorkSet, Vec<WorkItem>) -> GFut,
+    GFut: std::future::Future<Output = Option<String>>,
 {
     let set = match resolution {
         Resolution::Best(set) => set,
@@ -1305,6 +1380,7 @@ where
     wait_for_start(&mut commands).await?;
 
     let mut opened = Vec::new();
+    let mut opened_items = Vec::new();
     let mut missed = Vec::new();
     for (index, step) in plan.steps.iter().enumerate() {
         if let Some(reason) = (ctx.guards.halt)() {
@@ -1361,11 +1437,17 @@ where
             detail: verdict.detail,
         });
         if outcome.ok {
-            opened.push(item.label);
+            opened.push(item.label.clone());
+            opened_items.push(item);
         } else {
             missed.push(format!("{} ({})", item.label, outcome.detail));
         }
     }
+    let lead = if opened_items.is_empty() {
+        None
+    } else {
+        finish(set, opened_items).await
+    };
     let summary = match (opened.is_empty(), missed.is_empty()) {
         (_, true) => format!("Opened: {}.", opened.join(", ")),
         (true, false) => format!("Nothing opened: {}.", missed.join("; ")),
@@ -1374,6 +1456,10 @@ where
             opened.join(", "),
             missed.join("; ")
         ),
+    };
+    let summary = match lead {
+        Some(lead) => format!("{lead} {summary}"),
+        None => summary,
     };
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
@@ -2828,6 +2914,40 @@ mod tests {
         }
     }
 
+    fn no_finish(_: WorkSet, _: Vec<WorkItem>) -> std::future::Ready<Option<String>> {
+        std::future::ready(None)
+    }
+
+    #[tokio::test]
+    async fn the_finish_gets_what_opened_and_its_sentence_leads_the_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let given: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = given.clone();
+        let result = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "b", "c"])),
+            receiver,
+            fake_open(Arc::default()),
+            move |set, opened| {
+                assert_eq!(set.items.len(), 3);
+                *seen.lock().unwrap() = opened.into_iter().map(|item| item.memory_id).collect();
+                std::future::ready(Some("Arranged side by side.".to_string()))
+            },
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(*given.lock().unwrap(), ["a", "c"], "only what opened");
+        let events = events.lock().unwrap();
+        match events.last().unwrap() {
+            ComputerUseEvent::Finished { summary, .. } => assert_eq!(
+                summary,
+                "Arranged side by side. Opened: A, C. Not opened: B (b.pdf is no longer there)."
+            ),
+            other => panic!("expected the end, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn a_work_set_opens_every_item_and_judges_each_from_its_outcome() {
         let dir = tempfile::tempdir().unwrap();
@@ -2838,6 +2958,7 @@ mod tests {
             Resolution::Best(work_set(&["a", "b", "c"])),
             receiver,
             fake_open(opened.clone()),
+            no_finish,
         )
         .await;
         assert_eq!(result, Ok(()));
@@ -2913,6 +3034,7 @@ mod tests {
             Resolution::Ambiguous(options.clone()),
             receiver,
             fake_open(opened.clone()),
+            no_finish,
         )
         .await;
         assert_eq!(result, Ok(()));
@@ -2928,6 +3050,7 @@ mod tests {
             },
             mpsc::unbounded_channel().1,
             fake_open(opened.clone()),
+            no_finish,
         )
         .await;
         assert!(matches!(none, Err(RunError::Failed(why)) if why.contains("tax")));
@@ -2951,6 +3074,7 @@ mod tests {
             Resolution::Best(work_set(&["a"])),
             receiver,
             fake_open(opened.clone()),
+            no_finish,
         )
         .await;
         assert_eq!(stopped, Err(RunError::Stopped));
@@ -2976,6 +3100,7 @@ mod tests {
                 switched_off.store(true, std::sync::atomic::Ordering::SeqCst);
                 fake_open(record.clone())(item)
             },
+            no_finish,
         )
         .await;
         assert_eq!(halted, Err(RunError::Failed(ACTIONS_OFF.to_string())));
