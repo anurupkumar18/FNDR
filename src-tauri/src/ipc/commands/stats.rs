@@ -1130,7 +1130,11 @@ pub async fn get_weekly_wrapped(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = strip_internal_fndr_results(records);
+    // Usage names apps, sites and documents: the blocklist applies here too.
+    let blocklist = state.config.read().blocklist.clone();
+    let mut records = strip_internal_fndr_results(records);
+    records
+        .retain(|record| crate::context_runtime::retrieve::result_is_permitted(record, &blocklist));
 
     let mut app_groups: HashMap<String, Vec<i64>> = HashMap::new();
     let mut website_groups: HashMap<String, Vec<i64>> = HashMap::new();
@@ -1322,6 +1326,11 @@ pub async fn get_time_tracking(
         .get_memories_in_range(today_start_ms, now_ms)
         .await
         .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    let records = records
+        .into_iter()
+        .filter(|record| crate::context_runtime::retrieve::memory_is_permitted(record, &blocklist))
+        .collect::<Vec<_>>();
 
     // Group timestamps by app_name
     let mut app_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
