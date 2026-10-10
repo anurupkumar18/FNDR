@@ -47,6 +47,7 @@ pub mod system_resources;
 pub mod tasks;
 pub mod telemetry;
 pub mod timeline;
+pub mod tts;
 pub mod voice;
 pub mod wiki;
 pub mod workset;
