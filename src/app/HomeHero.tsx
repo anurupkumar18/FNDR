@@ -27,25 +27,40 @@ const ACTION_SLOT_PX = 58;
 
 // ─── Greeting helpers ─────────────────────────────────────────────────────────
 
-function getGreeting(name: string, now: Date): { salutation: string; subtitle: string } {
+type Daypart = "Morning" | "Afternoon" | "Evening" | "Night";
+
+/** The hours `get_fun_greeting` uses (ipc/commands/home.rs), so every line on Home names the same part of the day. */
+function daypart(now: Date): Daypart {
     const h = now.getHours();
-    const salutation =
-        h < 12
-            ? `Good Morning, ${name}!`
-            : h < 17
-              ? `Good Afternoon, ${name}!`
-              : h < 21
-                ? `Good Evening, ${name}!`
-                : `Good Night, ${name}!`;
-    const subtitle =
-        h < 12
-            ? "Let's see what the morning holds."
-            : h < 17
-              ? "Let's pick up where you left off."
-              : h < 21
-                ? "Let's revisit your day."
-                : "Let's dive into your memories.";
-    return { salutation, subtitle };
+    if (h >= 4 && h < 12) return "Morning";
+    if (h >= 12 && h < 16) return "Afternoon";
+    if (h >= 16 && h < 20) return "Evening";
+    return "Night";
+}
+
+const SUBTITLE: Record<Daypart, string> = {
+    Morning: "Let's see what the morning holds.",
+    Afternoon: "Let's pick up where you left off.",
+    Evening: "Let's revisit your day.",
+    Night: "Let's dive into your memories.",
+};
+
+const PLACEHOLDER: Record<Daypart, string> = {
+    Morning: "What did you work on this morning?",
+    Afternoon: "What shall we uncover this afternoon?",
+    Evening: "What happened today?",
+    Night: "What shall we uncover tonight?",
+};
+
+/**
+ * The greeting from IPC is kept only when it names the same part of the day
+ * as `now`; it was fetched once at login, while `now` keeps moving.
+ */
+function salutationFor(name: string, now: Date, greeting?: string): string {
+    const part = daypart(now);
+    const fromIpc = greeting?.slice(0, greeting.indexOf("!") + 1).trim();
+    if (fromIpc && fromIpc.toLowerCase().startsWith(`good ${part.toLowerCase()},`)) return fromIpc;
+    return `Good ${part}, ${name}!`;
 }
 
 function formatHeroDate(now: Date): string {
@@ -57,14 +72,6 @@ function formatHeroDate(now: Date): string {
         .toUpperCase();
     const day = now.toLocaleDateString("en-US", { day: "numeric" });
     return `${weekday} • ${month} ${day}`;
-}
-
-function getTimePlaceholder(now: Date): string {
-    const h = now.getHours();
-    if (h < 12) return "What did you work on this morning?";
-    if (h < 17) return "What shall we uncover this afternoon?";
-    if (h < 21) return "What happened today?";
-    return "What shall we uncover tonight?";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -88,17 +95,10 @@ export function HomeHero({
 }: HomeHeroProps) {
     const { reduced } = useReducedMotionSafe();
 
-    // Greeting logic — prefer the IPC greeting if available.
     const name = userName?.trim() || "there";
-    const localGreeting = getGreeting(name, now);
-    const salutation = greeting
-        ? (() => {
-              // Extract just the "Good *, Name!" part from the IPC greeting if present.
-              const excl = greeting.indexOf("!");
-              return excl >= 0 ? greeting.slice(0, excl + 1).trim() : greeting.trim();
-          })()
-        : localGreeting.salutation;
-    const subtitle = localGreeting.subtitle;
+    const part = daypart(now);
+    const salutation = salutationFor(name, now, greeting);
+    const subtitle = SUBTITLE[part];
     const dateLabel = formatHeroDate(now);
 
     // Search state (local, hands off via onHeroSearch).
@@ -223,7 +223,7 @@ export function HomeHero({
                         ref={inputRef}
                         type="text"
                         className="home-hero__search-input"
-                        placeholder={getTimePlaceholder(now)}
+                        placeholder={PLACEHOLDER[part]}
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => {

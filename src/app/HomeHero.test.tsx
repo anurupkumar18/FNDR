@@ -133,6 +133,18 @@ describe("HomeHero", () => {
         expect(onHeroSearch).toHaveBeenCalledWith("show my meetings");
     });
 
+    it.each([
+        ["2026-10-09T16:30:00", "Good Evening, Anurup! Let's get productive.", "Good Evening, Anurup!", "What happened today?"],
+        ["2026-10-09T16:30:00", "Good Afternoon, Anurup! Let's get productive.", "Good Evening, Anurup!", "What happened today?"],
+        ["2026-10-09T13:00:00", "Good Afternoon, Anurup! Ready?", "Good Afternoon, Anurup!", "What shall we uncover this afternoon?"],
+        ["2026-10-09T09:00:00", "", "Good Morning, Anurup!", "What did you work on this morning?"],
+        ["2026-10-09T02:00:00", "", "Good Night, Anurup!", "What shall we uncover tonight?"],
+    ])("at %s the greeting and the search placeholder name the same time of day", (at, greeting, title, placeholder) => {
+        render(<HomeHero userName="Anurup" now={new Date(at)} greeting={greeting} onHeroSearch={vi.fn()} />);
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(title);
+        expect(screen.getByPlaceholderText(placeholder)).toBeInTheDocument();
+    });
+
     it("keeps typed search available when shared voice is unavailable", () => {
         voiceMocks.state = {
             kind: "unavailable",
