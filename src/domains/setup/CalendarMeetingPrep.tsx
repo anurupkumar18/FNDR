@@ -28,7 +28,9 @@ export function CalendarMeetingPrep() {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        calendarMeetingPrepState()
+        // A state read that cannot run must not take Settings down with it.
+        Promise.resolve()
+            .then(() => calendarMeetingPrepState())
             .then(setPrep)
             .catch((reason) => setError(message(reason)));
     }, []);
