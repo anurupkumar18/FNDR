@@ -3000,6 +3000,19 @@ export interface WorkItemOutcome {
     ok: boolean;
     detail: string;
     outcome?: ReopenOutcome;
+    /** Set on an opened item when a layout was asked for. */
+    arrangement?: WorkSetArrangement;
+}
+
+export type ItemOutcome = WorkItemOutcome;
+
+export type WorkSetLayout = "left_right_split" | "top_bottom_split" | "thirds" | "grid2x2" | "maximize";
+
+/** Whether the opened windows were arranged; `detail` says why not in plain words. */
+export interface WorkSetArrangement {
+    arranged: boolean;
+    layout: WorkSetLayout;
+    detail: string;
 }
 
 /** Which thread of work a request means. Reads only; nothing leaves the Mac. */
@@ -3007,9 +3020,54 @@ export async function resolveWorkSet(query: string): Promise<WorkSetResolution> 
     return invoke<WorkSetResolution>("resolve_work_set", { query });
 }
 
-/** Opens the places of a set the person picked, at most six. */
-export async function openWorkSet(memoryIds: string[]): Promise<WorkItemOutcome[]> {
-    return invoke<WorkItemOutcome[]>("open_work_set", { memoryIds });
+/** Opens the places of a set the person picked, at most six, then arranges
+ *  their windows when `layout` is given (best effort, never an error). */
+export async function openWorkSet(memoryIds: string[], layout?: WorkSetLayout): Promise<ItemOutcome[]> {
+    return invoke<ItemOutcome[]>("open_work_set", { memoryIds, layout: layout ?? null });
+}
+
+/** A work set saved under a name. `items` are re-resolved on every read: a
+ *  memory deleted or now private or blocklisted is left out. */
+export interface NamedWorkSet {
+    id: string;
+    name: string;
+    memoryIds: string[];
+    items: WorkItem[];
+    savedAt: number;
+    lastOpenedAt?: number;
+}
+
+export async function listNamedSets(): Promise<NamedWorkSet[]> {
+    return invoke<NamedWorkSet[]>("list_named_sets");
+}
+
+/** Names must be unique ignoring case; at most 30 sets. */
+export async function saveNamedSet(name: string, memoryIds: string[]): Promise<NamedWorkSet> {
+    return invoke<NamedWorkSet>("save_named_set", { name, memoryIds });
+}
+
+export async function deleteNamedSet(id: string): Promise<void> {
+    return invoke<void>("delete_named_set", { id });
+}
+
+/** A set the person opens around this time on days like today. Only data for
+ *  a card: FNDR never opens it by itself. */
+export interface RoutineOffer {
+    id: string;
+    label: string;
+    setId?: string;
+    memoryIds: string[];
+    reason: string;
+    dueNow: boolean;
+}
+
+export async function routineOffers(): Promise<RoutineOffer[]> {
+    return invoke<RoutineOffer[]>("routine_offers");
+}
+
+/** Hides an offer for the rest of today. */
+export async function dismissRoutineOffer(id: string): Promise<void> {
+    return invoke<void>("dismiss_routine_offer", { id });
 }
 export type ComputerUseRisk = "runs" | "confirm" | "never";
 

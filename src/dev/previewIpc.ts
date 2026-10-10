@@ -805,6 +805,17 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
         payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
+    let previewNamedSets: Array<{ id: string; name: string; memoryIds: string[]; savedAt: number }> = [];
+    let previewRoutineDismissed = false;
+    const previewNamedSet = (set: { id: string; name: string; memoryIds: string[]; savedAt: number }) => {
+        const items = set.memoryIds.flatMap((memoryId) => {
+            const card = previewCards.find((row) => row.id === memoryId);
+            return card
+                ? [{ memoryId, label: card.title, kind: "url" as const, reopenRank: 4, appName: card.app_name, capturedAt: card.timestamp }]
+                : [];
+        });
+        return { ...set, memoryIds: items.map((item) => item.memoryId), items };
+    };
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
@@ -1512,13 +1523,45 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "open_work_set": {
                 // Preview never launches anything; it reports what would open.
                 const ids = (payloadRecord(payload)?.memoryIds as string[] | undefined) ?? [];
+                const layout = payloadRecord(payload)?.layout as string | null | undefined;
+                const arrangement = layout
+                    ? { arranged: false, layout, detail: "The preview does not move windows." }
+                    : undefined;
                 return ids.slice(0, 6).map((memoryId) => {
                     const card = previewCards.find((row) => row.id === memoryId);
                     return card
-                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" } }
+                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" }, arrangement }
                         : { memoryId, label: "", ok: false, detail: "FNDR no longer has this memory" };
                 });
             }
+            case "list_named_sets":
+                return previewNamedSets.map((set) => previewNamedSet(set));
+            case "save_named_set": {
+                const args = payloadRecord(payload);
+                const name = String(args?.name ?? "").trim();
+                if (!name) throw new Error("Give the set a name.");
+                if (previewNamedSets.some((set) => set.name.toLowerCase() === name.toLowerCase())) {
+                    throw new Error(`A set is already called “${name}”.`);
+                }
+                const memoryIds = ((args?.memoryIds as string[] | undefined) ?? []).slice(0, 6);
+                const saved = { id: `preview-named-${previewNamedSets.length + 1}`, name, memoryIds, savedAt: Date.now() };
+                previewNamedSets = [saved, ...previewNamedSets];
+                return previewNamedSet(saved);
+            }
+            case "delete_named_set": {
+                const id = String(payloadRecord(payload)?.id ?? "");
+                previewNamedSets = previewNamedSets.filter((set) => set.id !== id);
+                return null;
+            }
+            case "routine_offers": {
+                const memoryIds = previewCards.filter((card) => Boolean(card.reopen_target)).slice(0, 2).map((card) => card.id);
+                return previewRoutineDismissed || memoryIds.length === 0
+                    ? []
+                    : [{ id: "preview-routine", label: "Morning standup notes", memoryIds, reason: "Opened on 4 weekdays around 9:00", dueNow: true }];
+            }
+            case "dismiss_routine_offer":
+                previewRoutineDismissed = true;
+                return null;
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
             case "computer_use_permissions":

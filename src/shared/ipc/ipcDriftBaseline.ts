@@ -65,6 +65,14 @@ export const baseline = {
         // the next wave's work and lives in src/app, outside this lane. Delete
         // both lines when it lands.
         "markThreadSeen",
-        "whatChangedSince"
+        "whatChangedSince",
+        // Named work sets and routines (2026-10-09): the Home card that calls
+        // these is being built in src/app by a parallel lane. Delete these five
+        // lines when it lands.
+        "deleteNamedSet",
+        "dismissRoutineOffer",
+        "listNamedSets",
+        "routineOffers",
+        "saveNamedSet"
     ],
 };
