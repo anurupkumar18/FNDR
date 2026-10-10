@@ -32,45 +32,59 @@ summary="${1:-}"
 [[ -n "$summary" ]] || { echo "Give a one-line summary of what this publishes." >&2; exit 2; }
 [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "Not on main." >&2; exit 1; }
 
-git fetch -q origin
-head="$(git rev-parse HEAD)"
-remote="$(git rev-parse origin/main)"
-if git merge-base --is-ancestor "$head" "$remote"; then
-  echo "Nothing to publish: origin/main already has every local commit."
-  exit 0
-fi
+publish_once() {
+  git fetch -q origin
+  head="$(git rev-parse HEAD)"
+  remote="$(git rev-parse origin/main)"
+  if git merge-base --is-ancestor "$head" "$remote"; then
+    echo "Nothing to publish: origin/main already has every local commit."
+    return 0
+  fi
 
-if ! tree="$(git merge-tree --write-tree "$head" "$remote")"; then
-  echo "The remote does not merge cleanly with local main. Conflicts:" >&2
-  echo "$tree" >&2
-  exit 1
-fi
+  if ! tree="$(git merge-tree --write-tree "$head" "$remote")"; then
+    echo "The remote does not merge cleanly with local main. Conflicts:" >&2
+    echo "$tree" >&2
+    return 1
+  fi
 
-scratch="${TMPDIR:-/tmp}/fndr-publish"
-rm -rf "$scratch"
-mkdir -p "$scratch/dist"
-trap 'rm -rf "$scratch"' EXIT
-git archive "$tree" | tar -x -C "$scratch"
-ln -s "$REPO/node_modules" "$scratch/node_modules"
+  scratch="${TMPDIR:-/tmp}/fndr-publish"
+  rm -rf "$scratch"
+  mkdir -p "$scratch/dist"
+  git archive "$tree" | tar -x -C "$scratch"
+  ln -s "$REPO/node_modules" "$scratch/node_modules"
 
-ran=()
-for check in "${checks[@]}"; do
-  case "$check" in
-    frontend) (cd "$scratch" && npm run -s typecheck && npx vitest run >/dev/null) && ran+=("typecheck and frontend tests") ;;
-    scripts) (cd "$scratch" && make -s scripts-test >/dev/null 2>&1) && ran+=("script tests") ;;
-    rust) (cd "$scratch/src-tauri" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo test --lib >/dev/null 2>&1) && ran+=("library tests") ;;
-  esac || { echo "The $check check failed on the merged tree. Nothing was pushed." >&2; exit 1; }
-done
-verified="$(IFS=,; echo "${ran[*]}" | sed 's/,/, /g')"
+  ran=()
+  for check in "${checks[@]}"; do
+    case "$check" in
+      frontend) (cd "$scratch" && npm run -s typecheck && npx vitest run >/dev/null) && ran+=("typecheck and frontend tests") ;;
+      scripts) (cd "$scratch" && make -s scripts-test >/dev/null 2>&1) && ran+=("script tests") ;;
+      rust) (cd "$scratch/src-tauri" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo test --lib >/dev/null 2>&1) && ran+=("library tests") ;;
+    esac || { echo "The $check check failed on the merged tree. Nothing was pushed." >&2; return 1; }
+  done
+  verified="$(IFS=,; echo "${ran[*]}" | sed 's/,/, /g')"
 
-if git merge-base --is-ancestor "$remote" "$head"; then
-  commit="$head"
-else
-  commit="$(git commit-tree "$tree" -p "$head" -p "$remote" -m "Merge remote main: $summary
+  if git merge-base --is-ancestor "$remote" "$head"; then
+    commit="$head"
+  else
+    commit="$(git commit-tree "$tree" -p "$head" -p "$remote" -m "Merge remote main: $summary
 
 Built without moving the shared checkout. Verified on an export of this tree: $verified.")"
-fi
-git push origin "${commit}:refs/heads/main"
+  fi
+  # The checks take minutes. If someone pushed meanwhile, start over on the new head.
+  git fetch -q origin
+  [[ "$(git rev-parse origin/main)" == "$remote" ]] || return 75
+  git push origin "${commit}:refs/heads/main"
+}
+
+trap 'rm -rf "${TMPDIR:-/tmp}/fndr-publish"' EXIT
+for attempt in 1 2 3; do
+  status=0
+  publish_once || status=$?
+  [[ $status -eq 75 ]] || break
+  echo "origin/main moved while the checks ran; trying again ($attempt of 3)." >&2
+done
+[[ $status -eq 0 ]] || exit "$status"
+[[ -n "${commit:-}" ]] || exit 0
 echo "Published $(git rev-parse --short "$commit") (verified: $verified)."
 for name in origin gh; do
   git remote get-url "$name" >/dev/null 2>&1 && echo "$name main: $(git ls-remote "$name" main | cut -c1-7)"

@@ -298,12 +298,14 @@ fn label_words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// A summary that only repeats words of the window title, such as
-/// "Netflix." or "System Settings - Storage.", is a label, not a statement
-/// of what happened. `restate_label` turns it into "Viewed {label}.".
-fn restate_label(summary: &str, page_title: &str) -> Option<String> {
+/// A summary that only repeats words of the window title or the app's name,
+/// such as "Netflix." or "System Settings - Storage.", is a label, not a
+/// statement of what happened. `restate_label` turns it into
+/// "Viewed {label}.".
+pub fn restate_label(summary: &str, app_name: &str, page_title: &str) -> Option<String> {
     let words = label_words(summary);
-    let title = label_words(page_title);
+    let mut title = label_words(page_title);
+    title.extend(label_words(app_name));
     let leads_with_a_verb = words.first().is_some_and(|first| {
         first.ends_with("ed") || PAST_TENSE.iter().any(|(_, past)| past == first)
     });
@@ -323,12 +325,13 @@ fn restate_label(summary: &str, page_title: &str) -> Option<String> {
 
 pub fn clean_or_fallback_display_summary(
     candidate: &str,
+    app_name: &str,
     page_title: &str,
     url: Option<&str>,
     timestamp_ms: i64,
 ) -> (String, bool) {
     let voiced = neutral_voice(candidate);
-    let voiced = restate_label(&voiced, page_title).unwrap_or(voiced);
+    let voiced = restate_label(&voiced, app_name, page_title).unwrap_or(voiced);
     let generated = build_display_summary(page_title, url, &voiced, timestamp_ms);
     if !narration_filter_hits(&generated) {
         return (generated, false);
@@ -385,7 +388,7 @@ mod tests {
     #[test]
     fn a_summary_that_is_only_the_title_becomes_a_statement() {
         let shown = |summary: &str, title: &str| {
-            clean_or_fallback_display_summary(summary, title, None, 1_700_000_000_000).0
+            clean_or_fallback_display_summary(summary, "", title, None, 1_700_000_000_000).0
         };
         assert_eq!(
             shown("Netflix.", "Netflix - Google Chrome"),
@@ -402,6 +405,18 @@ mod tests {
         assert_eq!(
             shown("Opened Storage.", "Opened Storage"),
             "Opened Storage."
+        );
+        // The app's name counts as well as the title.
+        assert_eq!(
+            clean_or_fallback_display_summary(
+                "System Settings.",
+                "System Settings",
+                "Storage",
+                None,
+                1_700_000_000_000
+            )
+            .0,
+            "Viewed System Settings."
         );
         // No title, nothing to compare with.
         assert_eq!(shown("Netflix.", ""), "Netflix.");
@@ -517,6 +532,7 @@ mod tests {
     fn scrub_or_fallback_removes_internal_voice() {
         let (summary, filtered) = clean_or_fallback_display_summary(
             "You reviewed FNDR src-tauri memory_compaction while noting Refactor ideas",
+            "Google Chrome",
             "FNDR Refactor",
             Some("https://github.com/org/repo"),
             1_700_000_000_000,
