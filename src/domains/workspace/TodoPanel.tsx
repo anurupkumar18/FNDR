@@ -388,6 +388,10 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 {!loading && !loadError && tasks.length === 0 && (
                     <div className="todo-page-state">
                         <p>Nothing on your list. Add a task above when something needs to carry forward.</p>
+                        <p>
+                            When a mail, chat or note on screen asks something of you, FNDR suggests it here with
+                            the words it read.
+                        </p>
                     </div>
                 )}
 

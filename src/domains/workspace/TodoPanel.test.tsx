@@ -54,6 +54,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TodoPanel", () => {
+    it("says what will appear when there are no tasks and no briefing", async () => {
+        ipc.getTodos.mockResolvedValueOnce([]);
+        render(<TodoPanel isVisible onClose={vi.fn()} />);
+
+        expect(await screen.findByText(/Nothing on your list/)).toBeInTheDocument();
+        expect(screen.getByText(/FNDR suggests it here with\s+the words it read/)).toBeInTheDocument();
+        expect(screen.queryByText("My tasks")).toBeNull();
+        expect(screen.queryByText("Suggested")).toBeNull();
+    });
+
     it("traces the daily briefing request without exposing its text", async () => {
         ipc.generateDailyBriefing.mockResolvedValueOnce("Prioritize the release checklist.");
         render(<TodoPanel isVisible onClose={vi.fn()} />);
