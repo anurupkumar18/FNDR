@@ -1257,6 +1257,7 @@ async fn run(
                         ok: false,
                         detail: "Nothing was opened".to_string(),
                         outcome: None,
+                        arrangement: None,
                     })
             }
         })
@@ -1326,6 +1327,7 @@ where
                 ok: false,
                 detail: format!("{} is off limits", step.app),
                 outcome: None,
+                arrangement: None,
             }
         } else {
             open(item.clone()).await
@@ -2821,6 +2823,7 @@ mod tests {
                 ok: verdict.ok,
                 detail: verdict.detail,
                 outcome: Some(outcome),
+                arrangement: None,
             })
         }
     }

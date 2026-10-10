@@ -6,6 +6,7 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
+use super::arrange::Arrangement;
 use super::rank::{eligible, item_of};
 use super::{ItemKind, WorkItem, MAX_ITEMS};
 use crate::memory::reopen::ReopenOutcome;
@@ -27,6 +28,10 @@ pub struct ItemOutcome {
     /// None when FNDR did not try: a halt, a missing memory, or a privacy rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ReopenOutcome>,
+    /// On an opened item when a layout was asked for: whether the windows
+    /// were arranged, and why not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<Arrangement>,
 }
 
 pub(crate) const LEFT_OUT: &str = "Left out: FNDR does not reopen private or blocklisted memories";
@@ -89,6 +94,7 @@ where
         ok: false,
         detail,
         outcome: None,
+        arrangement: None,
     };
     let mut records = match store.get_memories_by_ids(&ids).await {
         Ok(records) => records,
@@ -132,6 +138,7 @@ where
             ok,
             detail,
             outcome,
+            arrangement: None,
         });
     }
     outcomes

@@ -9,6 +9,7 @@
 //! - `named` keeps sets saved under a name, `routines` mines when sets are
 //!   opened, and `arrange` puts opened windows into a layout.
 
+pub mod arrange;
 pub mod named;
 mod open;
 mod rank;
