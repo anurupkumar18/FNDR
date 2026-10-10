@@ -38,6 +38,7 @@ pub fn pick_suggestion(
         }
         let (line, fell_back) = clean_or_fallback_display_summary(
             &record.display_summary,
+            &record.app_name,
             &record.window_title,
             record.url.as_deref(),
             record.timestamp,

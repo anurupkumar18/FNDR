@@ -3762,6 +3762,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let now = Local::now();
         let (display_summary, narration_filtered) = clean_or_fallback_display_summary(
             &final_snippet,
+            &app_name,
             &window_title,
             url.as_deref(),
             now.timestamp_millis(),
@@ -5288,6 +5289,7 @@ pub(crate) async fn merge_memory_records_with_policy(
     let merged_timestamp = incoming.timestamp.max(existing.timestamp);
     let (merged_display_summary, filtered_narration) = clean_or_fallback_display_summary(
         &merged_snippet,
+        &incoming.app_name,
         &merged_window_title,
         merged_url.as_deref(),
         merged_timestamp,

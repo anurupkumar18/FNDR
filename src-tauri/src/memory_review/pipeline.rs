@@ -282,6 +282,7 @@ pub async fn review_one_memory_with_mode(
         let candidate = summary_candidate(&validated, &record.display_summary);
         clean_or_fallback_display_summary(
             &candidate,
+            &record.app_name,
             &record.window_title,
             url_ref,
             record.timestamp,
