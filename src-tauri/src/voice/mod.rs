@@ -64,6 +64,9 @@ pub enum VoiceSurface {
 pub enum VoiceMode {
     Toggle,
     PushToTalk,
+    /// Notch Do while it works: the helper's spotter hears only the stop word
+    /// and lets no text out (ADR 020 amendment, 2026-10-09).
+    StopWords,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -98,6 +101,10 @@ pub enum VoiceState {
     Final {
         text: String,
     },
+    /// The spotter heard "stop" or "cancel". Carries no text.
+    StopWord,
+    /// The spotter heard speech that was not the stop word and dropped it.
+    SpeechIgnored,
     Error {
         code: VoiceErrorCode,
         message: String,
@@ -152,10 +159,24 @@ pub enum VoiceSettingsPane {
 struct ActiveSession {
     id: String,
     surface: VoiceSurface,
+    mode: VoiceMode,
     accepting_results: bool,
 }
 
 impl ActiveSession {
+    /// The helper command that begins this session's listening.
+    fn helper_command(&self) -> &'static str {
+        if self.mode == VoiceMode::StopWords {
+            "spot"
+        } else {
+            "start"
+        }
+    }
+
+    fn spots_only(&self) -> bool {
+        self.mode == VoiceMode::StopWords
+    }
+
     fn event(&self, state: VoiceState) -> VoiceStateEvent {
         VoiceStateEvent {
             version: VOICE_EVENT_VERSION,
@@ -260,6 +281,8 @@ enum HelperEvent {
     Final {
         text: String,
     },
+    StopWord,
+    SpeechIgnored,
     Unavailable {
         reason: String,
         permission: Option<String>,
@@ -315,7 +338,7 @@ impl VoiceManager {
         mode: VoiceMode,
     ) -> Result<VoiceSession, String> {
         validate_surface_mode(surface, mode)?;
-        let session = self.new_session(surface);
+        let session = self.new_session(surface, mode);
 
         // Notch Do is migrated to this owner (ADR-020 amendment 2026-10-06);
         // Notch Ask is not.
@@ -347,8 +370,12 @@ impl VoiceManager {
         })
     }
 
-    pub async fn reject_private(&self, surface: VoiceSurface) -> Result<VoiceSession, String> {
-        let session = self.new_session(surface);
+    pub async fn reject_private(
+        &self,
+        surface: VoiceSurface,
+        mode: VoiceMode,
+    ) -> Result<VoiceSession, String> {
+        let session = self.new_session(surface, mode);
         self.send_unavailable(
             session.clone(),
             VoiceUnavailableReason::PrivateContext,
@@ -379,11 +406,12 @@ impl VoiceManager {
         let _ = self.control.try_send(Control::Shutdown);
     }
 
-    fn new_session(&self, surface: VoiceSurface) -> ActiveSession {
+    fn new_session(&self, surface: VoiceSurface, mode: VoiceMode) -> ActiveSession {
         let sequence = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         ActiveSession {
             id: format!("{}-{sequence}", uuid::Uuid::new_v4()),
             surface,
+            mode,
             accepting_results: false,
         }
     }
@@ -439,10 +467,57 @@ fn validate_surface_mode(surface: VoiceSurface, mode: VoiceMode) -> Result<(), S
             | (VoiceSurface::ScreenGuide, VoiceMode::PushToTalk)
             | (VoiceSurface::NotchAsk, _)
             | (VoiceSurface::NotchDo, VoiceMode::Toggle)
+            | (VoiceSurface::NotchDo, VoiceMode::StopWords)
     );
     valid
         .then_some(())
         .ok_or_else(|| format!("Voice mode {mode:?} is not valid for surface {surface:?}"))
+}
+
+/// The stop vocabulary of docs/product/voice-ux.md ("Matching rule"):
+/// `[lead-in] (stop | cancel) [it | that | now] [please]`, at most four words.
+/// Kept in step with `StopWordMatcher` in `fndr-speech` and `isStopWord` in
+/// `src/domains/notch/doRun.ts`.
+pub fn is_stop_word(text: &str) -> bool {
+    let normalized: String = text
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '\'' {
+                c.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    if words.is_empty() || words.len() > 4 {
+        return false;
+    }
+    let mut rest: &[&str] = &words;
+    for lead in [
+        &["hey", "fndr"][..],
+        &["fndr"],
+        &["please"],
+        &["okay"],
+        &["ok"],
+        &["no"],
+    ] {
+        if rest.starts_with(lead) {
+            rest = &rest[lead.len()..];
+            break;
+        }
+    }
+    match rest.first() {
+        Some(&"stop") | Some(&"cancel") => rest = &rest[1..],
+        _ => return false,
+    }
+    if matches!(rest.first(), Some(&"it") | Some(&"that") | Some(&"now")) {
+        rest = &rest[1..];
+    }
+    if rest.first() == Some(&"please") {
+        rest = &rest[1..];
+    }
+    rest.is_empty()
 }
 
 fn native_helper_command<R: Runtime>(app: &AppHandle<R>) -> HelperCommand {
@@ -759,9 +834,12 @@ async fn restart_after_crash(
 
     *restart_count += 1;
     *generation += 1;
+    let begin = active
+        .as_ref()
+        .map_or("start", ActiveSession::helper_command);
     match spawn_helper(command, *generation, output.clone()).await {
         Ok(mut replacement) => {
-            if let Err(error) = replacement.write("start").await {
+            if let Err(error) = replacement.write(begin).await {
                 tracing::warn!(error = %error, "Could not restart speech helper session");
             }
             *helper = Some(replacement);
@@ -816,6 +894,7 @@ async fn run_actor(
                         }
                         idle_since = None;
                         restart_count = 0;
+                        let begin = session.helper_command();
                         active = Some(session);
 
                         if helper.is_none() {
@@ -839,7 +918,7 @@ async fn run_actor(
                         }
 
                         let write_failed = if let Some(process) = helper.as_mut() {
-                            process.write("start").await.is_err()
+                            process.write(begin).await.is_err()
                         } else {
                             false
                         };
@@ -956,9 +1035,35 @@ async fn run_actor(
                                     }));
                                 }
                             }
+                            // While deaf no text leaves this process: a helper that
+                            // still sends text is matched here and only the result
+                            // is forwarded.
                             Ok(HelperEvent::Partial { text }) => {
                                 if let Some(session) = active.as_ref().filter(|session| session.accepting_results) {
-                                    sink(session.event(VoiceState::Partial { text }));
+                                    if !session.spots_only() {
+                                        sink(session.event(VoiceState::Partial { text }));
+                                    } else if is_stop_word(&text) {
+                                        sink(session.event(VoiceState::StopWord));
+                                    }
+                                }
+                            }
+                            Ok(HelperEvent::Final { text }) if active.as_ref().is_some_and(ActiveSession::spots_only) => {
+                                if let Some(session) = active.as_ref().filter(|session| session.accepting_results) {
+                                    sink(session.event(if is_stop_word(&text) {
+                                        VoiceState::StopWord
+                                    } else {
+                                        VoiceState::SpeechIgnored
+                                    }));
+                                }
+                            }
+                            Ok(HelperEvent::StopWord) => {
+                                if let Some(session) = active.as_ref().filter(|session| session.accepting_results && session.spots_only()) {
+                                    sink(session.event(VoiceState::StopWord));
+                                }
+                            }
+                            Ok(HelperEvent::SpeechIgnored) => {
+                                if let Some(session) = active.as_ref().filter(|session| session.accepting_results && session.spots_only()) {
+                                    sink(session.event(VoiceState::SpeechIgnored));
                                 }
                             }
                             Ok(HelperEvent::Final { text }) => {
@@ -1043,7 +1148,7 @@ pub async fn voice_start(
     app_state: State<'_, Arc<crate::AppState>>,
 ) -> Result<VoiceSession, String> {
     if app_state.is_incognito.load(Ordering::SeqCst) {
-        return voice.reject_private(surface).await;
+        return voice.reject_private(surface, mode).await;
     }
     voice.start(surface, mode).await
 }
@@ -1395,5 +1500,125 @@ mod tests {
             event.session_id.as_deref() == Some(&second.session_id)
                 && matches!(event.state, VoiceState::Final { .. })
         }));
+    }
+
+    fn texts_of(events: &[VoiceStateEvent], session_id: &str) -> Vec<VoiceState> {
+        events
+            .iter()
+            .filter(|event| event.session_id.as_deref() == Some(session_id))
+            .map(|event| event.state.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_stop_word_is_stop_or_cancel_behind_a_short_lead_in_and_nothing_else() {
+        for phrase in [
+            "stop",
+            "Stop!",
+            "cancel",
+            "stop it",
+            "cancel that please",
+            "please stop",
+            "okay stop",
+            "ok, cancel",
+            "no, stop it",
+            "FNDR stop",
+            "hey FNDR, cancel",
+            "hey fndr stop now",
+        ] {
+            assert!(is_stop_word(phrase), "{phrase}");
+        }
+        for phrase in [
+            "don't stop",
+            "stop sign",
+            "unstoppable",
+            "stopped",
+            "stop at the second tab and open settings",
+            "hey fndr stop it please",
+            "wait",
+            "pause",
+            "hold on",
+            "never mind",
+            "abort",
+            "just stop",
+            "",
+            " ... ",
+        ] {
+            assert!(!is_stop_word(phrase), "{phrase}");
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_only_mode_forwards_the_spotter_and_never_any_text() {
+        let (manager, events, _temp) = manager("spot", Duration::from_secs(5));
+        let session = manager
+            .start(VoiceSurface::NotchDo, VoiceMode::StopWords)
+            .await
+            .expect("stop-only session");
+        wait_for(&events, |events| {
+            texts_of(events, &session.session_id)
+                .iter()
+                .filter(|state| matches!(state, VoiceState::StopWord))
+                .count()
+                >= 2
+                && texts_of(events, &session.session_id)
+                    .iter()
+                    .filter(|state| matches!(state, VoiceState::SpeechIgnored))
+                    .count()
+                    >= 2
+        })
+        .await;
+        let states = texts_of(&events.lock(), &session.session_id);
+        assert!(!states
+            .iter()
+            .any(|state| matches!(state, VoiceState::Partial { .. } | VoiceState::Final { .. })));
+        let wire = serde_json::to_string(&*events.lock()).expect("events serialize");
+        for heard in ["open the music", "turn it up", "please stop"] {
+            assert!(!wire.contains(heard), "{heard} left the voice owner");
+        }
+        assert!(wire.contains(r#"{"kind":"stop_word"}"#));
+        assert!(wire.contains(r#"{"kind":"speech_ignored"}"#));
+    }
+
+    #[tokio::test]
+    async fn a_partial_in_stop_only_mode_emits_nothing() {
+        let (manager, events, _temp) = manager("normal", Duration::from_secs(5));
+        let session = manager
+            .start(VoiceSurface::NotchDo, VoiceMode::StopWords)
+            .await
+            .expect("stop-only session");
+        wait_for(&events, |events| {
+            texts_of(events, &session.session_id)
+                .iter()
+                .any(|state| matches!(state, VoiceState::Listening { .. }))
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(
+            texts_of(&events.lock(), &session.session_id),
+            vec![VoiceState::Listening { level: 0.0 }]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_spotter_events_mean_nothing_to_an_open_session_and_stop_only_is_notch_do_only() {
+        let (manager, events, _temp) = manager("spot", Duration::from_secs(5));
+        assert!(manager
+            .start(VoiceSurface::HomeSearch, VoiceMode::StopWords)
+            .await
+            .is_err());
+        let open = manager
+            .start(VoiceSurface::NotchDo, VoiceMode::Toggle)
+            .await
+            .expect("open session");
+        wait_for(&events, |events| {
+            texts_of(events, &open.session_id)
+                .iter()
+                .any(|state| matches!(state, VoiceState::Partial { text } if text == "Show my"))
+        })
+        .await;
+        assert!(!texts_of(&events.lock(), &open.session_id)
+            .iter()
+            .any(|state| matches!(state, VoiceState::StopWord)));
     }
 }
