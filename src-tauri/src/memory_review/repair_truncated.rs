@@ -17,7 +17,8 @@ use crate::embedding::Embedder;
 use crate::memory_embedding_document::refresh_text_vectors;
 use crate::storage::{MemoryRecord, Store};
 use crate::summariser::narration_filter::{
-    clean_or_fallback_display_summary, is_placeholder_summary, narration_filter_hits, neutral_voice,
+    clean_or_fallback_display_summary, is_placeholder_summary, narration_filter_hits,
+    neutral_voice, restate_label,
 };
 use crate::summariser::sentences::first_sentence;
 use serde::Serialize;
@@ -135,6 +136,7 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     };
     let (repaired, fell_back) = clean_or_fallback_display_summary(
         &sentence,
+        &record.app_name,
         &record.window_title,
         record.url.as_deref(),
         record.timestamp,
@@ -205,8 +207,12 @@ pub fn reword_narration(record: &mut MemoryRecord) -> Option<RepairExample> {
     }
     let before = record.display_summary.clone();
     let after = neutral_voice(&before).trim().to_string();
+    // A summary that is only the title or the app's name becomes a statement.
+    let relabelled = restate_label(&after, &record.app_name, &record.window_title);
+    let is_label = relabelled.is_some();
+    let after = relabelled.unwrap_or(after);
     if after == before.trim()
-        || after.split_whitespace().count() < MIN_REWORDED_WORDS
+        || (!is_label && after.split_whitespace().count() < MIN_REWORDED_WORDS)
         || narrates(&after)
         || is_placeholder_summary(&after)
     {
@@ -347,6 +353,20 @@ mod tests {
             reword_narration(&mut row).is_none(),
             "second pass changes nothing"
         );
+    }
+
+    #[test]
+    fn a_stored_summary_that_is_only_the_title_or_app_becomes_a_statement() {
+        let mut row = narrated_row("Q3 forecast - Numbers.");
+        reword_narration(&mut row).expect("restated");
+        assert_eq!(row.display_summary, "Viewed Q3 forecast - Numbers.");
+        assert_eq!(row.insight_what_happened, row.display_summary);
+        // A second pass finds nothing to change.
+        assert!(reword_narration(&mut row).is_none());
+
+        let mut short = narrated_row("Numbers.");
+        reword_narration(&mut short).expect("restated");
+        assert_eq!(short.display_summary, "Viewed Numbers.");
     }
 
     #[test]
