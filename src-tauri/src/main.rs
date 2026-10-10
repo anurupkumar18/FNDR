@@ -728,6 +728,9 @@ fn main() {
             fndr_lib::voice::voice_start,
             fndr_lib::voice::voice_stop,
             fndr_lib::voice::voice_cancel,
+            fndr_lib::voice::notch_do::get_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_escape_monitor,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,

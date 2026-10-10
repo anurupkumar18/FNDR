@@ -1,3 +1,5 @@
+pub mod notch_do;
+
 use serde::{Deserialize, Serialize};
 use std::ffi::{CString, OsString};
 use std::path::PathBuf;
