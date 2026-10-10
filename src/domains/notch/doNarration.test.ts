@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { doRunReducer, initialDoState, type DoInput, type DoState } from "./doRun";
-import { isEchoOfSpeech, narrate, spokenItem } from "./doNarration";
+import { doRunReducer, initialDoState, isStopWord, type DoInput, type DoState } from "./doRun";
+import { isEchoOfSpeech, narrate, speakable, spokenItem } from "./doNarration";
 import type { ComputerUseEvent, WorkItem, WorkSet } from "@/shared/ipc/tauri";
 
 const CANVAS: WorkItem = { memoryId: "canvas", label: "Assignment 3", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "canvas.utah.edu", capturedAt: 3 };
@@ -62,10 +62,10 @@ describe("narrate", () => {
         expect(said[3]?.text).toBe("Trying that step again.");
     });
 
-    it("announces an approval aloud as urgent and offers a spoken no, never a spoken yes", () => {
+    it("announces an approval aloud as urgent and asks for a tap, never a spoken answer", () => {
         const said = lines(...start, event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Add to cart" }))[2];
         expect(said?.urgent).toBe(true);
-        expect(said?.text).toBe("I need your okay to click Add to cart. Tap Allow, or say no.");
+        expect(said?.text).toBe("I need your okay to click Add to cart. Tap Allow.");
     });
 
     it("says what it refused to do", () => {
@@ -172,12 +172,12 @@ describe("narrating a work set", () => {
         expect(said?.text).toBe("four places to open: your Canvas page, the PDF on page 4, the doc and the doc. Tap Start when you are ready.");
     });
 
-    it("reads out the choices with their numbers", () => {
+    it("asks which one and leaves the choices on screen", () => {
         const said = lines(
             { type: "planRequested", runId: "r1", transcript: "the assignment" },
             event({ kind: "choose", runId: "r1", options: [BIO, CHEM] }),
         )[1];
-        expect(said?.text).toBe("That could be two pieces of work: one, Biology assignment 2; two, Chemistry assignment 4. Tap one or say its number.");
+        expect(said?.text).toBe("Which one? The choices are on screen.");
     });
 
     it("names files, folders and apps", () => {
@@ -185,5 +185,82 @@ describe("narrating a work set", () => {
         expect(spokenItem({ ...DOC, kind: "folder", label: "Lab 3" })).toBe("the Lab 3 folder");
         expect(spokenItem({ ...DOC, kind: "app", label: "Slack" })).toBe("Slack");
         expect(spokenItem({ ...DOC, host: "github.com" })).toBe("your GitHub page");
+    });
+});
+
+describe("speakable", () => {
+    it("says a link by its host and an email address by what it is", () => {
+        expect(speakable("Opened https://canvas.utah.edu/courses/123/assignments?x=1 for you.")).toBe("Opened a link on canvas.utah.edu for you.");
+        expect(speakable("Go to www.example.com now")).toBe("Go to a link on example.com now");
+        expect(speakable("Wrote to kunj@example.com.")).toBe("Wrote to an email address.");
+    });
+
+    it("hides secrets and token-shaped strings", () => {
+        for (const secret of ["sk-proj-abc123", "ghp_16C7e42F292c6912E7710c838347Ae178B4a", "AKIAIOSFODNN7EXAMPLE", "dGhpcyBpcyBhIHNlY3JldCB0b2tlbg==", "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b"]) {
+            expect(speakable(`Typed ${secret} into the field.`), secret).toBe("Typed a hidden value into the field.");
+        }
+    });
+
+    it("shortens long numbers and file paths, and keeps short numbers", () => {
+        expect(speakable("Called 8015551234567.")).toBe("Called a long number.");
+        expect(speakable("Saved on page 42.")).toBe("Saved on page 42.");
+        expect(speakable("Opened /Users/kunj/Documents/Lab 3/report.pdf.")).toBe("Opened report.pdf.");
+        expect(speakable("Opened ~/Downloads/data.csv")).toBe("Opened data.csv");
+    });
+
+    it("says a list of more than three items as a count", () => {
+        expect(speakable("I left out: Open Notes, Type hello, Save, Close the window.")).toBe("I left out: four items, shown on screen.");
+        expect(speakable("Opened: Assignment 3, the doc and the PDF.")).toBe("Opened: Assignment 3, the doc and the PDF.");
+    });
+
+    it("never says a stop word, so FNDR's own voice cannot stop a run", () => {
+        expect(speakable("Step one of two: Stop the timer.")).not.toMatch(/\bstop\b/i);
+        expect(speakable("Cancel my subscription")).not.toMatch(/\bcancel\b/i);
+        expect(speakable("Stopped.")).toBe("Stopped.");
+    });
+});
+
+describe("narration never contains a stop word", () => {
+    const risky = [
+        { label: "Stop", action: "operate" as const, app: "Timer" },
+        { label: "Cancel the order", action: "operate" as const, app: "Safari" },
+        { label: "Stop the timer", action: "operate" as const, app: "Clock" },
+    ];
+    const reopen = (item: WorkItem) => ({ label: `Open ${item.label}`, action: "reopen_memory" as const, app: item.appName, item });
+    const runs: DoInput[][] = [
+        [{ type: "planRequested", runId: "r1", transcript: "stop" }, event({ kind: "planned", runId: "r1", autoStart: true, steps: risky })],
+        [{ type: "planRequested", runId: "r1", transcript: "cancel it" }, event({ kind: "planned", runId: "r1", autoStart: false, steps: risky })],
+        [
+            { type: "planRequested", runId: "r1", transcript: "x" },
+            event({ kind: "planned", runId: "r1", autoStart: true, steps: risky }),
+            event({ kind: "stepStarted", runId: "r1", index: 0, attempt: 1 }),
+            event({ kind: "stepStarted", runId: "r1", index: 0, attempt: 2 }),
+            event({ kind: "stepStarted", runId: "r1", index: 1, attempt: 1 }),
+            event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Stop" }),
+            event({ kind: "blocked", runId: "r1", index: 1, tool: "click", summary: "click Cancel", reason: "no" }),
+            event({ kind: "stepDone", runId: "r1", index: 1, ok: false, detail: "stop" }),
+            event({ kind: "finished", runId: "r1", ok: false, summary: "Stop" }),
+        ],
+        [{ type: "planRequested", runId: "r1", transcript: "x" }, event({ kind: "failed", runId: "r1", error: "cancel", reconnect: false })],
+        [{ type: "error", message: "Stop" }],
+        [
+            { type: "planRequested", runId: "r1", transcript: "stop" },
+            event({ kind: "choose", runId: "r1", options: [set("s", "Stop", [CANVAS])] }),
+        ],
+        [{ type: "planRequested", runId: "r1", transcript: "x" }, event({ kind: "planned", runId: "r1", autoStart: true, steps: [{ ...CANVAS, label: "stop" }].map(reopen) })],
+    ];
+
+    it("runs every narration branch through the stop-word matcher and finds no match", () => {
+        let count = 0;
+        for (const inputs of runs) {
+            for (const said of lines(...inputs)) {
+                if (!said) continue;
+                count += 1;
+                const spoken = speakable(said.text);
+                expect(spoken, spoken).not.toMatch(/\b(stop|cancel)\b/i);
+                for (const sentence of spoken.split(/[.!?:;,]+/)) expect(isStopWord(sentence), sentence).toBe(false);
+            }
+        }
+        expect(count).toBeGreaterThanOrEqual(10);
     });
 });

@@ -3,10 +3,13 @@
  * (ADR-020 amendment, 2026-10-08). The lines are plain and short, and they
  * keep the difference between a step FNDR checked and one the model only
  * reported. Speech never decides anything: an approval is still a tap.
+ *
+ * `speakable` is the one place that decides what is never read aloud
+ * (docs/product/voice-ux.md): the line on screen keeps its full text.
  */
 
 import type { WorkItem } from "@/shared/ipc/tauri";
-import { isStopPhrase, type DoState } from "./doRun";
+import { isStopWord, type DoState } from "./doRun";
 
 export interface Narration {
     text: string;
@@ -95,12 +98,9 @@ function plannedReopens(next: DoState): Narration {
     };
 }
 
-function choices(next: DoState): Narration {
-    const named = next.options.map((option, index) => `${num(index + 1)}, ${sentence(option.title)}`).join("; ");
-    return {
-        text: `That could be ${plural(next.options.length, "piece")} of work: ${named}. Tap one or say its number.`,
-        urgent: false,
-    };
+/** The options stay on screen; they are picked with a tap or a number key. */
+function choices(): Narration {
+    return { text: "Which one? The choices are on screen.", urgent: false };
 }
 
 function planned(next: DoState): Narration {
@@ -128,10 +128,10 @@ function finished(next: DoState): Narration {
 /** The line to say now that `next` follows `prev`, or null for silence. */
 export function narrate(prev: DoState, next: DoState): Narration | null {
     if (next.phase === "plan" && prev.phase !== "plan" && next.steps.length > 0) return planned(next);
-    if (next.phase === "choose" && next.options.length > 0 && next.options !== prev.options) return choices(next);
+    if (next.phase === "choose" && next.options.length > 0 && next.options !== prev.options) return choices();
 
     if (next.approval && next.approval.requestKey !== prev.approval?.requestKey) {
-        return { text: `I need your okay to ${sentence(next.approval.summary)}. Tap Allow, or say no.`, urgent: true };
+        return { text: `I need your okay to ${sentence(next.approval.summary)}. Tap Allow.`, urgent: true };
     }
 
     const blocked = next.actions.find((a) => a.state === "blocked" && !prev.actions.some((p) => p.id === a.id));
@@ -176,7 +176,53 @@ function words(text: string): string[] {
  *  microphone. A stop is never an echo: Stop must work while FNDR talks. */
 export function isEchoOfSpeech(heard: string, spoken: string): boolean {
     const heardWords = words(heard);
-    if (heardWords.length === 0 || isStopPhrase(heard)) return false;
+    if (heardWords.length === 0 || isStopWord(heard)) return false;
     const spokenWords = new Set(words(spoken));
     return spokenWords.size > 0 && heardWords.every((word) => spokenWords.has(word));
+}
+
+// MARK: - What is never read aloud
+
+const URL_PATTERN = /\b(?:https?:\/\/|www\.)([^\s/?#]+)[^\s]*?(?=[.,;:!?)]*(?:\s|$))/gi;
+const EMAIL_PATTERN = /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/g;
+const SECRET_PREFIX_PATTERN = /\b(?:sk-|ghp_|gho_|github_pat_|AKIA)[\w-]+/g;
+/** 20 or more characters of base64 or hex with at least one digit, so long plain words are kept. */
+const TOKEN_PATTERN = /(?<![\w/])(?=[A-Za-z0-9+/_=-]*\d)[A-Za-z0-9+/_-]{20,}={0,2}(?![\w/])/g;
+const PATH_PATTERN = /(?:~|(?<![\w.]))\/(?:[^\s/]+(?: [^\s/]+)*\/)*([^\s/]+?)(?=[.,;:!?)]*(?:\s|$))/g;
+const LONG_NUMBER_PATTERN = /\b\d{7,}\b/g;
+const LIST_PATTERN = /:\s+([^.:;!?]+)/g;
+const MAX_LISTED = 3;
+
+/** A host as it is said: no `www.`, no port. */
+function hostOf(raw: string): string {
+    return raw.toLowerCase().replace(/^www\./, "").replace(/:\d+$/, "");
+}
+
+function listSaid(_match: string, body: string): string {
+    const items = body
+        .split(/,\s*|\s+and\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    return items.length > MAX_LISTED ? `: ${num(items.length)} items, shown on screen` : `: ${body}`;
+}
+
+/**
+ * The words FNDR may say for a line it shows. Links are said by their host,
+ * email addresses, secrets and long numbers by what they are, a path by its
+ * last part, and a list of more than three by its count. "Stop" and "cancel"
+ * are never said, so FNDR's own voice cannot trip the stop-word spotter
+ * (ADR 020 amendment, 2026-10-09). Raw memory, OCR and page text never reach
+ * here: `narrate` composes lines only from step labels, summaries and errors.
+ */
+export function speakable(text: string): string {
+    return text
+        .replace(URL_PATTERN, (_match, host: string) => `a link on ${hostOf(host)}`)
+        .replace(EMAIL_PATTERN, "an email address")
+        .replace(SECRET_PREFIX_PATTERN, "a hidden value")
+        .replace(TOKEN_PATTERN, "a hidden value")
+        .replace(PATH_PATTERN, (_match, last: string) => last)
+        .replace(LONG_NUMBER_PATTERN, "a long number")
+        .replace(LIST_PATTERN, listSaid)
+        .replace(/\bstop\b/gi, (word) => (word[0] === "S" ? "End" : "end"))
+        .replace(/\bcancel\b/gi, (word) => (word[0] === "C" ? "Call off" : "call off"));
 }
