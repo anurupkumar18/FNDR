@@ -797,6 +797,14 @@ pub struct ProactiveSignalsConfig {
     pub thread_updates: bool,
     #[serde(default = "default_proactive_signal_on")]
     pub meeting_prep: bool,
+    /// Meeting prep also reads the calendar on this Mac (ADR 029). Off until
+    /// the person turns it on, because it asks for calendar access.
+    #[serde(default)]
+    pub calendar_meeting_prep: bool,
+    /// Calendar ids to read. Empty means every calendar the person did not
+    /// subscribe to.
+    #[serde(default)]
+    pub calendar_ids: Vec<String>,
 }
 
 fn default_proactive_signal_on() -> bool {
@@ -809,6 +817,8 @@ impl Default for ProactiveSignalsConfig {
             stuck: true,
             thread_updates: true,
             meeting_prep: true,
+            calendar_meeting_prep: false,
+            calendar_ids: Vec::new(),
         }
     }
 }
@@ -1447,6 +1457,27 @@ mod tests {
         let partial: ProactiveSignalsConfig = toml::from_str("stuck = false").unwrap();
         assert!(!partial.stuck);
         assert!(partial.thread_updates && partial.meeting_prep);
+    }
+
+    #[test]
+    fn calendar_meeting_prep_is_off_by_default_and_for_an_older_file() {
+        let fresh = ProactiveSignalsConfig::default();
+        assert!(!fresh.calendar_meeting_prep);
+        assert!(fresh.calendar_ids.is_empty());
+
+        let older: ProactiveSignalsConfig =
+            toml::from_str("stuck = true\nthread_updates = true\nmeeting_prep = true").unwrap();
+        assert!(!older.calendar_meeting_prep);
+        assert!(older.calendar_ids.is_empty());
+
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let reloaded: Config = toml::from_str(&current).expect("config reloads");
+        assert!(!reloaded.proactive_signals.calendar_meeting_prep);
+
+        let chosen: ProactiveSignalsConfig =
+            toml::from_str("calendar_meeting_prep = true\ncalendar_ids = [\"work\"]").unwrap();
+        assert!(chosen.calendar_meeting_prep && chosen.meeting_prep);
+        assert_eq!(chosen.calendar_ids, vec!["work".to_string()]);
     }
 
     #[test]
