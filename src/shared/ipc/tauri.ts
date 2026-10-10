@@ -294,8 +294,6 @@ export async function fndrTimeline(args?: {
 export interface ResumeThread {
     /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
     key?: string;
-    /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
-    key?: string;
     title: string;
     app_name?: string;
     last_state: string;
@@ -313,6 +311,8 @@ export interface ResumeThread {
 /** Recent observed work, with source citations; does not execute actions. */
 export async function resumeWork(): Promise<ResumeThread[]> {
     return invoke("resume_work", { hours: 24, budgetTokens: 800 });
+}
+
 /** What is new in a Resume Work thread since it was last marked seen. */
 export interface ThreadDigest {
     thread_key: string;
@@ -337,8 +337,6 @@ export async function whatChangedSince(threadKey: string): Promise<ThreadDigest>
 
 export async function markThreadSeen(threadKey: string): Promise<void> {
     return invoke("mark_thread_seen", { threadKey });
-}
-
 }
 
 export async function fndrQualityStatus(): Promise<{
@@ -2179,6 +2177,8 @@ export async function codexLoginCancel(loginId: string): Promise<void> {
 
 export async function codexLogout(): Promise<CodexAccountStatus> {
     return invoke<CodexAccountStatus>("codex_logout");
+}
+
 /** Why the ChatGPT plan's voice can or cannot speak now (ADR 028). */
 export type VoiceOutState =
     | "ready"
@@ -2228,8 +2228,6 @@ export async function voiceOutCancel(): Promise<void> {
 
 export async function voiceOutStop(): Promise<void> {
     return invoke<void>("voice_out_stop");
-}
-
 }
 
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {
@@ -2340,12 +2338,12 @@ export interface ProactiveSuggestion {
 
 export interface FndrNotificationPayload {
     title: string;
+    body: string;
+    kind: string;
     /** The memory a "stuck" toast opens. */
     memory_id?: string;
     /** The Resume Work thread a "thread_update" or "meeting_prep" toast opens. */
     thread_key?: string;
-    body: string;
-    kind: string;
 }
 
 export function onProactiveSuggestion(
