@@ -6,7 +6,10 @@
 //! - `resolve` gathers that evidence from the store.
 //! - `open_items` opens what a set holds through the same reopen core as the
 //!   Vault, checking privacy again at open time.
+//! - `named` keeps sets saved under a name, `routines` mines when sets are
+//!   opened, and `arrange` puts opened windows into a layout.
 
+pub mod named;
 mod open;
 mod rank;
 
