@@ -840,6 +840,10 @@ pub struct VoiceOutputConfig {
     pub system_voice: String,
     #[serde(default = "default_voice_output_rate")]
     pub rate: f32,
+    /// The on-device neural voice (ADR 030), a Kokoro voice id such as
+    /// `af_heart`. Empty means its default voice.
+    #[serde(default)]
+    pub neural_voice: String,
 }
 
 const VOICE_OUTPUT_PROVIDERS: [&str; 5] = [
@@ -864,6 +868,7 @@ impl Default for VoiceOutputConfig {
             provider: default_voice_output_provider(),
             system_voice: String::new(),
             rate: default_voice_output_rate(),
+            neural_voice: String::new(),
         }
     }
 }
@@ -879,6 +884,14 @@ impl VoiceOutputConfig {
         let voice = self.system_voice.trim();
         self.system_voice = if voice.len() <= 200 && !voice.chars().any(char::is_control) {
             voice.to_string()
+        } else {
+            String::new()
+        };
+        let neural = self.neural_voice.trim();
+        self.neural_voice = if neural.len() <= 32
+            && neural.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        {
+            neural.to_string()
         } else {
             String::new()
         };
@@ -1523,6 +1536,7 @@ mod tests {
             provider: "elevenlabs".into(),
             system_voice: "x".repeat(300),
             rate: f32::NAN,
+            neural_voice: "../af_heart".into(),
         }
         .normalized();
         assert_eq!(bad, VoiceOutputConfig::default());
@@ -1532,6 +1546,10 @@ mod tests {
         }
         .normalized();
         assert_eq!(fast.rate, 2.0);
+
+        assert_eq!(older.voice_output.neural_voice, "");
+        let neural: VoiceOutputConfig = toml::from_str("neural_voice = \"bf_emma\"").unwrap();
+        assert_eq!(neural.normalized().neural_voice, "bf_emma");
     }
 
     #[test]
