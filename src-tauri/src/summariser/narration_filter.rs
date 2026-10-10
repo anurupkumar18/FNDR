@@ -139,6 +139,18 @@ const PAST_TENSE: &[(&str, &str)] = &[
     ("listening", "Listened"),
     ("playing", "Played"),
     ("organizing", "Organized"),
+    ("copying", "Copied"),
+    ("messaging", "Messaged"),
+    ("attempting", "Attempted"),
+    // "Discusses cache management": the present tense with the subject left
+    // out. Only verbs that are not also common plural nouns ("checks",
+    // "reviews", "covers") are listed.
+    ("discusses", "Discussed"),
+    ("explains", "Explained"),
+    ("describes", "Described"),
+    ("summarizes", "Summarized"),
+    ("explores", "Explored"),
+    ("compares", "Compared"),
 ];
 
 static NARRATOR_POSSESSIVE: Lazy<Regex> = Lazy::new(|| {
@@ -154,6 +166,11 @@ fn past_tense_lead(text: &str) -> String {
     if opens_with_a_label {
         return text.to_string();
     }
+    // "Currently using ChatGPT" says the same as "Using ChatGPT".
+    let text = match text.split_once(' ') {
+        Some((first, rest)) if first.eq_ignore_ascii_case("currently") => rest.trim_start(),
+        _ => text,
+    };
     let first = text.split_whitespace().next().unwrap_or("");
     match PAST_TENSE
         .iter()
@@ -339,6 +356,31 @@ pub fn clean_or_fallback_display_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_present_tense_lead_without_a_subject_goes_to_the_past() {
+        assert_eq!(
+            neutral_voice("Discusses cache management for the build."),
+            "Discussed cache management for the build."
+        );
+        assert_eq!(
+            neutral_voice("Currently using ChatGPT, attempting a fix."),
+            "Used ChatGPT, attempting a fix."
+        );
+        assert_eq!(
+            neutral_voice("Copying a file named report.pdf."),
+            "Copied a file named report.pdf."
+        );
+        // A plural noun that is also a verb is left alone.
+        assert_eq!(
+            neutral_voice("Reviews of the laptop stand."),
+            "Reviews of the laptop stand."
+        );
+        assert_eq!(
+            neutral_voice("Checks passed on CI."),
+            "Checks passed on CI."
+        );
+    }
 
     #[test]
     fn a_summary_that_is_only_the_title_becomes_a_statement() {
