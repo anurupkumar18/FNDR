@@ -36,6 +36,7 @@ Several agent sessions and people work in this one checkout at the same time.
 - Check the branch before you commit. Commit by path. Where a file also holds someone else's uncommitted lines, stage only your own hunks.
 - Never stash, reset, switch branches or create a worktree unless the owner says so.
 - Rust builds are heavy on this machine: run one at a time, with `CARGO_BUILD_JOBS=2`.
+- The disk is small. Check `df -h ~` before a long build; under 15 GB free, run `make clean-test-binaries` (removes linked test executables older than a day from the shared build cache). Delete your own scratch copies when you finish.
 - Another session's uncommitted work can break the Rust build. `make test-clean FILES="<your changed files>"` runs the library tests on the committed tree plus only your files, in a scratch copy. Integration tests under `src-tauri/tests` run in the checkout.
 - Format only what you changed: `rustfmt --edition 2021 --check <file>`, then fix your own lines. `cargo fmt` rewrites the whole crate, other sessions' files included. The frontend has no formatter config: match the file by hand and do not run prettier.
 - A tool that rewrites a database refuses the real profile unless told otherwise. Rewriting the owner's vault needs FNDR closed, a backup first, and the owner's go-ahead.
