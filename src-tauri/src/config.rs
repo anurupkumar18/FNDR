@@ -776,6 +776,29 @@ pub struct Config {
     /// Memory quality thresholds for primary cards and evidence gating.
     #[serde(default)]
     pub memory_quality: MemoryQualityConfig,
+    /// macOS banners for proactive notifications.
+    #[serde(default)]
+    pub notifications: NotificationConfig,
+}
+
+/// Banners for the briefing, stale tasks and context-switch nudges when FNDR
+/// is in the background. The text is fixed and never carries memory text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    #[serde(default = "default_notification_banners")]
+    pub banners: bool,
+}
+
+fn default_notification_banners() -> bool {
+    true
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            banners: default_notification_banners(),
+        }
+    }
 }
 
 fn default_embedding_model_name() -> String {
@@ -1143,6 +1166,7 @@ impl Default for Config {
             store: StoreConfig::default(),
             proactive: ProactiveConfig::default(),
             memory_quality: MemoryQualityConfig::default(),
+            notifications: NotificationConfig::default(),
         }
     }
 }

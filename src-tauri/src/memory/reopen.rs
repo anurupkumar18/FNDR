@@ -82,8 +82,83 @@ fn is_http_url(value: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+/// Editors that reopen via a `scheme://file/<path>[:line]` deep link when the
+/// window title or Accessibility document path already has an absolute path.
+const EDITOR_DEEP_LINK_SCHEMES: &[(&str, &str)] = &[
+    ("com.microsoft.VSCode", "vscode"),
+    ("com.microsoft.VSCodeInsiders", "vscode-insiders"),
+    ("com.todesktop.230313mzl4w4u92", "cursor"),
+];
+
+/// Builds a deep link for known editor bundles. Prefers an absolute path found
+/// in the window title (for example after setting `window.title` to include
+/// `${activeEditorLong}`); otherwise uses `document_path` from Accessibility.
+/// Unsupported apps and titles without a full path return `None`.
+pub fn app_deep_link_for(
+    bundle_id: Option<&str>,
+    window_title: &str,
+    document_path: Option<&str>,
+) -> Option<String> {
+    let bundle = nonempty_ref(bundle_id)?;
+    let scheme = EDITOR_DEEP_LINK_SCHEMES
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(bundle))
+        .map(|(_, scheme)| *scheme)?;
+    let (path, line) = absolute_path_from_editor_title(window_title)
+        .or_else(|| absolute_path_from_document(document_path))?;
+    let encoded = encode_file_path_for_deep_link(&path);
+    match line {
+        Some(n) => Some(format!("{scheme}://file{encoded}:{n}")),
+        None => Some(format!("{scheme}://file{encoded}")),
+    }
+}
+
+fn absolute_path_from_document(document_path: Option<&str>) -> Option<(String, Option<u32>)> {
+    let path = nonempty_ref(document_path)?;
+    path.starts_with('/').then(|| (path.to_string(), None))
+}
+
+/// Splits on the macOS editor title separator ` — ` only; a plain ` - ` can
+/// appear inside folder names.
+fn absolute_path_from_editor_title(title: &str) -> Option<(String, Option<u32>)> {
+    strip_editor_dirty_marker(title.trim())
+        .split(" — ")
+        .find_map(parse_absolute_path_with_optional_line)
+}
+
+fn strip_editor_dirty_marker(title: &str) -> &str {
+    title
+        .strip_prefix('●')
+        .or_else(|| title.strip_prefix('•'))
+        .map(str::trim_start)
+        .unwrap_or(title)
+}
+
+fn parse_absolute_path_with_optional_line(value: &str) -> Option<(String, Option<u32>)> {
+    let value = value.trim();
+    if !value.starts_with('/') {
+        return None;
+    }
+    let Some((head, last)) = split_trailing_number(value) else {
+        return Some((value.to_string(), None));
+    };
+    match split_trailing_number(head) {
+        Some((path, line)) => Some((path.to_string(), Some(line))),
+        None => Some((head.to_string(), Some(last))),
+    }
+}
+
+/// `"/a/b.rs:12"` becomes `("/a/b.rs", 12)`. Zero and non-numeric suffixes are
+/// not line numbers.
+fn split_trailing_number(value: &str) -> Option<(&str, u32)> {
+    let (head, tail) = value.rsplit_once(':')?;
+    let number = tail.parse::<u32>().ok().filter(|n| *n > 0)?;
+    head.starts_with('/').then_some((head, number))
+}
+
 pub fn build_reopen_target(
     source_url: Option<&str>,
+    app_deep_link: Option<&str>,
     first_file_path: Option<&str>,
     bundle_id: Option<&str>,
     app_name: &str,
@@ -96,6 +171,17 @@ pub fn build_reopen_target(
             captured_at_ms,
             confidence: 0.95,
             validation_status: ReopenValidationStatus::Valid,
+            ..Default::default()
+        };
+    }
+
+    if let Some(link) = app_deep_link.map(str::trim).filter(|v| !v.is_empty()) {
+        return ReopenTarget {
+            kind: ReopenKind::AppDeepLink,
+            app_deep_link: Some(link.to_string()),
+            captured_at_ms,
+            confidence: 0.85,
+            validation_status: ReopenValidationStatus::Unchecked,
             ..Default::default()
         };
     }
@@ -471,19 +557,33 @@ fn token_mostly_non_letter(word: &str) -> bool {
     letters * 2 < core.chars().count()
 }
 
-/// Percent-encode every byte except ASCII letters, digits, and `_.~`.
-/// Hyphen, comma, and ampersand are always encoded because they are syntax
-/// inside a text fragment directive.
-pub fn encode_text_fragment(value: &str) -> String {
+fn encode_percent_except(value: &str, keep: impl Fn(u8) -> bool) -> String {
     let mut out = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
+        if keep(byte) {
             out.push(byte as char);
         } else {
             out.push_str(&format!("%{byte:02X}"));
         }
     }
     out
+}
+
+/// Percent-encode every byte except ASCII letters, digits, and `_.~`.
+/// Hyphen, comma, and ampersand are always encoded because they are syntax
+/// inside a text fragment directive.
+pub fn encode_text_fragment(value: &str) -> String {
+    encode_percent_except(value, |byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~')
+    })
+}
+
+/// Percent-encode a filesystem path for `vscode://file` / `cursor://file`.
+/// Keeps `/`, `-`, `_`, `.`, and `~` so the path stays readable.
+fn encode_file_path_for_deep_link(value: &str) -> String {
+    encode_percent_except(value, |byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~')
+    })
 }
 
 fn host_of_url(url: &str) -> &str {
@@ -718,6 +818,7 @@ mod tests {
         for (label, input, expected) in cases {
             let target = build_reopen_target(
                 Some(input),
+                None,
                 Some("/Users/qa/doc.pdf"),
                 Some("com.google.Chrome"),
                 "Chrome",
@@ -748,12 +849,18 @@ mod tests {
             ("no scheme", "example.com/a"),
         ];
         for (label, input) in cases {
-            let with_app =
-                build_reopen_target(Some(input), None, Some("com.google.Chrome"), "Chrome", AT);
+            let with_app = build_reopen_target(
+                Some(input),
+                None,
+                None,
+                Some("com.google.Chrome"),
+                "Chrome",
+                AT,
+            );
             assert_eq!(with_app.kind, ReopenKind::AppBundle, "{label} with app");
             assert_eq!(with_app.url, None, "{label} with app");
 
-            let without_app = build_reopen_target(Some(input), None, None, "", AT);
+            let without_app = build_reopen_target(Some(input), None, None, None, "", AT);
             assert_eq!(without_app.kind, ReopenKind::Unknown, "{label} without app");
             assert_eq!(without_app.url, None, "{label} without app");
         }
@@ -763,6 +870,7 @@ mod tests {
     fn build_reopen_target_prefers_url_then_file_then_app() {
         let url_over_file = build_reopen_target(
             Some("https://example.com"),
+            None,
             Some("/Users/qa/doc.pdf"),
             None,
             "Preview",
@@ -771,6 +879,7 @@ mod tests {
         assert_eq!(url_over_file.kind, ReopenKind::BrowserUrl);
 
         let file_over_app = build_reopen_target(
+            None,
             None,
             Some("  /Users/qa/doc.pdf "),
             Some("com.apple.Preview"),
@@ -790,6 +899,7 @@ mod tests {
         );
 
         let app = build_reopen_target(
+            None,
             None,
             Some("   "),
             Some(" com.apple.Preview "),
@@ -811,7 +921,7 @@ mod tests {
             ("all empty", Some(""), Some(""), Some(""), ""),
         ];
         for (label, url, file, bundle, app_name) in cases {
-            let target = build_reopen_target(url, file, bundle, app_name, AT);
+            let target = build_reopen_target(url, None, file, bundle, app_name, AT);
             assert_eq!(target.kind, ReopenKind::Unknown, "{label}");
             assert_eq!(target.app_name, None, "{label}");
             assert_eq!(target.confidence, 0.0, "{label}");
@@ -822,7 +932,7 @@ mod tests {
             );
         }
 
-        let named = build_reopen_target(None, None, None, " Zoom ", AT);
+        let named = build_reopen_target(None, None, None, None, " Zoom ", AT);
         assert_eq!(named.kind, ReopenKind::Unknown);
         assert_eq!(named.app_name.as_deref(), Some("Zoom"));
     }
@@ -858,6 +968,7 @@ mod tests {
     fn reopen_target_serialization_round_trips() {
         let target = build_reopen_target(
             None,
+            None,
             Some("/Users/qa/café 📁/report (1) ✨.txt"),
             None,
             "Finder",
@@ -880,6 +991,7 @@ mod tests {
     fn build_reopen_target_accepts_relative_paths_over_app_flips_r18() {
         for input in ["plan.md", "en.wikipedia.org/wiki/Nitrogen", "./notes.txt"] {
             let target = build_reopen_target(
+                None,
                 None,
                 Some(input),
                 Some("com.apple.TextEdit"),
@@ -958,6 +1070,7 @@ mod tests {
     fn detect_reopen_page_uses_title_for_files_and_url_then_ocr_for_browsers() {
         let file = build_reopen_target(
             None,
+            None,
             Some("/Users/qa/doc.pdf"),
             Some("com.apple.Preview"),
             "Preview",
@@ -971,6 +1084,7 @@ mod tests {
         let browser = build_reopen_target(
             Some("https://example.com/doc.pdf#page=9"),
             None,
+            None,
             Some("com.google.Chrome"),
             "Chrome",
             AT,
@@ -983,6 +1097,7 @@ mod tests {
         let browser_ocr = build_reopen_target(
             Some("https://example.com/doc.pdf"),
             None,
+            None,
             Some("com.google.Chrome"),
             "Chrome",
             AT,
@@ -992,7 +1107,7 @@ mod tests {
             Some(112)
         );
 
-        let app = build_reopen_target(None, None, Some("com.apple.Preview"), "Preview", AT);
+        let app = build_reopen_target(None, None, None, Some("com.apple.Preview"), "Preview", AT);
         assert_eq!(
             detect_reopen_page(&app, "doc.pdf – Page 112 of 150", "112 / 300"),
             None
@@ -1206,6 +1321,7 @@ mod tests {
             Some("https://example.com/doc.pdf"),
             None,
             None,
+            None,
             "Chrome",
             AT,
         );
@@ -1301,6 +1417,7 @@ mod tests {
     fn reopen_target_text_anchor_round_trips() {
         let mut target = build_reopen_target(
             Some("https://example.com/article"),
+            None,
             None,
             None,
             "Chrome",
@@ -1476,6 +1593,139 @@ mod tests {
         std::fs::write(&trash, b"trash").unwrap();
         assert_eq!(pick_moved_file(&original, &[trash, original.clone()]), None);
         assert_eq!(pick_moved_file(&original, &[]), None);
+    }
+
+    #[test]
+    fn app_deep_link_for_maps_editor_titles_and_document_paths_r19() {
+        let cases: &[(&str, &str, Option<&str>, Option<&str>)] = &[
+            (
+                "com.microsoft.VSCode",
+                "/Users/qa/re10-notes.txt — fndr",
+                None,
+                Some("vscode://file/Users/qa/re10-notes.txt"),
+            ),
+            (
+                "com.todesktop.230313mzl4w4u92",
+                "re10-notes.txt — fndr",
+                Some("/private/tmp/re10-fixtures/re10-notes.txt"),
+                Some("cursor://file/private/tmp/re10-fixtures/re10-notes.txt"),
+            ),
+            (
+                "com.microsoft.VSCodeInsiders",
+                "● /Users/qa/src/main.rs:12:3 — project",
+                None,
+                Some("vscode-insiders://file/Users/qa/src/main.rs:12"),
+            ),
+            (
+                "com.microsoft.VSCode",
+                "/Users/qa/café 📁/report (1) ✨.txt — fndr",
+                None,
+                Some(
+                    "vscode://file/Users/qa/caf%C3%A9%20%F0%9F%93%81/report%20%281%29%20%E2%9C%A8.txt",
+                ),
+            ),
+            (
+                "com.microsoft.VSCode",
+                "/Users/qa/My - Folder/notes.txt — fndr",
+                None,
+                Some("vscode://file/Users/qa/My%20-%20Folder/notes.txt"),
+            ),
+            (
+                "com.microsoft.VSCode",
+                "re10-notes.txt — fndr",
+                None,
+                None,
+            ),
+            (
+                "com.microsoft.VSCode",
+                "notes/relative.txt — fndr",
+                None,
+                None,
+            ),
+            (
+                "com.tinyspeck.slackmacgap",
+                "/Users/qa/nope.txt — Slack",
+                Some("/Users/qa/nope.txt"),
+                None,
+            ),
+            (
+                "notion.id",
+                "Some page",
+                None,
+                None,
+            ),
+            (
+                "com.figma.Desktop",
+                "Design",
+                None,
+                None,
+            ),
+            (
+                "com.unknown.App",
+                "/Users/qa/a.txt",
+                None,
+                None,
+            ),
+        ];
+        for (bundle, title, document, expected) in cases {
+            assert_eq!(
+                app_deep_link_for(Some(bundle), title, *document).as_deref(),
+                *expected,
+                "bundle={bundle} title={title:?} document={document:?}"
+            );
+        }
+        assert_eq!(app_deep_link_for(None, "/Users/qa/a.txt", None), None);
+    }
+
+    #[test]
+    fn build_reopen_target_orders_url_then_deep_link_then_file_then_app() {
+        let deep = "vscode://file/Users/qa/notes.txt";
+        let url_wins = build_reopen_target(
+            Some("https://www.notion.so/page"),
+            Some(deep),
+            Some("/Users/qa/notes.txt"),
+            Some("com.microsoft.VSCode"),
+            "Code",
+            AT,
+        );
+        assert_eq!(url_wins.kind, ReopenKind::BrowserUrl);
+        assert_eq!(url_wins.url.as_deref(), Some("https://www.notion.so/page"));
+        assert_eq!(url_wins.app_deep_link, None);
+
+        let deep_over_file = build_reopen_target(
+            None,
+            Some(deep),
+            Some("plan.md"),
+            Some("com.microsoft.VSCode"),
+            "Code",
+            AT,
+        );
+        assert_eq!(deep_over_file.kind, ReopenKind::AppDeepLink);
+        assert_eq!(deep_over_file.app_deep_link.as_deref(), Some(deep));
+        assert_eq!(deep_over_file.file_path, None);
+
+        let deep_over_app = build_reopen_target(
+            None,
+            Some(deep),
+            None,
+            Some("com.microsoft.VSCode"),
+            "Code",
+            AT,
+        );
+        assert_eq!(deep_over_app.kind, ReopenKind::AppDeepLink);
+        assert_eq!(deep_over_app.app_bundle_id, None);
+        assert_eq!(deep_over_app.confidence, 0.85);
+
+        for url in [
+            "https://www.notion.so/Workspace-abc123",
+            "https://www.figma.com/file/abc/Design",
+            "https://app.slack.com/client/T01234567/C01234567",
+        ] {
+            let target = build_reopen_target(Some(url), None, None, None, "Chrome", AT);
+            assert_eq!(target.kind, ReopenKind::BrowserUrl, "{url}");
+            assert_eq!(target.url.as_deref(), Some(url), "{url}");
+            assert_eq!(target.app_deep_link, None, "{url}");
+        }
     }
 
     #[test]
