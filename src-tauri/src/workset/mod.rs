@@ -12,6 +12,7 @@
 pub mod named;
 mod open;
 mod rank;
+pub mod routines;
 
 pub use open::{open_ids, open_items, open_items_with, ItemOutcome};
 pub use rank::{rank, topic_words, Hit, Inputs, ThreadInput};
