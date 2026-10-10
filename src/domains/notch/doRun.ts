@@ -2,6 +2,12 @@
  * Notch Do's state: listening, the plan card, the step list, approvals and the
  * result. A pure reducer over voice inputs and `computer-use://event`s, so the
  * notch only renders it (ADR-020 amendment, 2026-10-06).
+ *
+ * `turnOf` names the turn-taking state of docs/product/voice-ux.md, and
+ * `micFor` what the microphone may do in it. From the end of a request until
+ * FNDR has finished speaking the result the notch is deaf: it hears only the
+ * stop word, and the reducer drops any request or partial text (ADR 020
+ * amendment, 2026-10-09).
  */
 
 import type {
@@ -22,6 +28,10 @@ export const AUTO_START_MS = 1500;
 
 /** What was heard stays on screen this long before it is sent to be planned. */
 export const HEARD_MS = 1200;
+
+/** How long the "Working on it" cue shows, and how soon it may show again. */
+export const CUE_MS = 2500;
+export const CUE_REPEAT_MS = 6000;
 
 /** A work set of more than this many places waits for Start (ADR 027;
  *  `MAX_AUTO_REOPENS` in computer_use.rs). */
@@ -73,8 +83,6 @@ export interface DoState {
     /** The most recent actions of the current step, newest last. */
     actions: DoAction[];
     approval: { requestKey: string; summary: string } | null;
-    /** Speech heard mid-run, waiting for "go" or a tap before it replaces the run. */
-    redirect: string | null;
     result: { ok: boolean; summary: string } | null;
     error: string | null;
     /** The ChatGPT sign-in has to be redone. */
@@ -86,6 +94,13 @@ export interface DoState {
     options: WorkSet[];
     /** A picked work set: FNDR opens it itself when the card starts. */
     workSet: WorkSet | null;
+    /** FNDR's own voice is playing. */
+    speaking: boolean;
+    /** The result has been read out (or there was nothing to read). */
+    readoutDone: boolean;
+    /** "Working on it. Say stop to interrupt." is showing. */
+    cue: boolean;
+    lastCueAt: number | null;
 }
 
 export const initialDoState: DoState = {
@@ -98,13 +113,16 @@ export const initialDoState: DoState = {
     current: null,
     actions: [],
     approval: null,
-    redirect: null,
     result: null,
     error: null,
     reconnect: false,
     usedMemories: 0,
     options: [],
     workSet: null,
+    speaking: false,
+    readoutDone: false,
+    cue: false,
+    lastCueAt: null,
 };
 
 export type DoInput =
@@ -115,15 +133,85 @@ export type DoInput =
     | { type: "voiceUnavailable"; message: string }
     | { type: "heard"; text: string }
     | { type: "planRequested"; runId: string; transcript: string }
-    | { type: "redirectHeard"; text: string }
-    | { type: "redirectDismissed" }
     | { type: "event"; event: ComputerUseEvent }
     | { type: "workSetChosen"; set: WorkSet }
     | { type: "workSetResolved"; resolution: WorkSetResolution }
     | { type: "workSetOpening" }
     | { type: "workSetOpened"; outcomes: WorkItemOutcome[] }
     | { type: "stopped" }
-    | { type: "error"; message: string };
+    | { type: "error"; message: string }
+    | { type: "speechStarted" }
+    | { type: "speechEnded" }
+    | { type: "readoutDone" }
+    | { type: "ignoredSpeech"; at: number }
+    | { type: "cueEnded" };
+
+/** The turn-taking states of docs/product/voice-ux.md. */
+export type TurnState =
+    | "idle"
+    | "listening"
+    | "hearing"
+    | "thinking"
+    | "awaiting_choice"
+    | "awaiting_start"
+    | "working"
+    | "awaiting_approval"
+    | "finishing"
+    | "speaking"
+    | "interrupted"
+    | "error";
+
+/** closed: nothing is captured. open: full recognition. stop_only: the
+ *  helper's stop-word spotter, which lets no text out. */
+export type MicMode = "closed" | "open" | "stop_only";
+
+export function turnOf(state: DoState): TurnState {
+    switch (state.phase) {
+        case "idle":
+            return "idle";
+        case "listening":
+            return state.partial ? "hearing" : "listening";
+        case "heard":
+        case "planning":
+            return "thinking";
+        case "choose":
+            return "awaiting_choice";
+        case "plan":
+            return state.autoStart ? "working" : "awaiting_start";
+        case "running":
+            return state.approval ? "awaiting_approval" : "working";
+        case "finished":
+            if (state.readoutDone) return "idle";
+            return state.speaking ? "speaking" : "finishing";
+        case "stopped":
+            return "interrupted";
+        case "failed":
+        case "silence":
+        case "mic_denied":
+        case "voice_unavailable":
+            return "error";
+    }
+}
+
+const DEAF: ReadonlySet<TurnState> = new Set([
+    "thinking",
+    "awaiting_choice",
+    "awaiting_start",
+    "working",
+    "awaiting_approval",
+    "finishing",
+    "speaking",
+]);
+
+/** From the end of the request until the result has been spoken. */
+export function isDeaf(turn: TurnState): boolean {
+    return DEAF.has(turn);
+}
+
+export function micFor(turn: TurnState): MicMode {
+    if (turn === "listening" || turn === "hearing") return "open";
+    return isDeaf(turn) ? "stop_only" : "closed";
+}
 
 const MAX_ACTIONS = 4;
 
@@ -225,13 +313,15 @@ export function workSetSummary(outcomes: WorkItemOutcome[]): string {
 }
 
 export function doRunReducer(state: DoState, input: DoInput): DoState {
+    const deaf = isDeaf(turnOf(state));
     switch (input.type) {
         case "listening":
             return state.phase === "running" || state.phase === "plan" || state.phase === "planning" || state.phase === "choose"
                 ? state
                 : { ...initialDoState, phase: "listening" };
         case "partial":
-            return { ...state, partial: input.text };
+            // Nothing heard while deaf is shown, routed or kept.
+            return deaf ? state : { ...state, partial: input.text };
         case "silence":
             return { ...state, phase: "silence", partial: "" };
         case "micDenied":
@@ -239,6 +329,7 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
         case "voiceUnavailable":
             return { ...state, phase: "voice_unavailable", partial: "", error: input.message };
         case "heard":
+            if (deaf) return state;
             // Shown before anything leaves the Mac, so a misheard request can be stopped.
             return { ...initialDoState, phase: "heard", transcript: input.text };
         case "planRequested":
@@ -248,10 +339,6 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
                 runId: input.runId,
                 transcript: input.transcript,
             };
-        case "redirectHeard":
-            return { ...state, partial: "", redirect: input.text };
-        case "redirectDismissed":
-            return { ...state, redirect: null };
         case "event":
             return applyEvent(state, input.event);
         case "workSetChosen":
@@ -283,9 +370,21 @@ export function doRunReducer(state: DoState, input: DoInput): DoState {
             };
         }
         case "stopped":
-            return { ...state, phase: "stopped", approval: null, redirect: null, runId: null, current: null, partial: "", options: [], workSet: null };
+            return { ...state, phase: "stopped", approval: null, runId: null, current: null, partial: "", options: [], workSet: null, cue: false };
         case "error":
-            return { ...state, phase: "failed", error: input.message };
+            return { ...state, phase: "failed", error: input.message, cue: false };
+        case "speechStarted":
+            return state.speaking ? state : { ...state, speaking: true };
+        case "speechEnded":
+            return state.speaking ? { ...state, speaking: false } : state;
+        case "readoutDone":
+            return state.phase === "finished" && !state.readoutDone ? { ...state, readoutDone: true, speaking: false } : state;
+        case "ignoredSpeech":
+            if (!deaf) return state;
+            if (state.lastCueAt !== null && input.at - state.lastCueAt < CUE_REPEAT_MS) return state;
+            return { ...state, cue: true, lastCueAt: input.at };
+        case "cueEnded":
+            return state.cue ? { ...state, cue: false } : state;
     }
 }
 
@@ -307,18 +406,7 @@ export function resultNote(steps: DoStep[]): string {
 
 // MARK: - What a spoken phrase means
 
-export type UtteranceIntent =
-    | { kind: "choose"; index: number }
-    | { kind: "refine"; text: string }
-    | { kind: "stop" }
-    | { kind: "go" }
-    | { kind: "decline" }
-    | { kind: "request"; text: string };
-
-const STOP_PHRASES = ["stop", "cancel", "never mind", "nevermind", "wait", "hold on", "pause", "abort"];
-const GO_PHRASES = ["go", "go ahead", "start", "do it", "yes", "yeah", "yep", "ok", "okay", "sure", "run it"];
-const YES_PHRASES = ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead", "do it", "confirm", "allow", "please do"];
-const NO_PHRASES = ["no", "nope", "don't", "do not", "deny", "skip", "not that", "no thanks"];
+export type UtteranceIntent = { kind: "stop" } | { kind: "request"; text: string };
 
 function normalize(text: string): string {
     return text
@@ -328,76 +416,63 @@ function normalize(text: string): string {
         .trim();
 }
 
-function matchesShortPhrase(normalized: string, phrases: string[]): boolean {
-    // Short commands only: "stop" or "okay do it", not a sentence that merely
-    // contains the word ("stop at the second tab and open settings").
-    if (normalized.split(" ").length > 4) return false;
-    return phrases.some((phrase) => normalized === phrase || normalized.startsWith(`${phrase} `));
+/** The spotter's vocabulary (voice-ux.md, "Matching rule"); kept in step with
+ *  `StopWordMatcher` in `fndr-speech` and `is_stop_word` in `voice/mod.rs`. */
+const STOP_WORDS = ["stop", "cancel"];
+const STOP_TAILS = ["it", "that", "now"];
+const STOP_LEAD_INS = [["hey", "fndr"], ["fndr"], ["please"], ["okay"], ["ok"], ["no"]];
+const MAX_STOP_WORDS = 4;
+
+/** `[lead-in] (stop | cancel) [it | that | now] [please]`, at most four words.
+ *  "Wait", "pause", "hold on", "never mind" and "abort" are not stop words. */
+export function isStopWord(text: string): boolean {
+    let words = normalize(text).split(" ").filter(Boolean);
+    if (words.length === 0 || words.length > MAX_STOP_WORDS) return false;
+    const lead = STOP_LEAD_INS.find((lead) => lead.every((word, i) => words[i] === word));
+    if (lead) words = words.slice(lead.length);
+    if (!STOP_WORDS.includes(words[0] ?? "")) return false;
+    words = words.slice(1);
+    if (STOP_TAILS.includes(words[0] ?? "")) words = words.slice(1);
+    if (words[0] === "please") words = words.slice(1);
+    return words.length === 0;
 }
 
-/** Words people put in front of "stop" without changing what they mean. */
-const STOP_LEAD_INS = ["please", "ok", "okay", "hey", "no", "just", "now"];
-
-function saysStop(normalized: string): boolean {
-    const words = normalized.split(" ");
-    while (words.length > 1 && STOP_LEAD_INS.includes(words[0])) words.shift();
-    return matchesShortPhrase(normalized, STOP_PHRASES) || matchesShortPhrase(words.join(" "), STOP_PHRASES);
-}
-
-/** Whether partial text already says stop, so a run can be killed before the utterance ends. */
-export function isStopPhrase(text: string): boolean {
-    return saysStop(normalize(text));
-}
-
-const ORDINALS: string[][] = [
-    ["1", "one", "first"],
-    ["2", "two", "second", "to", "too"],
-    ["3", "three", "third"],
-];
-
-const NAME_FILLER = new Set(["the", "one", "that", "this", "with", "open", "number", "option", "please", "about"]);
-
-/** Which offered work set the person named: by number ("two", "the second
- *  one") or by a word of its title ("the biology one"). Null when unclear. */
-export function matchChoice(text: string, options: { title: string }[]): number | null {
-    const said = normalize(text).split(" ").filter(Boolean);
-    // "the second one", "the biology one": a trailing "one" is not a number.
-    const words = said.filter(
-        (word, i) => !(word === "one" && i > 0 && i === said.length - 1 && !["number", "option"].includes(said[i - 1])),
-    );
-    if (words.length === 0) return null;
-    if (words.length <= 4) {
-        const byNumber = ORDINALS.findIndex(
-            (names, index) => index < options.length && words.some((word) => names.includes(word) && !(word === "to" && words.length > 1)),
-        );
-        if (byNumber >= 0) return byNumber;
-    }
-    const named = words.filter((word) => word.length >= 4 && !NAME_FILLER.has(word));
-    const scores = options.map((option) => {
-        const title = new Set(normalize(option.title).split(" "));
-        return named.filter((word) => title.has(word)).length;
-    });
-    const best = Math.max(0, ...scores);
-    if (best === 0 || scores.filter((score) => score === best).length > 1) return null;
-    return scores.indexOf(best);
-}
-
-export function classifyUtterance(
-    text: string,
-    context: { awaitingApproval?: boolean; awaitingStart?: boolean; running?: boolean; choices?: { title: string }[] },
-): UtteranceIntent | null {
+/** What a final transcript means while the microphone is open: the stop word,
+ *  or a request. Spoken go, yes, no and option names mean nothing; Start, a
+ *  choice and an approval are taps or keys (ADR 020 amendment, 2026-10-09). */
+export function classifyUtterance(text: string): UtteranceIntent | null {
     const normalized = normalize(text);
     if (!normalized) return null;
-    if (saysStop(normalized)) return { kind: "stop" };
-    if (context.choices && context.choices.length > 0) {
-        const index = matchChoice(text, context.choices);
-        return index === null ? { kind: "refine", text: text.trim() } : { kind: "choose", index };
-    }
-    if (context.awaitingApproval) {
-        if (matchesShortPhrase(normalized, NO_PHRASES)) return { kind: "decline" };
-        // A yes must be a tap: the microphone hears music, video and other people too.
-        if (matchesShortPhrase(normalized, YES_PHRASES)) return null;
-    }
-    if (context.awaitingStart && matchesShortPhrase(normalized, GO_PHRASES)) return { kind: "go" };
+    if (isStopWord(normalized)) return { kind: "stop" };
+    if (IGNORED.has(normalized)) return null;
     return { kind: "request", text: text.trim() };
 }
+
+/** Short replies that once meant something and now must not become a request. */
+const IGNORED = new Set([
+    "go",
+    "go ahead",
+    "start",
+    "do it",
+    "okay do it",
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "ok",
+    "okay",
+    "sure",
+    "allow",
+    "confirm",
+    "no",
+    "nope",
+    "don't",
+    "deny",
+    "skip",
+    "wait",
+    "hold on",
+    "pause",
+    "never mind",
+    "nevermind",
+    "abort",
+]);

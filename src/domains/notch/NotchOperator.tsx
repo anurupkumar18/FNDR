@@ -23,7 +23,7 @@ import {
     classifyUtterance,
     doRunReducer,
     initialDoState,
-    isStopPhrase,
+    isStopWord,
     resultNote,
     type DoState,
 } from "./doRun";
@@ -158,44 +158,24 @@ export function NotchOperator({ active }: NotchOperatorProps) {
     const handleUtterance = useCallback(
         (text: string, spoken = true) => {
             const current = stateRef.current;
-            const intent = classifyUtterance(text, {
-                awaitingApproval: current.approval !== null,
-                awaitingStart: current.phase === "plan" || current.phase === "heard" || current.redirect !== null,
-                running: runInProgress(current),
-                choices: current.phase === "choose" ? current.options : undefined,
-            });
-            if (!intent) return;
-            // The notch's own voice comes back through the microphone; stop, no and go never count as echo.
-            if (intent.kind === "request" && spoken && isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
-            switch (intent.kind) {
-                case "choose": {
-                    const set = current.options[intent.index];
-                    if (set) dispatch({ type: "workSetChosen", set });
-                    return;
-                }
-                case "refine":
-                    void refine(intent.text);
-                    return;
-                case "stop":
-                    void stopRun();
-                    return;
-                case "decline":
-                    void respond(false);
-                    return;
-                case "go":
-                    if (current.redirect) void plan(current.redirect);
-                    else if (current.phase === "heard") void plan(current.transcript);
-                    else void startRun();
-                    return;
-                case "request":
-                    // Mid-run speech may be music or someone else; it waits for a yes.
-                    if (current.phase === "running") dispatch({ type: "redirectHeard", text: intent.text });
-                    // Typed words were already read by the person who typed them.
-                    else if (spoken) dispatch({ type: "heard", text: intent.text });
-                    else void plan(intent.text);
+            // Typed words narrow a work-set choice; they start no new request.
+            if (!spoken && current.phase === "choose") {
+                void refine(text.trim());
+                return;
             }
+            const intent = classifyUtterance(text);
+            if (!intent) return;
+            // The notch's own voice comes back through the microphone; a stop never counts as echo.
+            if (intent.kind === "request" && spoken && isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
+            if (intent.kind === "stop") {
+                void stopRun();
+                return;
+            }
+            // Typed words were already read by the person who typed them.
+            if (spoken) dispatch({ type: "heard", text: intent.text });
+            else void plan(intent.text);
         },
-        [plan, refine, respond, startRun, stopRun],
+        [plan, refine, stopRun],
     );
 
     const voice = useVoice({
@@ -204,7 +184,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
         onPartial: (text) => {
             if (isEchoOfSpeech(text, speakerRef.current?.echoText() ?? "")) return;
             clearTimer(silenceTimer);
-            if (runInProgress(stateRef.current) && isStopPhrase(text)) {
+            if (runInProgress(stateRef.current) && isStopWord(text)) {
                 void voiceRef.current?.cancel();
                 void stopRun();
                 return;
@@ -298,10 +278,10 @@ export function NotchOperator({ active }: NotchOperatorProps) {
 
     // The plan card starts the run by itself unless stopped or redirected.
     useEffect(() => {
-        if (state.phase !== "plan" || state.redirect || !state.autoStart) return;
+        if (state.phase !== "plan" || !state.autoStart) return;
         const timer = window.setTimeout(() => void startRun(), AUTO_START_MS);
         return () => window.clearTimeout(timer);
-    }, [state.phase, state.redirect, state.runId, state.autoStart, startRun]);
+    }, [state.phase, state.runId, state.autoStart, startRun]);
 
     // Leaving Do mode ends any run.
     useEffect(
@@ -354,7 +334,6 @@ export function NotchOperator({ active }: NotchOperatorProps) {
             case "choose":
                 return "Which one? Tap it or say its number";
             case "plan":
-                if (state.redirect) return "Paused";
                 return state.autoStart ? "Starting. Say “stop” to cancel" : "Ready. Tap Start or say “go”";
             case "running":
                 return state.partial || "Working — say “stop” anytime";
@@ -414,7 +393,7 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                 </ol>
             ) : null}
 
-            {state.phase === "plan" && !state.redirect && state.autoStart ? (
+            {state.phase === "plan" && state.autoStart ? (
                 <div className="notch-operator-countdown" aria-hidden="true">
                     <span style={{ animationDuration: `${AUTO_START_MS}ms` }} />
                 </div>
@@ -446,26 +425,6 @@ export function NotchOperator({ active }: NotchOperatorProps) {
                         </button>
                         <button type="button" className="notch-operator-btn notch-operator-btn-primary" onClick={() => void respond(true)}>
                             Allow
-                        </button>
-                    </div>
-                </div>
-            ) : null}
-
-            {state.redirect ? (
-                <div className="notch-operator-approval" role="alertdialog" aria-label="Switch request">
-                    <p>
-                        Switch to <strong>“{state.redirect}”</strong>?
-                    </p>
-                    <div className="notch-operator-approval-actions">
-                        <button type="button" className="notch-operator-btn" onClick={() => dispatch({ type: "redirectDismissed" })}>
-                            Keep going
-                        </button>
-                        <button
-                            type="button"
-                            className="notch-operator-btn notch-operator-btn-primary"
-                            onClick={() => state.redirect && void plan(state.redirect)}
-                        >
-                            Switch
                         </button>
                     </div>
                 </div>

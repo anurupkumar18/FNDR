@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { classifyUtterance, doRunReducer, initialDoState, isStopPhrase, matchChoice, resultNote, workSetSummary, type DoState } from "./doRun";
+import {
+    CUE_MS,
+    CUE_REPEAT_MS,
+    classifyUtterance,
+    doRunReducer,
+    initialDoState,
+    isDeaf,
+    isStopWord,
+    micFor,
+    resultNote,
+    turnOf,
+    workSetSummary,
+    type DoInput,
+    type DoState,
+    type TurnState,
+} from "./doRun";
 import type { ComputerUseEvent, WorkItem, WorkSet } from "@/shared/ipc/tauri";
 
 const CANVAS: WorkItem = { memoryId: "canvas", label: "Assignment 3", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "canvas.utah.edu", capturedAt: 3 };
@@ -26,42 +41,80 @@ function run(...inputs: Parameters<typeof doRunReducer>[1][]): DoState {
 
 const event = (e: ComputerUseEvent) => ({ type: "event" as const, event: e });
 
-describe("classifyUtterance", () => {
-    it("treats short stop phrases as stop at any time", () => {
-        expect(classifyUtterance("Stop!", {})).toEqual({ kind: "stop" });
-        expect(classifyUtterance("never mind", { running: true })).toEqual({ kind: "stop" });
+describe("the stop word", () => {
+    it("matches stop or cancel alone, behind a lead-in, or with a short tail, up to four words", () => {
+        const accepted = [
+            "stop",
+            "Stop!",
+            "cancel",
+            "stop it",
+            "stop that",
+            "stop now",
+            "stop please",
+            "cancel that please",
+            "please stop",
+            "okay stop",
+            "ok, cancel",
+            "no stop",
+            "no, stop it",
+            "FNDR stop",
+            "hey FNDR, cancel",
+            "hey fndr stop now",
+            "fndr cancel please",
+        ];
+        for (const phrase of accepted) expect(isStopWord(phrase), phrase).toBe(true);
     });
 
-    it("hears stop behind a polite or hurried lead-in", () => {
-        for (const phrase of ["please stop now", "ok stop", "no wait", "hey, cancel"]) {
-            expect(classifyUtterance(phrase, { running: true }), phrase).toEqual({ kind: "stop" });
-            expect(isStopPhrase(phrase), phrase).toBe(true);
+    it("drops everything else, including sentences that contain stop", () => {
+        const rejected = [
+            "don't stop",
+            "don't stop the music",
+            "stop sign",
+            "unstoppable",
+            "stopped",
+            "stops",
+            "cancelled",
+            "stop at the second tab and open settings",
+            "please stop the timer now",
+            "okay so stop it now please",
+            "hey fndr stop it please",
+            "wait",
+            "pause",
+            "hold on",
+            "never mind",
+            "nevermind",
+            "abort",
+            "just stop",
+            "stop stop stop stop stop",
+            "go",
+            "yes",
+            "no",
+            "",
+            "  ...  ",
+        ];
+        for (const phrase of rejected) expect(isStopWord(phrase), phrase).toBe(false);
+    });
+});
+
+describe("classifyUtterance", () => {
+    it("reads only the stop word and a request; spoken go, yes and no do nothing", () => {
+        expect(classifyUtterance("Stop!")).toEqual({ kind: "stop" });
+        expect(classifyUtterance("please cancel")).toEqual({ kind: "stop" });
+        expect(classifyUtterance("open Spotify")).toEqual({ kind: "request", text: "open Spotify" });
+        for (const phrase of ["go", "yes", "no", "okay do it", "allow", "never mind", "wait"]) {
+            expect(classifyUtterance(phrase), phrase).toBeNull();
         }
-        expect(isStopPhrase("don't stop the music")).toBe(false);
-        expect(classifyUtterance("no", { awaitingApproval: true })).toEqual({ kind: "decline" });
     });
 
     it("keeps longer requests that merely contain stop words", () => {
-        expect(classifyUtterance("stop at the second tab and open settings", {})).toEqual({
+        expect(classifyUtterance("stop at the second tab and open settings")).toEqual({
             kind: "request",
             text: "stop at the second tab and open settings",
         });
     });
 
-    it("reads go only while a plan or redirect waits, and yes or no only while an approval waits", () => {
-        expect(classifyUtterance("go", { awaitingStart: true })).toEqual({ kind: "go" });
-        expect(classifyUtterance("go", {})).toEqual({ kind: "request", text: "go" });
-        expect(classifyUtterance("nope", { awaitingApproval: true })).toEqual({ kind: "decline" });
-    });
-
-    it("never takes speech as approval of an action", () => {
-        for (const phrase of ["yes", "ok", "okay do it", "sure thing buddy", "allow", "confirm"]) {
-            expect(classifyUtterance(phrase, { awaitingApproval: true, running: true }), phrase).toBeNull();
-        }
-    });
-
     it("ignores empty speech", () => {
-        expect(classifyUtterance("  ...  ", {})).toBeNull();
+        expect(classifyUtterance("  ...  ")).toBeNull();
     });
 });
 
@@ -99,7 +152,6 @@ describe("doRunReducer", () => {
         expect(heard.phase).toBe("heard");
         expect(heard.transcript).toBe("play some jazz");
         expect(heard.runId).toBeNull();
-        expect(classifyUtterance("go", { awaitingStart: true })).toEqual({ kind: "go" });
         expect(doRunReducer(heard, { type: "stopped" }).phase).toBe("stopped");
     });
 
@@ -168,19 +220,6 @@ describe("doRunReducer", () => {
         expect(state.runId).toBeNull();
     });
 
-    it("holds speech heard mid-run as a redirect until confirmed", () => {
-        let state = run(
-            { type: "planRequested", runId: "r1", transcript: "x" },
-            event(PLANNED),
-            event({ kind: "stepStarted", runId: "r1", index: 0, attempt: 1 }),
-            { type: "redirectHeard", text: "actually open Music" },
-        );
-        expect(state.phase).toBe("running");
-        expect(state.redirect).toBe("actually open Music");
-        state = doRunReducer(state, { type: "redirectDismissed" });
-        expect(state.redirect).toBeNull();
-    });
-
     it("names silence, a denied microphone and a lost sign-in as their own states", () => {
         expect(run({ type: "listening" }, { type: "silence" }).phase).toBe("silence");
         expect(run({ type: "micDenied", message: "Allow the microphone" })).toMatchObject({ phase: "mic_denied", error: "Allow the microphone" });
@@ -208,7 +247,7 @@ describe("work sets", () => {
         expect(doRunReducer(choosing, { type: "workSetChosen", set: CHEM }).autoStart).toBe(false);
     });
 
-    it("keeps listening through a choice, and Stop clears it", () => {
+    it("stays on the chooser when listening is asked for, and Stop clears it", () => {
         const choosing = offered();
         expect(doRunReducer(choosing, { type: "listening" })).toBe(choosing);
         const stopped = doRunReducer(choosing, { type: "stopped" });
@@ -243,17 +282,92 @@ describe("work sets", () => {
         expect([none.phase, none.error]).toEqual(["failed", "Nothing matches."]);
         expect(workSetSummary([{ memoryId: "a", label: "A", ok: true, detail: "Opened" }])).toBe("Opened: A.");
     });
+});
 
-    it("hears a pick by number or by name, and anything else as narrowing", () => {
-        const options = [BIO, CHEM];
-        for (const said of ["two", "2", "the second one", "number two", "chemistry"]) {
-            expect(matchChoice(said, options), said).toBe(1);
+describe("turn-taking", () => {
+    const planning = (): DoState => run({ type: "planRequested", runId: "r1", transcript: "open Spotify" });
+    const working = (): DoState => run({ type: "planRequested", runId: "r1", transcript: "x" }, event(PLANNED), event({ kind: "stepStarted", runId: "r1", index: 0, attempt: 1 }));
+    const finished = (): DoState => doRunReducer(working(), event({ kind: "finished", runId: "r1", ok: true, summary: "Done." }));
+
+    it("names every state of the spec from the run's phase", () => {
+        const cases: [DoState, TurnState][] = [
+            [initialDoState, "idle"],
+            [run({ type: "listening" }), "listening"],
+            [run({ type: "listening" }, { type: "partial", text: "open" }), "hearing"],
+            [run({ type: "heard", text: "open Spotify" }), "thinking"],
+            [planning(), "thinking"],
+            [doRunReducer(planning(), event({ kind: "choose", runId: "r1", options: [BIO, CHEM] })), "awaiting_choice"],
+            [doRunReducer(planning(), event({ ...PLANNED, autoStart: false } as ComputerUseEvent)), "awaiting_start"],
+            [doRunReducer(planning(), event({ ...PLANNED, autoStart: true } as ComputerUseEvent)), "working"],
+            [working(), "working"],
+            [doRunReducer(working(), event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Buy" })), "awaiting_approval"],
+            [finished(), "finishing"],
+            [doRunReducer(finished(), { type: "speechStarted" }), "speaking"],
+            [doRunReducer(finished(), { type: "readoutDone" }), "idle"],
+            [doRunReducer(working(), { type: "stopped" }), "interrupted"],
+            [run({ type: "listening" }, { type: "silence" }), "error"],
+            [run({ type: "micDenied", message: "x" }), "error"],
+            [run({ type: "voiceUnavailable", message: "x" }), "error"],
+            [doRunReducer(planning(), { type: "error", message: "offline" }), "error"],
+        ];
+        for (const [state, turn] of cases) expect(turnOf(state), `${state.phase} -> ${turn}`).toBe(turn);
+    });
+
+    it("opens the microphone only to hear a request, listens for the stop word while deaf, and closes it otherwise", () => {
+        expect(micFor("idle")).toBe("closed");
+        expect(micFor("listening")).toBe("open");
+        expect(micFor("hearing")).toBe("open");
+        for (const turn of ["thinking", "awaiting_choice", "awaiting_start", "working", "awaiting_approval", "finishing", "speaking"] as TurnState[]) {
+            expect(isDeaf(turn), turn).toBe(true);
+            expect(micFor(turn), turn).toBe("stop_only");
         }
-        expect(matchChoice("the first", options)).toBe(0);
-        expect(matchChoice("the biology one", options)).toBe(0);
-        expect(matchChoice("assignment", options)).toBeNull();
-        expect(classifyUtterance("one", { choices: options })).toEqual({ kind: "choose", index: 0 });
-        expect(classifyUtterance("the one with the lab data", { choices: options })).toEqual({ kind: "refine", text: "the one with the lab data" });
-        expect(classifyUtterance("stop", { choices: options })).toEqual({ kind: "stop" });
+        for (const turn of ["idle", "listening", "hearing", "interrupted", "error"] as TurnState[]) expect(isDeaf(turn), turn).toBe(false);
+        expect(micFor("interrupted")).toBe("closed");
+        expect(micFor("error")).toBe("closed");
+    });
+
+    it("drops a heard request and partial text in every deaf state", () => {
+        const deaf: DoState[] = [
+            run({ type: "heard", text: "open Spotify" }),
+            planning(),
+            doRunReducer(planning(), event({ kind: "choose", runId: "r1", options: [BIO, CHEM] })),
+            doRunReducer(planning(), event(PLANNED)),
+            working(),
+            doRunReducer(working(), event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Buy" })),
+            finished(),
+            doRunReducer(finished(), { type: "speechStarted" }),
+        ];
+        const inputs: DoInput[] = [
+            { type: "heard", text: "actually open Music" },
+            { type: "partial", text: "actually open" },
+        ];
+        for (const state of deaf) {
+            for (const input of inputs) expect(doRunReducer(state, input), `${turnOf(state)} ${input.type}`).toBe(state);
+        }
+    });
+
+    it("still takes a request after the readout, after a stop and after an error", () => {
+        for (const state of [doRunReducer(finished(), { type: "readoutDone" }), doRunReducer(working(), { type: "stopped" })]) {
+            expect(doRunReducer(state, { type: "heard", text: "open Notes" })).toMatchObject({ phase: "heard", transcript: "open Notes" });
+        }
+    });
+
+    it("cues 'Working on it' for ignored speech while deaf, at most once every six seconds", () => {
+        let state = doRunReducer(working(), { type: "ignoredSpeech", at: 1000 });
+        expect(state.cue).toBe(true);
+        state = doRunReducer(state, { type: "cueEnded" });
+        expect(state.cue).toBe(false);
+        expect(doRunReducer(state, { type: "ignoredSpeech", at: 1000 + CUE_REPEAT_MS - 1 }).cue).toBe(false);
+        expect(doRunReducer(state, { type: "ignoredSpeech", at: 1000 + CUE_REPEAT_MS }).cue).toBe(true);
+        expect(CUE_MS).toBe(2500);
+        const listening = run({ type: "listening" });
+        expect(doRunReducer(listening, { type: "ignoredSpeech", at: 1 })).toBe(listening);
+    });
+
+    it("tracks FNDR's own voice without changing the run", () => {
+        const speaking = doRunReducer(working(), { type: "speechStarted" });
+        expect(speaking.speaking).toBe(true);
+        expect(turnOf(speaking)).toBe("working");
+        expect(doRunReducer(speaking, { type: "speechEnded" }).speaking).toBe(false);
     });
 });

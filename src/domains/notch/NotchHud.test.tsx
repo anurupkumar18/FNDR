@@ -563,7 +563,7 @@ describe("NotchHud", () => {
             expect(await screen.findByText("Stopped.")).toBeInTheDocument();
         });
 
-        it("holds mid-run speech as a redirect and cancels the plan card on Cancel", async () => {
+        it("cancels the plan card on Cancel", async () => {
             await openDo();
             voice({ kind: "final", text: REQUEST });
             await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
@@ -699,7 +699,7 @@ describe("NotchHud", () => {
                     tool: "click",
                     summary: "click Add to cart",
                 });
-                await waitFor(() => expect(said()).toContain("I need your okay to click Add to cart. Tap Allow, or say no."));
+                await waitFor(() => expect(said()).toContain("I need your okay to click Add to cart. Tap Allow."));
                 expect(ipcMocks.computerUseRespond).not.toHaveBeenCalled();
                 expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
             });
