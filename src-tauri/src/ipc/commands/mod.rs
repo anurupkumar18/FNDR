@@ -59,6 +59,9 @@ pub use home::*;
 mod proactive_signals;
 pub use proactive_signals::*;
 
+mod calendar;
+pub use calendar::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
 
