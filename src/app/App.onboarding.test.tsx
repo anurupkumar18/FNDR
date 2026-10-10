@@ -81,6 +81,10 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getFunGreeting: vi.fn().mockResolvedValue("Welcome back to FNDR."),
     resumeWork,
+    getTodos: vi.fn().mockResolvedValue([]),
+    listNamedSets: vi.fn().mockResolvedValue([]),
+    routineOffers: vi.fn().mockResolvedValue([]),
+    whatChangedSince: vi.fn().mockRejectedValue(new Error("not modeled")),
 }));
 
 import App from "./App";
