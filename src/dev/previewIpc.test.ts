@@ -17,6 +17,26 @@ afterEach(() => {
 });
 
 describe("development UI preview IPC", () => {
+    it("models every state of Home's work area from ?home=", async () => {
+        const populated = createPreviewIpcHandler();
+        const threads = await populated("resume_work", { hours: 24, budgetTokens: 800 }) as Array<{ key: string; evidence: string[] }>;
+        expect(threads.map((thread) => thread.key)).toEqual(["project:fndr-ui-overhaul", "project:fndr-beta-demo"]);
+        const resolution = await populated("resolve_work_set", { query: "FNDR UI overhaul" }) as { value: { items: Array<{ memoryId: string }> } };
+        expect(resolution.value.items.some((item) => threads[0].evidence.includes(item.memoryId))).toBe(true);
+        const sets = await populated("list_named_sets") as Array<{ items: unknown[] }>;
+        expect(sets[0].items.length).toBeGreaterThan(3);
+
+        window.history.replaceState(null, "", "/?home=empty");
+        const empty = createPreviewIpcHandler();
+        await expect(empty("resume_work")).resolves.toEqual([]);
+        await expect(empty("list_named_sets")).resolves.toEqual([]);
+        await expect(empty("routine_offers")).resolves.toEqual([]);
+
+        window.history.replaceState(null, "", "/?home=error");
+        await expect(createPreviewIpcHandler()("resume_work")).rejects.toThrow("recent work could not be read");
+        window.history.replaceState(null, "", "/");
+    });
+
     it("keeps assistant note consent off until explicitly enabled", async () => {
         const invoke = createPreviewIpcHandler();
         await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);

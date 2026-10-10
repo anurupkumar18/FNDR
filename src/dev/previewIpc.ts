@@ -16,6 +16,7 @@ import type {
     ScreenGuideSettings,
     VoiceOutputSettings,
     Stats,
+    ResumeThread,
     Task,
     WeeklyWrapped,
 } from "@/shared/ipc/tauri";
@@ -353,7 +354,8 @@ const previewTasks: Task[] = [
         source_app: "manual",
         source_memory_id: "memory-accessibility-notes",
         created_at: previewNow - 29 * 60 * 1000,
-        due_date: null,
+        // Relative to the real clock so Home's "Due soon" card renders on any day.
+        due_date: Date.now() + 20 * 60 * 60 * 1000,
         is_completed: false,
         is_dismissed: false,
         task_type: "Todo",
@@ -667,6 +669,39 @@ function payloadRecord(payload: unknown): Record<string, unknown> | null {
         : null;
 }
 
+/** `?home=empty|error|loading` renders that state of Home's work area; anything else is populated. */
+type PreviewHomeState = "populated" | "empty" | "error" | "loading";
+
+function previewHomeState(): PreviewHomeState {
+    const value = new URLSearchParams(globalThis.location?.search ?? "").get("home");
+    return value === "empty" || value === "error" || value === "loading" ? value : "populated";
+}
+
+const previewResumeThreads: ResumeThread[] = [
+    {
+        key: "project:fndr-ui-overhaul",
+        title: "FNDR UI overhaul",
+        app_name: "Figma",
+        last_state: "Reviewed the Home hierarchy and the accessibility checklist.",
+        age_minutes: 24,
+        next_steps: [],
+        suggested_next_steps: [{ title: "Run the keyboard-only panel pass", source_memory_id: "memory-accessibility-notes", confidence: 0.8 }],
+        evidence: ["memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+    {
+        key: "project:fndr-beta-demo",
+        title: "FNDR Beta demo",
+        app_name: "Google Chrome",
+        last_state: "Checked how judges score the Beta.",
+        age_minutes: 95,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+];
+
 function requiredString(
     payload: unknown,
     field: string,
@@ -805,7 +840,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
         payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
-    let previewNamedSets: Array<{ id: string; name: string; memoryIds: string[]; savedAt: number }> = [];
+    const homeState = previewHomeState();
+    const homeWaits = () => new Promise<never>(() => undefined);
+    let previewNamedSets: Array<{ id: string; name: string; memoryIds: string[]; savedAt: number }> = homeState === "populated"
+        ? [{
+            id: "preview-named-beta",
+            name: "Beta demo prep",
+            memoryIds: ["memory-beta-rubric", "memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+            savedAt: previewNow,
+        }]
+        : [];
     let previewRoutineDismissed = false;
     const previewNamedSet = (set: { id: string; name: string; memoryIds: string[]; savedAt: number }) => {
         const items = set.memoryIds.flatMap((memoryId) => {
@@ -1145,8 +1189,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 )));
             case "generate_daily_briefing":
                 return "Your preview briefing: finish the keyboard walkthrough, share the UI audit, and run native permission checks in the Tauri app.";
+            case "resume_work":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: recent work could not be read.");
+                return homeState === "empty" ? [] : clonePreview(previewResumeThreads);
             case "get_todos":
-                return clonePreview(tasks.filter((task) => !task.is_completed && !task.is_dismissed));
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: tasks could not be read.");
+                return clonePreview(tasks.filter((task) => (
+                    !task.is_completed && !task.is_dismissed && (homeState !== "empty" || task.due_date === null)
+                )));
             case "add_todo": {
                 const title = requiredString(payload, "title", command);
                 const requestedType = payloadRecord(payload)?.taskType;
@@ -1535,6 +1587,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 });
             }
             case "list_named_sets":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: saved sets could not be read.");
                 return previewNamedSets.map((set) => previewNamedSet(set));
             case "save_named_set": {
                 const args = payloadRecord(payload);
@@ -1554,6 +1608,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return null;
             }
             case "routine_offers": {
+                if (homeState !== "populated") return [];
                 const memoryIds = previewCards.filter((card) => Boolean(card.reopen_target)).slice(0, 2).map((card) => card.id);
                 return previewRoutineDismissed || memoryIds.length === 0
                     ? []
