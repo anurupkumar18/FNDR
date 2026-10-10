@@ -835,6 +835,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewAgentNotesEnabled = false;
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
+    let calendarMeetingPrep = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let configuredPeers: ConfiguredPeer[] = [];
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
@@ -912,6 +913,18 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 };
             }
             case "mark_thread_seen":
+                return undefined;
+            case "calendar_meeting_prep_state":
+                return { enabled: calendarMeetingPrep, status: "not_determined" };
+            case "set_calendar_meeting_prep": {
+                const enabled = payloadRecord(payload)?.enabled;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_calendar_meeting_prep needs a boolean enabled");
+                }
+                calendarMeetingPrep = enabled;
+                return { enabled, status: enabled ? "granted" : "not_determined" };
+            }
+            case "open_calendar_privacy_settings":
                 return undefined;
             case "get_app_names":
                 return ["Visual Studio Code", "Google Chrome", "Terminal", "Figma"];

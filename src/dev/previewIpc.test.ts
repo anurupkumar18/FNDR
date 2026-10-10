@@ -502,6 +502,9 @@ describe("development UI preview IPC", () => {
             accessibility: true,
             backend: null,
         });
+        await expect(invoke("calendar_meeting_prep_state")).resolves.toEqual({ enabled: false, status: "not_determined" });
+        await expect(invoke("set_calendar_meeting_prep", { enabled: true })).resolves.toEqual({ enabled: true, status: "granted" });
+        await expect(invoke("calendar_meeting_prep_state")).resolves.toMatchObject({ enabled: true });
     });
 
     it("fails loudly when a screen needs an unmodeled command", async () => {

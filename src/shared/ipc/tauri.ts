@@ -339,6 +339,28 @@ export async function markThreadSeen(threadKey: string): Promise<void> {
     return invoke("mark_thread_seen", { threadKey });
 }
 
+/** macOS calendar access for meeting prep (ADR 029). */
+export type CalendarStatus = "not_determined" | "restricted" | "denied" | "granted";
+
+export interface CalendarPrepState {
+    /** "Meeting prep from your calendar" is on. */
+    enabled: boolean;
+    status: CalendarStatus;
+}
+
+export async function calendarMeetingPrepState(): Promise<CalendarPrepState> {
+    return invoke<CalendarPrepState>("calendar_meeting_prep_state");
+}
+
+/** Turning it on asks macOS for calendar access; it stays on only when granted. */
+export async function setCalendarMeetingPrep(enabled: boolean): Promise<CalendarPrepState> {
+    return invoke<CalendarPrepState>("set_calendar_meeting_prep", { enabled });
+}
+
+export async function openCalendarPrivacySettings(): Promise<void> {
+    return invoke("open_calendar_privacy_settings");
+}
+
 export async function fndrQualityStatus(): Promise<{
     stored_count: number;
     dropped_count: number;
