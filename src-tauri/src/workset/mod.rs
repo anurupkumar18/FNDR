@@ -353,6 +353,102 @@ mod tests {
         assert!(value.get("host").is_none());
     }
 
+    fn page(id: &str, app: &str, title: &str, url: &str) -> crate::storage::MemoryRecord {
+        crate::storage::MemoryRecord {
+            id: id.into(),
+            timestamp: 1_800_000_000_000,
+            app_name: app.into(),
+            window_title: title.into(),
+            session_id: "s".into(),
+            day_bucket: "2027-01-15".into(),
+            clean_text: format!("{title} was open"),
+            snippet: format!("{title} was open"),
+            embedding: vec![0.01; crate::embedding::EMBEDDING_DIM],
+            reopen_kind: crate::memory::reopen::ReopenKind::BrowserUrl,
+            reopen_url: Some(url.into()),
+            url: Some(url.into()),
+            ..Default::default()
+        }
+    }
+
+    /// A real store and state store: a saved set resolves on this Mac, an
+    /// opening is remembered and logged, and Private Mode stops all of it.
+    #[test]
+    fn saved_sets_and_routines_stay_on_this_mac_and_private_mode_stops_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let store = std::sync::Arc::new(crate::storage::Store::new(&path).unwrap());
+        let state_store = std::sync::Arc::new(crate::storage::StateStore::new(&path).unwrap());
+        let graph = crate::graph::GraphStore::new(store.clone());
+        let mut config = crate::config::Config::default();
+        config.blocklist = vec!["Slack".to_string()];
+        let state = AppState::new(path, config, store, state_store, graph, None);
+        let ids: Vec<String> = ["canvas", "chat"].iter().map(|id| id.to_string()).collect();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    page(
+                        "canvas",
+                        "Google Chrome",
+                        "Capstone",
+                        "https://canvas.example/c",
+                    ),
+                    page("chat", "Slack", "Team chat", "https://slack.example/c"),
+                ])
+                .await
+                .unwrap();
+            named::save(&state.state_store, "Capstone demo prep", &ids).unwrap();
+            let listed = named::list(&state).await.unwrap();
+            assert_eq!(
+                listed[0].memory_ids,
+                ["canvas"],
+                "the blocklisted chat drops out"
+            );
+
+            match resolve_named(&state, "set up capstone demo prep side by side").await {
+                Some(Resolution::Best(set)) => {
+                    assert_eq!(set.title, "Capstone demo prep");
+                    assert_eq!(set.items.len(), 1);
+                }
+                other => panic!("expected the saved set, got {other:?}"),
+            }
+            assert!(resolve_named(&state, "open Safari").await.is_none());
+
+            note_opened(
+                &state,
+                &ids,
+                &["canvas".to_string()],
+                "Capstone",
+                routines::Source::Notch,
+            );
+            assert_eq!(last_opened(), Some(vec!["canvas".to_string()]));
+            let saved = named::load(&state.state_store).unwrap();
+            assert!(saved[0].last_opened_at.is_some());
+            let logged = routines::log(&state.state_store).unwrap();
+            assert_eq!(logged.len(), 1);
+            assert_eq!(logged[0].set_id.as_deref(), Some(saved[0].id.as_str()));
+
+            state
+                .is_incognito
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            note_opened(
+                &state,
+                &ids,
+                &["canvas".to_string()],
+                "Capstone",
+                routines::Source::Home,
+            );
+            assert_eq!(routines::log(&state.state_store).unwrap().len(), 1);
+            assert!(routines::current(&state).await.unwrap().is_empty());
+            match resolve_named(&state, "set up capstone demo prep").await {
+                Some(Resolution::None { why }) => assert!(why.contains("private"), "{why}"),
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        });
+    }
+
     #[test]
     fn the_search_is_narrowed_by_when_the_request_says() {
         assert_eq!(

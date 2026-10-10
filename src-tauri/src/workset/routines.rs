@@ -223,6 +223,11 @@ pub fn offers(
 
 static WRITE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+/// Every opening logged, oldest first.
+pub fn log(store: &StateStore) -> Result<Vec<Opening>, String> {
+    Ok(store.load_json(LOG_KEY)?.unwrap_or_default())
+}
+
 fn private(state: &AppState) -> bool {
     state.is_incognito.load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -248,14 +253,10 @@ pub fn record(
         now.timestamp_millis(),
     );
     let _held = WRITE.lock();
-    let result = state
-        .state_store
-        .load_json::<Vec<Opening>>(LOG_KEY)
-        .and_then(|log| {
-            let mut log = log.unwrap_or_default();
-            append(&mut log, entry);
-            state.state_store.save_json(LOG_KEY, &log)
-        });
+    let result = log(&state.state_store).and_then(|mut log| {
+        append(&mut log, entry);
+        state.state_store.save_json(LOG_KEY, &log)
+    });
     if let Err(error) = result {
         tracing::warn!(%error, "workset:routine_log_failed");
     }
@@ -280,7 +281,7 @@ pub async fn current(state: &AppState) -> Result<Vec<RoutineOffer>, String> {
     if private(state) {
         return Ok(Vec::new());
     }
-    let log: Vec<Opening> = state.state_store.load_json(LOG_KEY)?.unwrap_or_default();
+    let log = log(&state.state_store)?;
     let dismissed: Vec<Dismissal> = state
         .state_store
         .load_json(DISMISSED_KEY)?
