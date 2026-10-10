@@ -29,6 +29,12 @@
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>FNDR uses on-device speech recognition for voice search and Screen Guide questions.</string>
 
+    <!-- Calendars Permission: read-only, on this Mac, for meeting prep (ADR 029) -->
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>FNDR reads your upcoming events on this Mac to show related work a few minutes before a meeting. It never changes your calendar, and event details never leave this Mac.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>FNDR reads your upcoming events on this Mac to show related work a few minutes before a meeting. It never changes your calendar, and event details never leave this Mac.</string>
+
     <!-- Files and Folders Permissions -->
     <key>NSDocumentsFolderUsageDescription</key>
     <string>FNDR searches file names in Documents only when you ask Screen Guide, and may move an older FNDR speech runtime from Documents into private app storage once.</string>
