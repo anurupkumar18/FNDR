@@ -353,7 +353,7 @@ describe("MemoryCardsPanel", () => {
         expect(await screen.findByRole("button", { name: /^2 more moments/ })).toHaveTextContent(
             "3 moments over 42 min",
         );
-        expect(screen.getByLabelText("Recorded in this session")).toHaveTextContent("2 decisions");
+        expect(screen.getByText("In this session").parentElement).toHaveTextContent("2 decisions");
         expect(screen.getByText(earlier)).toBeInTheDocument();
         expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
     });
@@ -379,8 +379,10 @@ describe("MemoryCardsPanel", () => {
 
         renderVault();
 
-        const [first] = await screen.findAllByLabelText("Same stretch of work");
-        expect(within(first).getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+        const [first] = await screen.findAllByText("Same stretch of work");
+        const link = within(first.parentElement!).getByRole("button", { name: "Terminal" });
+        fireEvent.click(link);
+        expect(document.activeElement).toHaveAccessibleName("Open memory: Ran the tests");
     });
 
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {

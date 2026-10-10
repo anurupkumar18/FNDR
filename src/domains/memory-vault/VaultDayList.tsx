@@ -104,7 +104,7 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
     const showRow = (leadId: string) => {
         const target = document.getElementById(`vault-row-${leadId}`);
         target?.scrollIntoView?.({ block: "center" });
-        target?.querySelector<HTMLElement>("button")?.focus();
+        target?.querySelector<HTMLElement>('[aria-label^="Open memory"], button')?.focus();
     };
 
     const renderLine = (
@@ -151,7 +151,7 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                 )}
             </div>
             {digest && sessionDigestFacts(digest) && (
-                <p className="vault-row-earlier" aria-label="Recorded in this session">
+                <p className="vault-row-earlier">
                     <span className="vault-row-earlier-label">In this session</span> {sessionDigestFacts(digest)}
                 </p>
             )}
@@ -161,7 +161,7 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
                 </p>
             )}
             {links.length > 0 && (
-                <p className="vault-row-earlier" aria-label="Same stretch of work">
+                <p className="vault-row-earlier">
                     <span className="vault-row-earlier-label">Same stretch of work</span>
                     {links.map((link) => (
                         <button
