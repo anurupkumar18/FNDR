@@ -752,6 +752,11 @@ pub struct Config {
     /// (VS-68). Off by default, because it widens what memory holds.
     #[serde(default)]
     pub agent_notes_enabled: bool,
+    /// Notch Do's spoken progress is muted. `None` until the person first
+    /// mutes or unmutes, so the notch can migrate the older per-window flag
+    /// once (ADR 020 amendment, 2026-10-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notch_do_muted: Option<bool>,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -1263,6 +1268,7 @@ impl Default for Config {
             operator: OperatorConfig::default(),
             actions_kill_switch: false,
             agent_notes_enabled: false,
+            notch_do_muted: None,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
@@ -1478,6 +1484,22 @@ mod tests {
             toml::from_str("calendar_meeting_prep = true\ncalendar_ids = [\"work\"]").unwrap();
         assert!(chosen.calendar_meeting_prep && chosen.meeting_prep);
         assert_eq!(chosen.calendar_ids, vec!["work".to_string()]);
+    }
+
+    #[test]
+    fn notch_do_mute_is_unset_for_an_older_file_and_survives_a_round_trip() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        assert!(!current.contains("notch_do_muted"));
+        let older: Config = toml::from_str(&current).expect("an older config still loads");
+        assert_eq!(older.notch_do_muted, None);
+
+        let muted = Config {
+            notch_do_muted: Some(true),
+            ..Config::default()
+        };
+        let saved = toml::to_string(&muted).expect("config serializes");
+        let loaded: Config = toml::from_str(&saved).expect("config loads");
+        assert_eq!(loaded.notch_do_muted, Some(true));
     }
 
     #[test]
