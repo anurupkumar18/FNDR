@@ -6,6 +6,7 @@
  * plays at a time with a small queue; an urgent line cuts in.
  */
 
+import { createLocalNeuralProvider } from "./localNeural";
 import type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechProvider";
 import { createSystemEnhancedProvider } from "./systemEnhanced";
 import { createWebviewBasicProvider } from "./webviewBasic";
@@ -275,12 +276,13 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
 export const speechRegistry = createSpeechRegistry();
 
 /**
- * Registers the voices that need no account: the best Mac voice and the basic
+ * Registers the voices that need no account: the on-device neural voice
+ * (ADR 030, available once installed), the best Mac voice and the basic
  * webview voice. Safe to call from every surface that speaks; the ChatGPT plan
- * voice registers itself where it is built. `local_neural` stays unregistered
- * (docs/evidence/W04/local-tts-spike.md).
+ * voice registers itself where it is built.
  */
 export function installOfflineVoices(registry: SpeechRegistry = speechRegistry): void {
+    if (!registry.has("local_neural")) registry.registerProvider(createLocalNeuralProvider());
     if (!registry.has("system_enhanced")) registry.registerProvider(createSystemEnhancedProvider());
     if (!registry.has("webview_basic")) registry.registerProvider(createWebviewBasicProvider());
 }

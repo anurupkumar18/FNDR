@@ -20,3 +20,4 @@ export type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechPro
 export { createSystemEnhancedProvider, previewVoice, rankVoices, PREMIUM_VOICE_GUIDE } from "./systemEnhanced";
 export type { RankedVoice, VoiceQuality } from "./systemEnhanced";
 export { createWebviewBasicProvider } from "./webviewBasic";
+export { createLocalNeuralProvider, splitSentences, NEURAL_VOICE_IDS } from "./localNeural";

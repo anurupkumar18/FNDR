@@ -296,12 +296,12 @@ describe("speech registry", () => {
         expect(changes).toHaveLength(1);
     });
 
-    it("installs the Mac and basic voices once, leaving room for the ChatGPT plan voice", () => {
+    it("installs the on-device, Mac and basic voices once, leaving room for the ChatGPT plan voice", () => {
         const codex = fake("codex_realtime");
         registry.registerProvider(codex);
         installOfflineVoices(registry);
         installOfflineVoices(registry);
-        expect(registry.order()).toEqual(["codex_realtime", "system_enhanced", "webview_basic"]);
+        expect(registry.order()).toEqual(["codex_realtime", "local_neural", "system_enhanced", "webview_basic"]);
         expect(registry.providers()[0]).toBe(codex);
     });
 });
