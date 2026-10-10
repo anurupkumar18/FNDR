@@ -142,4 +142,38 @@ describe("useVoice", () => {
             expect(mocks.invoke).toHaveBeenCalledWith("voice_cancel", { sessionId: "session-3" });
         });
     });
+
+    it("a stop-only session reports the stop word and ignored speech and never any text", async () => {
+        const onPartial = vi.fn();
+        const onFinal = vi.fn();
+        const onStopWord = vi.fn();
+        const onIgnoredSpeech = vi.fn();
+        mocks.invoke.mockResolvedValueOnce({ sessionId: "spot-1" });
+
+        function StopOnly() {
+            const voice = useVoice({ surface: "notch_do", mode: "stop_words", onPartial, onFinal, onStopWord, onIgnoredSpeech });
+            return (
+                <div>
+                    <output data-testid="state">{voice.state.kind}</output>
+                    <button onClick={() => void voice.start()}>start</button>
+                </div>
+            );
+        }
+        render(<StopOnly />);
+        fireEvent.click(screen.getByRole("button", { name: "start" }));
+        await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "stop_words" }));
+        const send = (state: VoiceStateEvent["state"]) =>
+            act(() => mocks.eventHandler?.({ version: 1, sessionId: "spot-1", surface: "notch_do", state }));
+        send({ kind: "listening", level: 0 });
+        send({ kind: "partial", text: "open the music" });
+        send({ kind: "final", text: "turn it up" });
+        send({ kind: "speech_ignored" });
+        send({ kind: "stop_word" });
+
+        expect(onPartial).not.toHaveBeenCalled();
+        expect(onFinal).not.toHaveBeenCalled();
+        expect(onIgnoredSpeech).toHaveBeenCalledTimes(1);
+        expect(onStopWord).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("state")).toHaveTextContent("listening");
+    });
 });

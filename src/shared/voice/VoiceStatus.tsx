@@ -23,7 +23,10 @@ function stateMessage(state: VoiceState): string {
         case "preparing_model":
             return "Preparing on-device speech recognition";
         case "listening":
+        case "speech_ignored":
             return "Listening";
+        case "stop_word":
+            return "Heard stop";
         case "partial":
             return `Hearing: ${state.text}`;
         case "final":
