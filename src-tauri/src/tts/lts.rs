@@ -374,6 +374,14 @@ fn number(lexicon: &Lexicon, digits: &str) -> String {
         .join(" ")
 }
 
+/// "VSCode" splits after "VS": capitals, then a capitalised word.
+fn initialism_then_word(word: &str) -> Option<usize> {
+    let chars: Vec<char> = word.chars().collect();
+    let caps = chars.iter().take_while(|c| c.is_ascii_uppercase()).count();
+    let rest = &chars[caps.min(chars.len())..];
+    (caps >= 3 && rest.len() >= 2 && rest.iter().all(|c| c.is_ascii_lowercase())).then(|| caps - 1)
+}
+
 /// A pronunciation for any word, in the lexicon's accent.
 pub fn guess(lexicon: &Lexicon, word: &str) -> String {
     let clean: String = word
@@ -407,6 +415,15 @@ pub fn guess(lexicon: &Lexicon, word: &str) -> String {
     let letters: String = clean.chars().filter(|c| c.is_alphabetic()).collect();
     if letters.is_empty() {
         return String::new();
+    }
+    if let Some(split) = initialism_then_word(&letters) {
+        let (head, tail) = letters.split_at(split);
+        let head = lexicon.spell(head).map(|(ps, _)| ps).unwrap_or_default();
+        let tail = lexicon
+            .lookup(&tail.to_lowercase(), None, None, None)
+            .map(|(ps, _)| ps)
+            .unwrap_or_else(|| guess(lexicon, tail));
+        return format!("{} {tail}", apply_stress(&head, Some(-1.0)));
     }
     let lower = clean.to_lowercase();
     if let Some(stem) = lower.strip_suffix("'s") {
@@ -498,6 +515,7 @@ mod tests {
         assert_eq!(guess(&lex, "npm"), "ˌɛnpˌiˈɛm");
         assert_eq!(guess(&lex, "Anthropic"), "ænθɹˈɑpɪk");
         assert_eq!(guess(&lex, "Xavier"), "zˈAviəɹ");
+        assert_eq!(guess(&lex, "VSCode"), "viˌɛs kˈOd");
     }
 
     #[test]
