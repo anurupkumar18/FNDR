@@ -1333,4 +1333,18 @@ mod tests {
         assert_eq!(result.outcome, ReopenOutcome::NoTarget);
         assert_eq!(result.action, None);
     }
+
+    #[test]
+    fn resolve_and_plan_vscode_deep_link_opens_r19() {
+        let link = "vscode://file/Users/qa/re10-notes.txt";
+        let resolved = resolve_reopen_target(&Rec {
+            reopen_kind: ReopenKind::AppDeepLink,
+            reopen_app_deep_link: s(link),
+            ..Default::default()
+        });
+        assert_eq!(resolved, Some(R::AppDeepLink(link.into())));
+        let planned = plan(resolved, Some("Code"), |_| vec![], |_| true);
+        assert_eq!(planned.outcome, ReopenOutcome::Opened);
+        assert_eq!(planned.action, Some(R::AppDeepLink(link.into())));
+    }
 }

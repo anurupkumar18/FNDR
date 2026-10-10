@@ -98,4 +98,6 @@ The strings FNDR sends to its own models are product behavior, not agent guidanc
 
 ## Privacy and data safety
 
+A surface that shows or serves memories applies the one visibility rule in `context_runtime::retrieve` (`memory_is_visible`, `memory_is_permitted`, `result_is_permitted`): current blocklist, soft delete, quality gate. Reading the store directly skips it. `src/dev/memoryReadDrift.test.ts` lists every file that reads memories in bulk with its check, and fails on a new one until it is listed.
+
 Do not commit secrets, real user captures, database blobs, or contents of ignored data directories. Follow `.gitignore` and `README.md` privacy guidance when suggesting commands or tests.

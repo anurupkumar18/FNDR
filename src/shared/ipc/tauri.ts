@@ -1977,18 +1977,6 @@ export async function cancelPeerTask(localId: string): Promise<DelegationTaskRes
     return invoke<DelegationTaskResult>("cancel_peer_task", { localId });
 }
 
-export interface HermesAppContext {
-    app_name: string;
-    memory_count: number;
-}
-
-export interface HermesMemoryDigest {
-    title: string;
-    app_name: string;
-    summary: string;
-    timestamp: number;
-}
-
 export interface HermesBridgeStatus {
     installed: boolean;
     configured: boolean;
@@ -2021,12 +2009,9 @@ export interface HermesBridgeStatus {
     codex_auth_path: string;
     profile_name: string | null;
     focus_task: string | null;
-    recent_memory_count: number;
     open_task_count: number;
     /** True when Ollama is configured and reachable: chat works without the Hermes CLI. */
     direct_ollama_ready: boolean;
-    top_apps: HermesAppContext[];
-    recent_memories: HermesMemoryDigest[];
     last_error: string | null;
     install_command: string;
     /** `stopped`, `starting`, `running`, `restarting` or `crashed`. */

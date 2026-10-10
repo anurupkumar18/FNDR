@@ -352,6 +352,8 @@ pub async fn get_todos(state: State<'_, Arc<AppState>>) -> Result<Vec<Task>, Str
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let blocklist = state.config.read().blocklist.clone();
+    tasks.retain(|task| !crate::tasks::suggest::suggested_from_blocked_app(task, &blocklist));
     let visible = visible_tasks(tasks, now_ms);
     Ok(visible)
 }

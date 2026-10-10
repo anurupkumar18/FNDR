@@ -581,3 +581,26 @@ fn the_model_and_the_finder_together_keep_each_task_once() {
     // On a public page the finder adds nothing.
     assert!(suggestions_for("NONE", chat, Surface::Public).is_empty());
 }
+
+#[test]
+fn a_suggestion_from_an_app_blocked_since_is_no_longer_offered() {
+    use fndr_lib::tasks::suggest::suggested_from_blocked_app;
+    let quote = "can you send me the draft report by Friday?";
+    let blocked = ["Slack".to_string()];
+    let suggestion = stored("s", "Memory:Slack", quote, 60_000);
+    assert!(suggested_from_blocked_app(&suggestion, &blocked));
+    assert!(!suggested_from_blocked_app(&suggestion, &[]));
+    assert!(!suggested_from_blocked_app(
+        &stored("m", "Memory:Mail", quote, 60_000),
+        &blocked
+    ));
+    // Accepted or written by the person: theirs, whatever was blocked later.
+    assert!(!suggested_from_blocked_app(
+        &stored("a", "Accepted:Slack", quote, 60_000),
+        &blocked
+    ));
+    assert!(!suggested_from_blocked_app(
+        &stored("mine", "manual", "", 60_000),
+        &blocked
+    ));
+}

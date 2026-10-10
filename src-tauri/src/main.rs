@@ -5,10 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use chrono::Timelike;
-use fndr_lib::{
-    capture, config::Config, graph::GraphStore, ipc, models, storage::Store, AppState,
-    ProactiveSuggestion,
-};
+use fndr_lib::{capture, config::Config, graph::GraphStore, ipc, models, storage::Store, AppState};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -428,30 +425,27 @@ fn main() {
                             }
                         };
 
-                        let suggestion = hits.into_iter().find(|r| {
-                            r.score > config.proactive.similarity_threshold
-                                && !seen_ring.contains(&r.id)
-                        });
+                        // The toast obeys the rules every other surface does:
+                        // current blocklist, quality gate, a real sentence.
+                        let ids = hits.iter().map(|hit| hit.id.clone()).collect::<Vec<_>>();
+                        let Ok(records) = proactive_state.store.get_memories_by_ids(&ids).await
+                        else {
+                            continue;
+                        };
+                        let suggestion = fndr_lib::context_runtime::proactive::pick_suggestion(
+                            &hits,
+                            &records,
+                            &config.blocklist,
+                            config.proactive.similarity_threshold,
+                            |id| seen_ring.iter().any(|seen| seen == id),
+                            chrono::Utc::now().timestamp_millis(),
+                        );
 
-                        if let Some(hit) = suggestion {
-                            // Prefer the distilled summary over raw OCR text for display.
-                            let snippet = if hit.display_summary.trim().is_empty() {
-                                hit.snippet.clone()
-                            } else {
-                                hit.display_summary.clone()
-                            };
-
-                            let suggestion = ProactiveSuggestion {
-                                memory_id: hit.id.clone(),
-                                snippet,
-                                similarity: hit.score,
-                                task_title: None,
-                            };
-
+                        if let Some(suggestion) = suggestion {
                             if seen_ring.len() >= config.proactive.seen_ring_capacity {
                                 seen_ring.pop_front();
                             }
-                            seen_ring.push_back(hit.id.clone());
+                            seen_ring.push_back(suggestion.memory_id.clone());
 
                             let _ = proactive_state.proactive_tx.send(Some(suggestion.clone()));
                             let _ = app_handle.emit("proactive_suggestion", suggestion);

@@ -87,6 +87,8 @@ How each rule is kept:
 - Click is AXPress on the element's handle. Coordinates are refused. Nothing falls back to a screen position.
 - FNDR, blocklisted apps and secure fields are refused inside the server as well as by the parent. The server reads the blocklist and the actions switch from settings at start and will not start if they cannot be read.
 - The text of a text field is never printed, so a field's contents cannot change how policy reads it. Other elements print their value (`text Edit field = 57`).
+- Only what a person can press, choose or type into gets a number (2026-10-09). Text, headings, images and labelled groups are printed without one, so words on a page can be read but can never be named as the target of an action. The server decides this from the role that leads the line (`ACTED_ON` in `mcp.rs`).
+- An element an app reports under several parents is printed once (2026-10-09). Chrome lists its toolbar four times over; a live read of a Chrome window is now 40 lines in 0.12 s.
 - No pixels are read. The process exits on end of input and polls its parent.
 
 Honest limits:

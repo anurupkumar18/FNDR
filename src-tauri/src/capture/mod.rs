@@ -2435,8 +2435,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 format!("Visited {}", domain)
             };
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
+            let app_deep_link = crate::memory::reopen::app_deep_link_for(
+                app_context.bundle_id.as_deref(),
+                &window_title,
+                app_context.document_path.as_deref(),
+            );
             let mut reopen_target = build_reopen_target(
                 url.as_deref(),
+                app_deep_link.as_deref(),
                 macos::preferred_reopen_file_path(app_context.document_path.as_deref(), &[]),
                 app_context.bundle_id.as_deref(),
                 &app_name,
@@ -3817,8 +3823,14 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &prior_chain,
             &config.memory_quality,
         );
+        let app_deep_link = crate::memory::reopen::app_deep_link_for(
+            app_context.bundle_id.as_deref(),
+            &window_title,
+            app_context.document_path.as_deref(),
+        );
         let mut reopen_target = build_reopen_target(
             url.as_deref(),
+            app_deep_link.as_deref(),
             macos::preferred_reopen_file_path(
                 app_context.document_path.as_deref(),
                 structured_memory

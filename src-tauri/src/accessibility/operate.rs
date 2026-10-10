@@ -258,6 +258,12 @@ pub(crate) fn current_screens() -> Vec<Screen> {
     coregraphics_screens()
 }
 
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    /// Equal for two references to the same on-screen element.
+    fn CFHash(cf: super::CFTypeRef) -> usize;
+}
+
 const MAX_VISITED: usize = 2_500;
 const MAX_LINES: usize = 600;
 const READ_BUDGET: Duration = Duration::from_secs(4);
@@ -636,8 +642,14 @@ impl Desktop for AxDesktop {
             let mut visited = 0;
             let mut truncated = false;
             let mut entries: Vec<Entry<AxElement>> = Vec::new();
+            // Apps report one element under several parents (Chrome lists its
+            // toolbar four times over); each is shown once.
+            let mut seen = std::collections::HashSet::new();
             let mut stack = vec![(root, 0usize)];
             while let Some((node, depth)) = stack.pop() {
+                if !seen.insert(CFHash(node.0)) {
+                    continue;
+                }
                 visited += 1;
                 if visited > MAX_VISITED
                     || entries.len() >= MAX_LINES
@@ -851,5 +863,34 @@ mod tests {
         assert!(key_script("hyper+a").is_err());
         assert!(key_script("f13x").is_err());
         assert!(key_script("").is_err());
+    }
+
+    /// Reads a real app without touching it:
+    /// `FNDR_LIVE_APP="Google Chrome" cargo test --lib live_read_lists_each_element_once -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live: reads a running app's window on this Mac"]
+    fn live_read_lists_each_element_once() {
+        let name = std::env::var("FNDR_LIVE_APP").unwrap_or_else(|_| "Google Chrome".to_string());
+        let mut desktop = AxDesktop;
+        let app = desktop
+            .list_apps()
+            .into_iter()
+            .find(|app| app.name == name)
+            .expect("the app is running");
+        let started = Instant::now();
+        let tree = desktop.read_tree(&app).expect("the window can be read");
+        let lines: Vec<&str> = tree.entries.iter().map(|entry| entry.description.as_str()).collect();
+        println!("{} lines in {:?}, truncated: {}", lines.len(), started.elapsed(), tree.truncated);
+        let mut counts = std::collections::BTreeMap::new();
+        for line in &lines {
+            *counts.entry(*line).or_insert(0usize) += 1;
+        }
+        // Report roles only: the lines themselves are whatever is on screen.
+        let repeated: Vec<_> = counts
+            .iter()
+            .filter(|(line, count)| **count > 1 && line.starts_with("text field"))
+            .collect();
+        println!("text fields listed more than once: {}", repeated.len());
+        assert!(repeated.is_empty(), "an address bar or field is listed twice");
     }
 }

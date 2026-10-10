@@ -100,9 +100,9 @@ pub async fn briefing_for(state: &crate::AppState, mode: &str, now: DateTime<Loc
         .await
         .unwrap_or_default();
     let (mut shown, _hidden) = crate::memory_quality::partition_surfaceable(results);
-    shown.retain(|result| {
-        !crate::privacy::Blocklist::is_internal_app(&result.app_name, result.bundle_id.as_deref())
-    });
+    let blocklist = state.config.read().blocklist.clone();
+    shown
+        .retain(|result| crate::context_runtime::retrieve::result_is_permitted(result, &blocklist));
     shown.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
     let activity: Vec<(String, String, String)> = shown
         .into_iter()

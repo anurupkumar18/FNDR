@@ -172,8 +172,14 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     normalized.activity_type = crate::inference::normalize_activity_type(&normalized.activity_type);
     // An agent note never becomes an open target (VS-68).
     if normalized.reopen_kind == ReopenKind::Unknown && !normalized.is_agent_note() {
+        let app_deep_link = crate::memory::reopen::app_deep_link_for(
+            normalized.bundle_id.as_deref(),
+            &normalized.window_title,
+            None,
+        );
         let derived = build_reopen_target(
             normalized.url.as_deref(),
+            app_deep_link.as_deref(),
             normalized.files_touched.first().map(|value| value.as_str()),
             normalized.bundle_id.as_deref(),
             &normalized.app_name,

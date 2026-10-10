@@ -230,7 +230,7 @@ mod daily_summary_tests {
         fallback.synthesis_branch = "llm_ocr_grounded_visual_fallback".to_string();
         fallback.ocr_block_count = 1;
 
-        let retained = surfaceable_daily_records(vec![fallback]);
+        let retained = surfaceable_daily_records(vec![fallback], &[]);
 
         assert!(retained.is_empty());
     }

@@ -1,7 +1,6 @@
 //! Hermes bridge, gateway, and chat Tauri commands.
 
 use crate::http_util::{llm_http_client, local_service_client, post_json_response};
-use crate::search::MemoryCard;
 use crate::AppState;
 use parking_lot::Mutex as AgentMutex;
 use serde::{Deserialize, Serialize};
@@ -12,23 +11,6 @@ use std::sync::{Arc, OnceLock as AgentOnceLock};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 use tokio::time::{Duration, Instant};
-
-use super::common::{strip_internal_fndr_results, truncate_chars};
-use super::search::{memory_card_from_result, refine_memory_card_titles};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesAppContext {
-    pub app_name: String,
-    pub memory_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesMemoryDigest {
-    pub title: String,
-    pub app_name: String,
-    pub summary: String,
-    pub timestamp: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HermesBridgeStatus {
@@ -63,12 +45,9 @@ pub struct HermesBridgeStatus {
     pub codex_auth_path: String,
     pub profile_name: Option<String>,
     pub focus_task: Option<String>,
-    pub recent_memory_count: u32,
     pub open_task_count: u32,
     /// True when Ollama is reachable and configured — chat works without Hermes CLI.
     pub direct_ollama_ready: bool,
-    pub top_apps: Vec<HermesAppContext>,
-    pub recent_memories: Vec<HermesMemoryDigest>,
     pub last_error: Option<String>,
     pub install_command: String,
     /// `stopped`, `starting`, `running`, `restarting` or `crashed`.
@@ -928,53 +907,8 @@ fn file_modified_at_ms(path: &PathBuf) -> Option<i64> {
 async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStatus, String> {
     let context_path = hermes_project_context_path(state);
     let home_dir = hermes_home_dir(state);
-    // Memory and task counts are decoration; a vault that can't be read
-    // (locked, migrating) must not hide Hermes setup.
-    let recent_results = state
-        .store
-        .list_recent_results(18, None)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "hermes:status_recent_memories_unavailable");
-            Vec::new()
-        });
-    let mut recent_memories: Vec<MemoryCard> = strip_internal_fndr_results(recent_results)
-        .into_iter()
-        .map(memory_card_from_result)
-        .collect();
-    refine_memory_card_titles(&mut recent_memories);
-
-    let mut app_counts: HashMap<String, usize> = HashMap::new();
-    for memory in &recent_memories {
-        *app_counts.entry(memory.app_name.clone()).or_insert(0) += 1;
-    }
-
-    let mut top_apps: Vec<HermesAppContext> = app_counts
-        .into_iter()
-        .map(|(app_name, memory_count)| HermesAppContext {
-            app_name,
-            memory_count: memory_count as u32,
-        })
-        .collect();
-    top_apps.sort_by(|left, right| {
-        right
-            .memory_count
-            .cmp(&left.memory_count)
-            .then_with(|| left.app_name.cmp(&right.app_name))
-    });
-    top_apps.truncate(6);
-
-    let recent_memories = recent_memories
-        .into_iter()
-        .take(6)
-        .map(|memory| HermesMemoryDigest {
-            title: memory.title,
-            app_name: memory.app_name,
-            summary: truncate_chars(&memory.summary, 180),
-            timestamp: memory.timestamp,
-        })
-        .collect::<Vec<_>>();
-
+    // The task count is decoration; a vault that can't be read (locked,
+    // migrating) must not hide Hermes setup.
     let open_task_count = state
         .store
         .list_tasks()
@@ -1052,10 +986,7 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
         codex_auth_path: codex_auth_path.display().to_string(),
         profile_name: read_hermes_profile_name(state),
         focus_task: state.focus_task.read().clone(),
-        recent_memory_count: recent_memories.len() as u32,
         open_task_count,
-        top_apps,
-        recent_memories,
         last_error,
         install_command: "FNDR installs a pinned Hermes into its own app data.".to_string(),
         gateway_state,
