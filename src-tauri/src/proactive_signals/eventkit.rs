@@ -228,9 +228,7 @@ mod macos {
             println!("status before: {:?}", source.status());
             let status = source.request_access();
             println!("status after request: {status:?}");
-            if status != CalendarStatus::Granted {
-                return;
-            }
+            // Without access EventKit lists no calendars; the calls still run.
             let calendars = source.calendars().expect("calendars");
             let read = crate::proactive_signals::calendar::calendars_to_read(&calendars, &[]);
             let now = chrono::Utc::now().timestamp_millis();
