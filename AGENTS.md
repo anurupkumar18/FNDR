@@ -40,6 +40,7 @@ Several agent sessions and people work in this one checkout at the same time.
 - Another session's uncommitted work can break the Rust build. `make test-clean FILES="<your changed files>"` runs the library tests on the committed tree plus only your files, in a scratch copy. Integration tests under `src-tauri/tests` run in the checkout.
 - Format only what you changed: `rustfmt --edition 2021 --check <file>`, then fix your own lines. `cargo fmt` rewrites the whole crate, other sessions' files included. The frontend has no formatter config: match the file by hand and do not run prettier.
 - A tool that rewrites a database refuses the real profile unless told otherwise. Rewriting the owner's vault needs FNDR closed, a backup first, and the owner's go-ahead.
+- When `git merge` or `git pull` is refused because another session has uncommitted work in files the incoming commits touch, do not wait and do not stash: `scripts/dev/publish-merged.sh "what this publishes"` test-merges in memory, runs the checks on an export of the merged tree, and pushes the merge as a commit object. The checkout is not moved and fast-forwards later.
 - `git push origin` pushes to GitLab and GitHub. One can reject while the other reports "Everything up-to-date", so confirm with `git ls-remote origin main`.
 - Commits, merge requests and tickets carry no AI attribution and no co-author trailer.
 - New text in docs, tickets and commit messages uses no em or en dashes.
