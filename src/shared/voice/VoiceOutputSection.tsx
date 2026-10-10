@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useId, useState } from "react";
-import { getVoiceOutputSettings, setVoiceOutputSettings, type VoiceOutputSettings } from "@/shared/ipc/tauri";
+import {
+    getVoiceOutputSettings,
+    setVoiceOutputSettings,
+    ttsInstall,
+    ttsRemove,
+    ttsStatus,
+    ttsVoices,
+    type TtsStatus,
+    type TtsVoices,
+    type VoiceOutputSettings,
+} from "@/shared/ipc/tauri";
+import { createLocalNeuralProvider } from "./localNeural";
 import type { SpeechProviderId } from "./speechProvider";
 import { installOfflineVoices, speechRegistry, type SpeechRegistry } from "./speechRegistry";
 import { createSystemEnhancedProvider, PREMIUM_VOICE_GUIDE, previewVoice, type RankedVoice, type VoiceQuality } from "./systemEnhanced";
@@ -42,10 +53,194 @@ async function describeVoice(registry: SpeechRegistry): Promise<string> {
     return "No voice is available in this window.";
 }
 
+/** What the on-device neural voice row needs; tests pass fakes. */
+export interface NeuralVoiceControls {
+    status(): Promise<TtsStatus>;
+    voices(): Promise<TtsVoices>;
+    install(consent: boolean): Promise<TtsStatus>;
+    remove(): Promise<TtsStatus>;
+    preview(voiceId: string, rate: number): Promise<void>;
+}
+
+const NEURAL_PREVIEW_LINE = "Hi, this is how FNDR sounds when it speaks on this Mac.";
+const POLL_MS = 500;
+
+let previewProvider: ReturnType<typeof createLocalNeuralProvider> | null = null;
+
+const defaultNeural: NeuralVoiceControls = {
+    status: ttsStatus,
+    voices: ttsVoices,
+    install: ttsInstall,
+    remove: ttsRemove,
+    preview(voiceId, rate) {
+        previewProvider ??= createLocalNeuralProvider();
+        previewProvider.cancel();
+        return previewProvider.speak(NEURAL_PREVIEW_LINE, { voice: voiceId, rate });
+    },
+};
+
+function megabytes(bytes: number): string {
+    return `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+const ACCENT_NAMES = { us: "American", gb: "British" } as const;
+
+function NeuralVoiceRow({
+    neural,
+    voice,
+    rate,
+    onVoice,
+    onInstalled,
+}: {
+    neural: NeuralVoiceControls;
+    voice: string;
+    rate: number;
+    onVoice: (voice: string) => void;
+    onInstalled: () => void;
+}) {
+    const ids = useId();
+    const [status, setStatus] = useState<TtsStatus | null>(null);
+    const [voices, setVoices] = useState<TtsVoices | null>(null);
+    const [asking, setAsking] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let live = true;
+        void neural
+            .status()
+            .then((next) => live && setStatus(next))
+            .catch((reason) => live && setError(errorText(reason)));
+        void neural
+            .voices()
+            .then((next) => live && setVoices(next))
+            .catch(() => undefined);
+        return () => {
+            live = false;
+        };
+    }, [neural]);
+
+    const downloading = status?.state === "downloading";
+    useEffect(() => {
+        if (!downloading) return;
+        const timer = setInterval(() => {
+            void neural
+                .status()
+                .then((next) => {
+                    setStatus(next);
+                    if (next.state === "ready") onInstalled();
+                })
+                .catch((reason) => setError(errorText(reason)));
+        }, POLL_MS);
+        return () => clearInterval(timer);
+    }, [downloading, neural, onInstalled]);
+
+    const run = (work: Promise<TtsStatus>) => {
+        setError(null);
+        void work.then(setStatus).catch((reason) => setError(errorText(reason)));
+    };
+
+    const size = status ? megabytes(status.totalBytes) : "";
+    const chosen = voice || voices?.defaultVoice || "";
+    let body: JSX.Element | null = null;
+    if (!status) {
+        body = <small>Checking…</small>;
+    } else if (status.state === "ready") {
+        body = (
+            <span className="fndr-voice-output__controls">
+                <select
+                    id={`${ids}-neural`}
+                    className="fndr-voice-output__select"
+                    aria-label="On-device voice"
+                    value={chosen}
+                    disabled={!voices}
+                    onChange={(event) => onVoice(event.target.value)}
+                >
+                    {voices?.voices.map((option) => (
+                        <option key={option.id} value={option.id}>
+                            {`${option.name}, ${ACCENT_NAMES[option.accent]} ${option.gender}`}
+                        </option>
+                    ))}
+                </select>
+                <button
+                    type="button"
+                    className="ui-action-btn"
+                    disabled={!chosen}
+                    onClick={() => void neural.preview(chosen, rate).catch((reason) => setError(errorText(reason)))}
+                >
+                    Preview
+                </button>
+                <button type="button" className="ui-action-btn" onClick={() => run(neural.remove())}>
+                    Remove ({size})
+                </button>
+            </span>
+        );
+    } else if (downloading) {
+        const percent = status.totalBytes ? Math.floor((status.downloadedBytes / status.totalBytes) * 100) : 0;
+        body = (
+            <span className="fndr-voice-output__controls">
+                <progress max={100} value={percent} aria-label="On-device voice download" />
+                <small aria-live="polite">{`${percent}% of ${size}`}</small>
+            </span>
+        );
+    } else if (asking) {
+        body = (
+            <span className="fndr-voice-output__controls">
+                <button
+                    type="button"
+                    className="ui-action-btn"
+                    onClick={() => {
+                        setAsking(false);
+                        run(neural.install(true));
+                    }}
+                >
+                    Download {size}
+                </button>
+                <button type="button" className="ui-action-btn" onClick={() => setAsking(false)}>
+                    Not now
+                </button>
+            </span>
+        );
+    } else {
+        body = (
+            <span className="fndr-voice-output__controls">
+                <button type="button" className="ui-action-btn" onClick={() => setAsking(true)}>
+                    {status.state === "error" ? "Try again" : `Install (${size})`}
+                </button>
+            </span>
+        );
+    }
+
+    return (
+        <>
+            <div className="sg-setting-row">
+                <span>
+                    <strong>
+                        <label htmlFor={`${ids}-neural`}>On-device neural voice</label>
+                    </strong>
+                    <small>Kokoro, a natural voice that runs fully on this Mac. Nothing it says leaves the Mac.</small>
+                    {asking && (
+                        <small role="note">
+                            {`FNDR downloads the Kokoro model and its voices (${size}) from Hugging Face, and pronunciation dictionaries from GitHub, once. Each file is checked against a pinned checksum. After that no network is used to speak.`}
+                        </small>
+                    )}
+                    {status?.state === "error" && status.detail && <small>{status.detail}</small>}
+                </span>
+                {body}
+            </div>
+            {error && (
+                <p className="fndr-voice-output__error" role="alert">
+                    {error}
+                </p>
+            )}
+        </>
+    );
+}
+
 export interface VoiceOutputSectionProps {
     registry?: SpeechRegistry;
     listVoices?: () => Promise<RankedVoice[]>;
     preview?: (voiceId: string, rate: number) => Promise<void>;
+    neural?: NeuralVoiceControls;
 }
 
 /** Settings > Voice: which voice FNDR speaks with, a preview, and the speed. */
@@ -53,6 +248,7 @@ export function VoiceOutputSection({
     registry = speechRegistry,
     listVoices = () => createSystemEnhancedProvider().voices(),
     preview = (voiceId, rate) => previewVoice(voiceId, { rate }),
+    neural = defaultNeural,
 }: VoiceOutputSectionProps) {
     const ids = useId();
     if (registry === speechRegistry) installOfflineVoices(registry);
@@ -173,6 +369,15 @@ export function VoiceOutputSection({
                     </button>
                 </span>
             </div>
+            {registered.includes("local_neural") && (
+                <NeuralVoiceRow
+                    neural={neural}
+                    voice={settings?.neural_voice ?? ""}
+                    rate={settings?.rate ?? 1}
+                    onVoice={(neural_voice) => save({ neural_voice })}
+                    onInstalled={refreshStatus}
+                />
+            )}
             <div className="sg-setting-row">
                 <span>
                     <strong>

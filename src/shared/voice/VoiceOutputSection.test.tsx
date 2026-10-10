@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpeechProvider, SpeechProviderId } from "./speechProvider";
 import { createSpeechRegistry, type SpeechRegistry } from "./speechRegistry";
 import type { RankedVoice } from "./systemEnhanced";
-import { VoiceOutputSection } from "./VoiceOutputSection";
+import type { TtsStatus } from "@/shared/ipc/tauri";
+import { VoiceOutputSection, type NeuralVoiceControls } from "./VoiceOutputSection";
 
 const mocks = vi.hoisted(() => ({
     get: vi.fn(),
@@ -13,6 +14,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/shared/ipc/tauri", () => ({
     getVoiceOutputSettings: mocks.get,
     setVoiceOutputSettings: mocks.set,
+    ttsStatus: vi.fn(),
+    ttsVoices: vi.fn(),
+    ttsInstall: vi.fn(),
+    ttsRemove: vi.fn(),
+    ttsCancel: vi.fn(),
+    ttsSynthesize: vi.fn(),
 }));
 
 function provider(id: SpeechProviderId, available: { ok: boolean; reason?: string }): SpeechProvider {
@@ -122,5 +129,82 @@ describe("VoiceOutputSection", () => {
             fireEvent.change(speed, { target: { value: "1.5" } });
         });
         expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+    });
+
+    describe("on-device neural voice", () => {
+        const status = (state: TtsStatus["state"], downloadedBytes = 0): TtsStatus => ({
+            state,
+            detail: null,
+            downloadedBytes,
+            totalBytes: 134_000_000,
+            loaded: false,
+        });
+
+        function neural(initial: TtsStatus): NeuralVoiceControls & { current: TtsStatus } {
+            const controls = {
+                current: initial,
+                status: vi.fn(async () => controls.current),
+                voices: vi.fn(async () => ({
+                    voices: [
+                        { id: "af_heart", name: "Heart", accent: "us" as const, gender: "female" as const, grade: "A" },
+                        { id: "bf_emma", name: "Emma", accent: "gb" as const, gender: "female" as const, grade: "B-" },
+                    ],
+                    defaultVoice: "af_heart",
+                })),
+                install: vi.fn(async () => {
+                    controls.current = status("downloading", 67_000_000);
+                    return controls.current;
+                }),
+                remove: vi.fn(async () => {
+                    controls.current = status("not_installed");
+                    return controls.current;
+                }),
+                preview: vi.fn(async () => undefined),
+            };
+            return controls;
+        }
+
+        function renderNeural(controls: NeuralVoiceControls) {
+            registry.registerProvider(provider("local_neural", { ok: false, reason: "not installed" }));
+            registry.registerProvider(provider("system_enhanced", { ok: true }));
+            render(<VoiceOutputSection registry={registry} listVoices={() => Promise.resolve(PREMIUM)} preview={vi.fn()} neural={controls} />);
+        }
+
+        it("asks before downloading, names the size and says it runs on this Mac", async () => {
+            const controls = neural(status("not_installed"));
+            renderNeural(controls);
+            expect(await screen.findByText(/runs fully on this Mac/)).toBeInTheDocument();
+            fireEvent.click(await screen.findByRole("button", { name: "Install (134 MB)" }));
+            expect(controls.install).not.toHaveBeenCalled();
+            expect(screen.getByRole("note")).toHaveTextContent("Hugging Face");
+            fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+            expect(screen.queryByRole("note")).toBeNull();
+            fireEvent.click(screen.getByRole("button", { name: "Install (134 MB)" }));
+            fireEvent.click(screen.getByRole("button", { name: "Download 134 MB" }));
+            await waitFor(() => expect(controls.install).toHaveBeenCalledWith(true));
+            expect(await screen.findByText("50% of 134 MB")).toBeInTheDocument();
+        });
+
+        it("shows the voices once ready, saves the choice, previews and removes", async () => {
+            const controls = neural(status("ready"));
+            renderNeural(controls);
+            const picker = (await screen.findByLabelText("On-device voice")) as HTMLSelectElement;
+            await waitFor(() => expect(picker.options).toHaveLength(2));
+            expect(picker.options[1].textContent).toBe("Emma, British female");
+            fireEvent.change(picker, { target: { value: "bf_emma" } });
+            await waitFor(() => expect(mocks.set).toHaveBeenLastCalledWith(expect.objectContaining({ neural_voice: "bf_emma" })));
+            fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+            expect(controls.preview).toHaveBeenCalledWith("bf_emma", 1);
+            fireEvent.click(screen.getByRole("button", { name: "Remove (134 MB)" }));
+            await waitFor(() => expect(controls.remove).toHaveBeenCalled());
+            expect(await screen.findByRole("button", { name: "Install (134 MB)" })).toBeInTheDocument();
+        });
+
+        it("is hidden where the neural voice is not registered", async () => {
+            registry.registerProvider(provider("system_enhanced", { ok: true }));
+            render(<VoiceOutputSection registry={registry} listVoices={() => Promise.resolve(PREMIUM)} preview={vi.fn()} neural={neural(status("ready"))} />);
+            await screen.findByLabelText("Mac voice");
+            expect(screen.queryByText("On-device neural voice")).toBeNull();
+        });
     });
 });
