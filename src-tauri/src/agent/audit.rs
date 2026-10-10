@@ -579,21 +579,10 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn temp_agent_dir(label: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "fndr-agent-audit-{label}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time")
-                .as_nanos()
-        ));
-        create_dir_all(&base).expect("create temp dir");
-        base
-    }
-
     #[test]
     fn audit_records_round_trip_as_jsonl() {
-        let dir = temp_agent_dir("round-trip");
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let record = AgentAuditRecord {
             run_id: "run-1".to_string(),
             user_goal: "Explain recent context".to_string(),
@@ -602,8 +591,8 @@ mod tests {
             ..Default::default()
         };
 
-        append_agent_audit_record(&dir, &record).expect("append audit");
-        let rows = list_agent_audit_runs(&dir, 10, Some(AgentMode::Ask), None).expect("list audit");
+        append_agent_audit_record(dir, &record).expect("append audit");
+        let rows = list_agent_audit_runs(dir, 10, Some(AgentMode::Ask), None).expect("list audit");
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].run_id, "run-1");
@@ -611,9 +600,10 @@ mod tests {
 
     #[test]
     fn feedback_attaches_to_run_detail() {
-        let dir = temp_agent_dir("feedback");
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         append_agent_audit_record(
-            &dir,
+            dir,
             &AgentAuditRecord {
                 run_id: "run-feedback".to_string(),
                 mode: AgentMode::Plan,
@@ -623,7 +613,7 @@ mod tests {
         )
         .expect("append audit");
         append_feedback(
-            &dir,
+            dir,
             RateResultRequest {
                 run_id: "run-feedback".to_string(),
                 memory_id: Some("mem-1".to_string()),
@@ -633,7 +623,7 @@ mod tests {
         )
         .expect("append feedback");
 
-        let record = get_agent_audit_run(&dir, "run-feedback")
+        let record = get_agent_audit_run(dir, "run-feedback")
             .expect("get audit")
             .expect("record exists");
 
