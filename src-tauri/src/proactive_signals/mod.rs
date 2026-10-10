@@ -30,6 +30,8 @@ static SENT_MUTATION: Mutex<()> = Mutex::new(());
 pub const STUCK_CHECK_EVERY: Duration = Duration::from_secs(120);
 /// Seen threads are compared with new captures this often.
 pub const THREAD_CHECK_EVERY: Duration = Duration::from_secs(1800);
+/// The calendar is read this often while calendar meeting prep is on.
+pub const CALENDAR_CHECK_EVERY: Duration = Duration::from_secs(60);
 
 /// A signal runs only when switched on and outside Private Mode.
 pub fn signal_allowed(enabled: bool, incognito: bool) -> bool {
@@ -72,6 +74,7 @@ pub fn claim_once_today(store: &StateStore, issue: &str, day: &str) -> Result<bo
 pub struct SignalClock {
     stuck: Option<Instant>,
     threads: Option<Instant>,
+    calendar: Option<Instant>,
 }
 
 fn due(last: &mut Option<Instant>, every: Duration) -> bool {
@@ -80,6 +83,21 @@ fn due(last: &mut Option<Instant>, every: Duration) -> bool {
     }
     *last = Some(Instant::now());
     true
+}
+
+/// The meetings, keyed by an issue such as `calendar:<event>@<start>`, that
+/// prep is due for now and that `claim` has not seen: each issue fires once.
+pub fn claim_due_meetings(
+    meetings: Vec<(String, meeting_prep::UpcomingMeeting)>,
+    now_ms: i64,
+    mut claim: impl FnMut(&str) -> bool,
+) -> Vec<meeting_prep::UpcomingMeeting> {
+    meetings
+        .into_iter()
+        .filter(|(_, meeting)| meeting_prep::prep_due(meeting, now_ms))
+        .filter(|(issue, _)| claim(issue))
+        .map(|(_, meeting)| meeting)
+        .collect()
 }
 
 /// One pass of the background loop: each signal that is switched on and due
@@ -107,20 +125,47 @@ pub async fn run_due(app: &AppHandle, state: &AppState, clock: &mut SignalClock)
     }
 
     if signal_allowed(switches.meeting_prep, incognito) {
-        let recording = crate::meeting::recorder_status()
-            .ok()
-            .and_then(|status| meeting_prep::from_recording(&status));
-        if let Some((meeting_id, meeting)) = recording {
-            if meeting_prep::prep_due(&meeting, now_ms) && claim(&format!("meeting:{meeting_id}")) {
-                if let Some(thread) = meeting_prep::related_thread(state, &meeting.title).await {
-                    let (title, body) = meeting_prep::prep_toast(&thread.title);
-                    let target = NotificationTarget {
-                        memory_id: None,
-                        thread_key: Some(thread.key),
-                    };
-                    send_with_target(app, state, "meeting_prep", &title, &body, &target);
-                }
+        let mut meetings: Vec<(String, meeting_prep::UpcomingMeeting)> =
+            crate::meeting::recorder_status()
+                .ok()
+                .and_then(|status| meeting_prep::from_recording(&status))
+                .map(|(meeting_id, meeting)| (format!("meeting:{meeting_id}"), meeting))
+                .into_iter()
+                .collect();
+        if switches.calendar_meeting_prep && due(&mut clock.calendar, CALENDAR_CHECK_EVERY) {
+            let selected = switches.calendar_ids.clone();
+            let from_calendar = tokio::task::spawn_blocking(move || {
+                calendar::due_meetings(
+                    &eventkit::EventKitCalendar,
+                    true,
+                    incognito,
+                    &selected,
+                    now_ms,
+                )
+            })
+            .await
+            .unwrap_or_default();
+            meetings.extend(
+                from_calendar
+                    .into_iter()
+                    .map(|(event, meeting)| (format!("calendar:{event}"), meeting)),
+            );
+        }
+        for meeting in claim_due_meetings(meetings, now_ms, &claim) {
+            let Some(thread) = meeting_prep::related_thread(state, &meeting.title).await else {
+                continue;
+            };
+            // A recording of a calendar meeting is the same meeting: one
+            // toast per related thread a day.
+            if !claim(&format!("meeting_thread:{}", thread.key)) {
+                continue;
             }
+            let (title, body) = meeting_prep::prep_toast(&thread.title);
+            let target = NotificationTarget {
+                memory_id: None,
+                thread_key: Some(thread.key),
+            };
+            send_with_target(app, state, "meeting_prep", &title, &body, &target);
         }
     }
 
@@ -179,5 +224,66 @@ mod tests {
         let store = StateStore::new(dir.path()).unwrap();
         assert!(!claim_once_today(&store, "stuck:a", "2026-10-09").unwrap());
         assert!(claim_once_today(&store, "stuck:a", "2026-10-10").unwrap());
+    }
+
+    #[test]
+    fn a_calendar_meeting_fires_once_per_event_and_not_twice() {
+        use calendar::tests::{event, FakeCalendar, MIN, NOW};
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::new(dir.path()).unwrap();
+        let fake = FakeCalendar::granted(vec![
+            event("hiring", "work", "Hiring sync", 4),
+            event("design", "work", "Design review", 1),
+        ]);
+        let pass = |now_ms: i64| {
+            let meetings = calendar::due_meetings(&fake, true, false, &[], now_ms)
+                .into_iter()
+                .map(|(event, meeting)| (format!("calendar:{event}"), meeting))
+                .collect();
+            claim_due_meetings(meetings, now_ms, |issue| {
+                claim_once_today(&store, issue, "2026-10-09").unwrap()
+            })
+        };
+        let first: Vec<String> = pass(NOW).into_iter().map(|m| m.title).collect();
+        assert_eq!(first, vec!["Hiring sync", "Design review"]);
+        assert!(pass(NOW).is_empty(), "the same events never fire twice");
+        assert!(pass(NOW + MIN).is_empty(), "nor on the next pass");
+    }
+
+    #[test]
+    fn private_mode_suppresses_calendar_meeting_prep() {
+        use calendar::tests::{event, FakeCalendar, NOW};
+        let fake = FakeCalendar::granted(vec![event("hiring", "work", "Hiring sync", 4)]);
+        let mut claimed = Vec::new();
+        let meetings = calendar::due_meetings(&fake, true, true, &[], NOW)
+            .into_iter()
+            .map(|(event, meeting)| (format!("calendar:{event}"), meeting))
+            .collect();
+        let due = claim_due_meetings(meetings, NOW, |issue| {
+            claimed.push(issue.to_string());
+            true
+        });
+        assert!(due.is_empty());
+        assert!(claimed.is_empty(), "nothing is claimed in Private Mode");
+        assert_eq!(fake.reads.get(), 0, "and the calendar is not read");
+    }
+
+    #[test]
+    fn a_meeting_not_yet_due_is_not_claimed() {
+        let mut claimed = Vec::new();
+        let later = meeting_prep::UpcomingMeeting {
+            title: "Design review".into(),
+            starts_at: 1_800_000_000_000 + 20 * 60_000,
+        };
+        let due = claim_due_meetings(
+            vec![("calendar:later".into(), later)],
+            1_800_000_000_000,
+            |issue| {
+                claimed.push(issue.to_string());
+                true
+            },
+        );
+        assert!(due.is_empty());
+        assert!(claimed.is_empty(), "a later pass can still fire it");
     }
 }

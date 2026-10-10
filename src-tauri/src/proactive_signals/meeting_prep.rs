@@ -1,10 +1,10 @@
 //! Meeting prep: the Resume Work thread related to a meeting, shown as the
 //! meeting begins.
 //!
-//! FNDR has no calendar. The only meeting it knows about ahead of time is
-//! none; the one it knows about at all is a recording the person starts.
-//! The matching runs on an abstract [`UpcomingMeeting`] so a calendar source
-//! can feed it later without changes here.
+//! Two sources feed it an [`UpcomingMeeting`]: a recording the person starts
+//! in FNDR, and, when switched on, the calendar on this Mac
+//! (`super::calendar`, ADR 029), which is what makes prep arrive before a
+//! meeting.
 
 use crate::meeting::MeetingRecorderStatus;
 use crate::resume::ResumeThread;
