@@ -32,6 +32,18 @@ const ipcMocks = vi.hoisted(() => ({
     computerUseRespond: vi.fn(),
     computerUseStop: vi.fn(),
     codexLoginStart: vi.fn(),
+    NOTCH_DO_ESCAPE_EVENT: "notch-do://escape",
+    getNotchDoMuted: vi.fn(),
+    setNotchDoMuted: vi.fn(),
+    setNotchEscapeMonitor: vi.fn(),
+    voiceOutStatus: vi.fn(),
+    voiceOutVoices: vi.fn(),
+    voiceOutStart: vi.fn(),
+    voiceOutSpeak: vi.fn(),
+    voiceOutCancel: vi.fn(),
+    voiceOutStop: vi.fn(),
+    resolveWorkSet: vi.fn(),
+    openWorkSet: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => eventMocks);
@@ -41,6 +53,8 @@ vi.mock("@/shared/utils/openExternalUrl", () => ({ openExternalUrl: vi.fn().mock
 vi.mock("@/shared/ipc/tauri", () => ipcMocks);
 
 import type { MemoryCard } from "@/shared/ipc/tauri";
+import { speechRegistry } from "@/shared/voice/speechRegistry";
+import { createWebviewBasicProvider } from "@/shared/voice/webviewBasic";
 import { NotchHud } from "./NotchHud";
 
 const geometry = {
@@ -100,7 +114,8 @@ class FakeMediaRecorder {
     }
 }
 
-const handlers = new Map<string, (event: { payload: unknown }) => void>();
+/** Every listener per event: the notch listens to `voice://state` twice (the open mic and the stop-word spotter). */
+const handlers = new Map<string, Set<(event: { payload: unknown }) => void>>();
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -115,7 +130,7 @@ function deferred<T>() {
 /** Fire a backend event the way the Rust side emits it. */
 function emit(event: string, payload: unknown) {
     act(() => {
-        handlers.get(event)?.({ payload });
+        handlers.get(event)?.forEach((handler) => handler({ payload }));
     });
 }
 
@@ -140,8 +155,10 @@ describe("NotchHud", () => {
             configurable: true,
         });
         eventMocks.listen.mockImplementation((event: string, handler: never) => {
-            handlers.set(event, handler);
-            return Promise.resolve(() => handlers.delete(event));
+            const set = handlers.get(event) ?? new Set();
+            set.add(handler);
+            handlers.set(event, set);
+            return Promise.resolve(() => void set.delete(handler));
         });
         ipcMocks.getNotchHudGeometry.mockResolvedValue(geometry);
         ipcMocks.setNotchHudHitRect.mockResolvedValue(undefined);
@@ -170,6 +187,11 @@ describe("NotchHud", () => {
         ipcMocks.computerUseRespond.mockResolvedValue(undefined);
         ipcMocks.computerUseStop.mockResolvedValue(undefined);
         ipcMocks.codexLoginStart.mockResolvedValue({ loginId: "l1", authUrl: "https://auth.openai.com/x" });
+        ipcMocks.getNotchDoMuted.mockResolvedValue(false);
+        ipcMocks.setNotchDoMuted.mockImplementation(async (muted: boolean) => muted);
+        ipcMocks.setNotchEscapeMonitor.mockResolvedValue(undefined);
+        ipcMocks.voiceOutStatus.mockResolvedValue({ state: "signed_out", detail: null, usedPercent: null, fallbackAbovePercent: 95, connected: false });
+        ipcMocks.voiceOutStop.mockResolvedValue(undefined);
         let voiceSession = 0;
         coreMocks.invoke.mockImplementation((command: string) =>
             Promise.resolve(command === "voice_start" ? { sessionId: `v${++voiceSession}` } : undefined),
@@ -542,7 +564,8 @@ describe("NotchHud", () => {
             voice({ kind: "final", text: REQUEST });
             await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
             planned(false);
-            expect(await screen.findByText(/Ready\. Tap Start/)).toBeInTheDocument();
+            expect(await screen.findByText(/Ready\. Press Start/)).toBeInTheDocument();
+            expect(screen.getByRole("button", { name: "Start" })).toHaveFocus();
             await new Promise((resolve) => setTimeout(resolve, 1800));
             expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
 
@@ -550,17 +573,83 @@ describe("NotchHud", () => {
             await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"));
         });
 
-        it("saying stop mid-run kills the run before the utterance ends", async () => {
+        async function toWorking() {
             await openDo();
             voice({ kind: "final", text: REQUEST });
             await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
             planned();
             emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
-            await waitFor(() => expect(coreMocks.invoke.mock.calls.filter(([c]) => c === "voice_start").length).toBe(2));
+            await waitFor(() =>
+                expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "stop_words" }),
+            );
+        }
 
-            voice({ kind: "partial", text: "stop" });
+        it("listens only for the stop word once the request ends, and the stop word kills the run", async () => {
+            await toWorking();
+            voice({ kind: "listening", level: 0 });
+            voice({ kind: "stop_word" });
             await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
-            expect(await screen.findByText("Stopped.")).toBeInTheDocument();
+            expect(await screen.findByText("Stopped. Nothing else will run.")).toBeInTheDocument();
+        });
+
+        it("shows nothing of speech heard while working, only the cue, and keeps typing off", async () => {
+            await toWorking();
+            voice({ kind: "speech_ignored" });
+            voice({ kind: "partial", text: "actually open Music" });
+            expect(await screen.findByText("Working on it. Say stop to interrupt.")).toBeInTheDocument();
+            expect(screen.queryByText(/actually open Music/)).not.toBeInTheDocument();
+            expect(screen.queryByRole("alertdialog", { name: "Switch request" })).not.toBeInTheDocument();
+            expect(ipcMocks.computerUsePlan).toHaveBeenCalledTimes(1);
+            const typed = screen.getByLabelText("Instruction for FNDR");
+            expect(typed).toBeDisabled();
+            expect(typed).toHaveAttribute("placeholder", "Working. Stop first to ask something new.");
+        });
+
+        it("marks each turn for its visual state and keeps the status a live region", async () => {
+            await openDo();
+            const root = () => document.querySelector(".notch-operator") as HTMLElement;
+            expect(root()).toHaveAttribute("data-turn", "listening");
+            expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+            voice({ kind: "partial", text: "open Spotify" });
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "hearing"));
+            voice({ kind: "final", text: REQUEST });
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "thinking"));
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            planned(false);
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "awaiting_start"));
+            emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "working"));
+            expect(screen.getByText("Mic off while working. Say stop to interrupt")).toBeInTheDocument();
+            emit("computer-use://event", { kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Buy" });
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "awaiting_approval"));
+            fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+            await waitFor(() => expect(root()).toHaveAttribute("data-turn", "interrupted"));
+        });
+
+        it("watches Esc outside the notch while working, and that Esc stops the run", async () => {
+            await toWorking();
+            await waitFor(() => expect(ipcMocks.setNotchEscapeMonitor).toHaveBeenCalledWith(true));
+            emit("notch-do://escape", null);
+            await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+            await waitFor(() => expect(ipcMocks.setNotchEscapeMonitor).toHaveBeenCalledWith(false));
+        });
+
+        it("Esc in the notch stops a run instead of closing it", async () => {
+            await toWorking();
+            fireEvent.keyDown(screen.getByLabelText("Instruction for FNDR"), { key: "Escape" });
+            await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+            expect(ipcMocks.setNotchHudKeyboard).not.toHaveBeenCalledWith(false);
+            expect(await screen.findByText("Stopped. Nothing else will run.")).toBeInTheDocument();
+        });
+
+        it("Alt+N during a run stops it and stays open; the next Alt+N closes the panel", async () => {
+            await toWorking();
+            emit("notch-hud://summon", false);
+            await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
+            expect(await screen.findByText("Stopped. Nothing else will run.")).toBeInTheDocument();
+            expect(ipcMocks.setNotchHudKeyboard).not.toHaveBeenCalledWith(false);
+            emit("notch-hud://summon", false);
+            await waitFor(() => expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(false));
         });
 
         it("cancels the plan card on Cancel", async () => {
@@ -589,6 +678,7 @@ describe("NotchHud", () => {
             expect(await screen.findByRole("alertdialog", { name: "Approve action" })).toHaveTextContent(
                 'Okay to type "hello" in Notes?',
             );
+            expect(screen.getByRole("button", { name: "Don't" })).toHaveFocus();
             fireEvent.click(screen.getByRole("button", { name: "Don't" }));
             await waitFor(() => expect(ipcMocks.computerUseRespond).toHaveBeenCalledWith("req-2", false));
 
@@ -604,6 +694,7 @@ describe("NotchHud", () => {
 
             emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done." });
             const typed = screen.getByLabelText("Instruction for FNDR");
+            await waitFor(() => expect(typed).not.toBeDisabled());
             fireEvent.change(typed, { target: { value: "close the window" } });
             fireEvent.submit(typed.closest("form") as HTMLFormElement);
             await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalledWith("close the window"));
@@ -635,7 +726,8 @@ describe("NotchHud", () => {
         describe("spoken progress", () => {
             class FakeUtterance {
                 onend: (() => void) | null = null;
-                onerror: (() => void) | null = null;
+                onerror: ((event: { error: string }) => void) | null = null;
+                rate = 1;
                 constructor(public text: string) {}
             }
             let spoken: FakeUtterance[];
@@ -651,7 +743,7 @@ describe("NotchHud", () => {
                 cancel: vi.fn(() => {
                     const u = current;
                     current = null;
-                    u?.onerror?.();
+                    u?.onerror?.({ error: "canceled" });
                 }),
             };
             const said = () => spoken.map((u) => u.text);
@@ -663,7 +755,16 @@ describe("NotchHud", () => {
                 synth.cancel.mockClear();
                 vi.stubGlobal("SpeechSynthesisUtterance", FakeUtterance);
                 Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true });
-                window.localStorage.removeItem("fndr.notch.do.muted");
+                // The ChatGPT voice has no WebRTC here and the Mac voice lists no voices, so the registry falls back to this one.
+                speechRegistry.registerProvider({
+                    id: "system_enhanced",
+                    label: "Mac voice",
+                    available: async () => ({ ok: false, reason: "No system voice is installed." }),
+                    speak: () => Promise.resolve(),
+                    cancel: () => undefined,
+                    speaking: () => false,
+                });
+                speechRegistry.registerProvider(createWebviewBasicProvider());
             });
 
             afterEach(() => {
@@ -724,18 +825,17 @@ describe("NotchHud", () => {
                 await toRunning();
                 emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
                 await waitFor(() => expect(coreMocks.invoke.mock.calls.filter(([c]) => c === "voice_start").length).toBe(2));
-                voice({ kind: "partial", text: "stop" });
+                await waitFor(() =>
+                    expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "stop_words" }),
+                );
+                voice({ kind: "stop_word" });
                 await waitFor(() => expect(ipcMocks.computerUseStop).toHaveBeenCalled());
-                expect(synth.speaking).toBe(false);
+                await waitFor(() => expect(said()[said().length - 1]).toBe("Stopped."));
             });
 
-            it("does not take its own voice for a new request", async () => {
+            it("names who is speaking under the caption", async () => {
                 await toRunning();
-                await waitFor(() => expect(synth.speak).toHaveBeenCalled());
-                voice({ kind: "final", text: "understood 3 steps starting" });
-                await new Promise((resolve) => setTimeout(resolve, 1500));
-                expect(screen.queryByText(/Heard this/)).not.toBeInTheDocument();
-                expect(ipcMocks.computerUsePlan).toHaveBeenCalledTimes(1);
+                expect(await screen.findByText(/^On-device voice/)).toBeInTheDocument();
             });
 
             it("mute silences speech now and keeps it off, and the switch comes back", async () => {
@@ -747,7 +847,9 @@ describe("NotchHud", () => {
                 emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 0, attempt: 1 });
                 await new Promise((resolve) => setTimeout(resolve, 50));
                 expect(synth.speak).not.toHaveBeenCalled();
-                expect(window.localStorage.getItem("fndr.notch.do.muted")).toBe("1");
+                expect(ipcMocks.setNotchDoMuted).toHaveBeenCalledWith(true);
+                // The caption stays on screen while muted.
+                expect(screen.getByText("Step one of three: Open Spotify.")).toBeInTheDocument();
                 expect(screen.getByRole("button", { name: "Unmute voice" })).toBeInTheDocument();
             });
 

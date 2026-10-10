@@ -108,6 +108,10 @@ export function NotchHud() {
     const askSeq = useRef(0);
     const previousStage = useRef<NotchStage>("closed");
     const voiceRef = useRef<VoiceCapture | null>(null);
+    /** Notch Do's interrupt: true when it stopped a run or cut speech. */
+    const doInterruptRef = useRef<(() => boolean) | null>(null);
+    const stageRef = useRef<NotchStage>("closed");
+    stageRef.current = stage;
     // Read by `ask`, which runs from async callbacks (a finished recording)
     // where the render's own `turns` may already be a generation behind.
     const turnsRef = useRef<ConversationTurn[]>([]);
@@ -304,8 +308,10 @@ export function NotchHud() {
 
     // Alt+N opens the panel in Do mode, which starts listening (Do shows only
     // once Operate my Mac is on; otherwise this is Ask), and closes it when
-    // pressed again.
+    // pressed again. During a Do run it stops the run and leaves the panel on
+    // "Stopped"; the next press closes it (ADR 020 amendment, 2026-10-09).
     useTauriEvent<boolean>(NOTCH_HUD_SUMMON_EVENT, (open) => {
+        if (stageRef.current === "open" && doInterruptRef.current?.()) return;
         if (!open) {
             closePanel();
             return;
@@ -616,6 +622,8 @@ export function NotchHud() {
         (event: React.KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
+                // In Do, Esc is Stop while FNDR works or reads out the result.
+                if (doInterruptRef.current?.()) return;
                 // Esc backs out one layer: first the thread, then the panel.
                 if (conversing) {
                     setTurns([]);
@@ -723,7 +731,7 @@ export function NotchHud() {
                                 />
                             ) : null}
                             {mode === "do" && operateEnabled ? (
-                                <NotchOperator active={stage === "open"} />
+                                <NotchOperator active={stage === "open"} interruptRef={doInterruptRef} />
                             ) : (
                             <>
                             <VoiceBeam
