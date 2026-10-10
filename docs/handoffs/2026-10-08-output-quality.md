@@ -13,11 +13,11 @@ Every sentence FNDR shows is a finished, neutral statement backed by the capture
 | Did search or ranking regress? | `make qa-retrieval-check PERSONA=<name>` for the three personas | PASS on all three |
 | Did summaries, voice, labels or the strong-match rule regress on real data? | `make qa-vault` | PASS, 12 checks |
 | Do task suggestions still need evidence? | `cd src-tauri && cargo test --test task_suggestions`, `cargo run --example task_suggestion_eval` | 29 tests; 30 of 30 screens |
-| Does my Rust change stand without other sessions' work? | `make test-clean FILES="<files>"` | all but the two tests named below |
+| Does my Rust change stand without other sessions' work? | `make test-clean FILES="<files>"` | all green |
 
 Working rules for this checkout are in `AGENTS.md` ("Shared checkout and shipping"). Decisions are rows in `docs/team/decision-log.md`.
 
-Two library tests fail for reasons outside this lane and have a task filed: `ipc::commands::agent::action_lifecycle_tests::propose_then_approve_then_execute_runs_the_command_and_records_the_result` (needs a git checkout, so it fails in the scratch copy) and `mcp::tests::hermes_token_is_limited_by_the_server_to_its_four_read_tools` (passes on some runs and fails on others).
+The two library tests that used to fail here (the action lifecycle test outside a git checkout, and the Hermes token test on some runs) are fixed; see `2026-10-08-test-determinism.md`.
 
 ## What the product does now
 
