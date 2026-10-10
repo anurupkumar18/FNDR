@@ -30,6 +30,7 @@ pub mod memory_journey;
 pub mod memory_quality;
 pub mod memory_review;
 pub mod models;
+pub mod notify;
 pub mod ocr;
 pub mod operator;
 pub mod privacy;
