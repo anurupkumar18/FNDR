@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "downloads about 112 MB from Hugging Face and GitHub"]
+    #[ignore = "downloads about 134 MB from Hugging Face and GitHub"]
     async fn real_install_downloads_and_verifies_every_file() {
         let app_data = real_app_data();
         install::begin(true).unwrap();
@@ -359,8 +359,86 @@ mod tests {
         .unwrap();
         assert!(oov.starts_with("ðə flˌɪbəɹTiʤˈɪbət "), "{oov}");
         assert!(oov.contains(" ðə kwɪksˈɑTɪk "), "{oov}");
-        assert_eq!(oov.split(' ').count(), 5, "{oov}");
+        assert_eq!(oov.split(' ').count(), 6, "{oov}");
         assert!(!oov.contains('❓'));
+    }
+
+    fn peak_rss_mb() -> u64 {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        usage.ru_maxrss as u64 / 1_000_000
+    }
+
+    /// Timings and the owner's listening samples. `FNDR_KOKORO_SAMPLES` is
+    /// where the WAVs go; `FNDR_KOKORO_MODEL` swaps in another ONNX export.
+    #[test]
+    #[ignore = "needs the downloaded model; writes WAVs to FNDR_KOKORO_SAMPLES"]
+    fn measure_and_write_samples() {
+        let dir = real_dir().expect("run real_install_downloads_and_verifies_every_file first");
+        let out =
+            PathBuf::from(std::env::var("FNDR_KOKORO_SAMPLES").expect("set FNDR_KOKORO_SAMPLES"));
+        std::fs::create_dir_all(&out).unwrap();
+        let model = std::env::var("FNDR_KOKORO_MODEL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dir.join(install::MODEL_FILE));
+        let started = Instant::now();
+        let mut engine = Engine::load(&model, threads()).unwrap();
+        let load_ms = started.elapsed().as_millis();
+        let started = Instant::now();
+        let g2p = load_g2p(&dir, false).unwrap();
+        let dict_ms = started.elapsed().as_millis();
+        let pack = VoicePack::load(&install::voice_path(&dir, "af_heart")).unwrap();
+        let speak = |engine: &mut Engine, text: &str| {
+            let started = Instant::now();
+            let phonemes = g2p.phonemize(&normalize::normalize(text));
+            let g2p_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let mut samples = Vec::new();
+            for piece in vocab::split_for_model(&phonemes) {
+                samples.extend(
+                    engine
+                        .synthesize(&vocab::encode(&piece), &pack, 1.0)
+                        .unwrap(),
+                );
+            }
+            (
+                samples,
+                g2p_ms,
+                started.elapsed().as_secs_f64() * 1000.0,
+                phonemes,
+            )
+        };
+        let (_, _, cold_ms, _) = speak(&mut engine, "Hello there.");
+        let (_, _, warm_short_ms, _) = speak(&mut engine, "Hello there.");
+        let samples_text: &[(&str, &str)] = &[
+            ("1-greeting", "Hi, I'm FNDR. Good morning!"),
+            ("2-answer", "You worked on the quarterly report for about two hours yesterday. The last edit was the budget table, just before your call with the design team. You left a note to send it to Priya by Friday."),
+            ("3-numbers-dates", "On 2026-10-09 at 3:45 pm, the invoice for $1,249.99 was 15% over the 2nd estimate; 42 of 1,000 files changed in version 2.1.3."),
+            ("4-names", "Siobhan, Nguyen, Joaquin and Dr. Krystle O'Brien met Xavier Tchaikovsky at the Wrexham office."),
+            ("5-oov", "Open Kubernetes in VSCode, then run npm install and check PostgreSQL, snarfblat and zorbled logs."),
+        ];
+        let mut report = format!(
+            "model {}\nload {load_ms} ms, us dictionaries {dict_ms} ms, threads {}\ncold first short line (synth only, model loaded) {cold_ms:.0} ms, warm {warm_short_ms:.0} ms\n",
+            model.display(),
+            threads()
+        );
+        for (name, text) in samples_text {
+            let (samples, g2p_ms, total_ms, phonemes) = speak(&mut engine, text);
+            let audio_ms = engine::duration_ms(samples.len()) as f64;
+            let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+            let clipped = samples.iter().filter(|s| s.abs() >= 0.999).count();
+            let words = text.split_whitespace().count() as f64;
+            std::fs::write(out.join(format!("{name}.wav")), engine::wav_bytes(&samples)).unwrap();
+            report.push_str(&format!(
+                "{name}: audio {audio_ms:.0} ms ({:.0} wpm), synth {total_ms:.0} ms (g2p {g2p_ms:.1} ms), rtf {:.3}, rms {:.3}, peak {peak:.3}, clipped {clipped}\n  {phonemes}\n",
+                words / (audio_ms / 60_000.0),
+                total_ms / audio_ms,
+                rms(&samples)
+            ));
+            assert!(rms(&samples) > 0.01, "{name} is silent");
+        }
+        report.push_str(&format!("peak rss {} MB\n", peak_rss_mb()));
+        std::fs::write(out.join("report.txt"), &report).unwrap();
+        eprintln!("{report}");
     }
 
     #[test]
