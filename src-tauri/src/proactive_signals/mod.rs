@@ -2,9 +2,13 @@
 //! thread since it was last viewed, and meeting prep. Each runs on device
 //! from stored memories, honors Private Mode and the blocklist, and reaches
 //! the person through `notify` (a toast, and a banner with fixed text).
+//! Meeting prep also reads the calendar on this Mac when switched on
+//! (`calendar`, ADR 029).
 
+pub mod calendar;
 #[cfg(test)]
 mod eval;
+pub mod eventkit;
 pub mod meeting_prep;
 pub mod stuck;
 pub mod thread_digest;
