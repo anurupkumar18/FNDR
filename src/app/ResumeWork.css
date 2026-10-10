@@ -9,6 +9,8 @@
     text-align: left;
     font-family: var(--film-font-ui);
     overflow-wrap: anywhere;
+    /* The secondary token measured 4.12:1 on these cards in light; this holds 4.5:1 in both themes. */
+    --home-quiet: color-mix(in srgb, var(--text-secondary) 70%, var(--text-primary));
 }
 
 .home-work-options {
@@ -16,7 +18,11 @@
     align-items: center;
     gap: 8px;
     align-self: flex-end;
-    color: var(--text-secondary);
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    color: var(--text-primary);
     font-size: 12px;
 }
 .home-work-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
@@ -49,12 +55,12 @@
 
 .home-work h2 { margin: 0; font-size: 19px; line-height: 1.35; }
 .home-work h3 { margin: 0; font-size: 16px; line-height: 1.4; }
-.home-work h4 { margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.home-work h4 { margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--home-quiet); }
 .home-work p { margin: 8px 0; font-size: 14px; line-height: 1.5; }
-.home-quiet { color: var(--text-secondary); }
+.home-quiet { color: var(--home-quiet); }
 .resume-work-header p,
 .resume-work-thread-heading span,
-.resume-work-next > span { color: var(--text-secondary); font-size: 12px; }
+.resume-work-next > span { color: var(--home-quiet); font-size: 12px; }
 .resume-work-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .home-work button {
     min-height: 36px;
@@ -83,7 +89,7 @@
 .home-set-list > li > .home-quiet { margin: 2px 0 0; font-size: 12px; }
 .resume-work-next { margin-top: 14px; padding-left: 12px; border-left: 2px solid var(--border); }
 .resume-work-next p { margin-top: 4px; }
-.resume-work-empty { color: var(--text-secondary); }
+.resume-work-empty { color: var(--home-quiet); }
 
 .thread-changes { margin: 6px 0 0; }
 .thread-changes-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -95,16 +101,16 @@
     font-size: 13px;
     text-align: left;
 }
-.home-work .thread-changes-toggle::after { content: " ▸"; color: var(--text-secondary); }
+.home-work .thread-changes-toggle::after { content: " ▸"; color: var(--home-quiet); }
 .home-work .thread-changes-toggle[aria-expanded="true"]::after { content: " ▾"; }
-.home-work .thread-changes-dismiss { min-height: 32px; border-color: transparent; background: transparent; color: var(--text-secondary); }
+.home-work .thread-changes-dismiss { min-height: 32px; border-color: transparent; background: transparent; color: var(--home-quiet); }
 .thread-changes-list { padding: 2px 0 0 10px; }
 .thread-changes-list ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
-.thread-changes-list p { margin: 2px 0; font-size: 12px; color: var(--text-secondary); }
+.thread-changes-list p { margin: 2px 0; font-size: 12px; color: var(--home-quiet); }
 
 .save-set { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .save-set-form { flex-basis: 100%; }
-.save-set-form label { font-size: 12px; color: var(--text-secondary); }
+.save-set-form label { font-size: 12px; color: var(--home-quiet); }
 .save-set-form input {
     min-height: 36px;
     min-width: 0;
