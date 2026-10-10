@@ -50,4 +50,5 @@ Decided: the personal-surface list for task suggestions stays a fixed list. A se
 5. To-dos hides a suggestion from a blocked app; a task the person accepted from that app stays, by decision, because it is theirs.
 6. VS-88: the BGE prompts wait for ADR 019 to pick the chunk model.
 7. 6 of 158 primary vectors have drifted slightly from their text; they can be refreshed with the next rewrite of the vault.
-8. The To-dos empty state on the real profile and the session row's counts line have been seen in tests and the UI preview, not in the native window.
+8. The session row's counts, earlier line and cross-app link were looked at in the UI preview (`ui-preview.html`, whose sample data now has such a session) and the link's jump was clicked there. The native window has not been checked.
+9. VS-20 is measured on the M1: retrieve p95 481 ms at 10,000 memories (`docs/evidence/W04/vs-20-scale-m1.md`). The margin is thin.
