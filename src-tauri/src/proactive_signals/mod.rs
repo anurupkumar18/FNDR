@@ -8,6 +8,7 @@
 pub mod calendar;
 #[cfg(test)]
 mod eval;
+pub mod eventkit;
 pub mod meeting_prep;
 pub mod stuck;
 pub mod thread_digest;
