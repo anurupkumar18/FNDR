@@ -1,0 +1,54 @@
+.work-set { margin-top: 10px; }
+.work-set button {
+    min-height: 36px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.work-set button:hover:not(:disabled) { background: var(--surface-hover); }
+.work-set button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.work-set button:disabled { opacity: 0.6; cursor: default; }
+.work-set .work-set-open,
+.work-set .work-set-primary {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    font-weight: 600;
+}
+.work-set-panel {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--surface-elevated) 70%, transparent);
+}
+.work-set-note { margin: 6px 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.work-set-panel .work-set-note:first-child { margin-top: 0; color: var(--text-primary); font-weight: 600; }
+.work-set-items { list-style: none; margin: 0; padding: 0; }
+.work-set-items > li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    padding: 7px 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.45;
+}
+.work-set-items > li:first-child { border-top: 0; }
+.work-set-label { min-width: 0; overflow-wrap: anywhere; }
+.work-set-status { color: var(--text-secondary); font-size: 12px; text-align: right; }
+.work-set-detail { grid-column: 1 / -1; color: var(--text-secondary); font-size: 12px; }
+.work-set-items > li[data-status="opened"] .work-set-status,
+.work-set-items > li[data-status="moved"] .work-set-status { color: var(--text-primary); }
+.work-set-items > li[data-status="needs_permission"] .work-set-status,
+.work-set-items > li[data-status="failed"] .work-set-status { color: var(--accent); font-weight: 600; }
+.work-set-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.work-set-actions .work-set-note { margin: 0; }
+
+@media (max-width: 480px) {
+    .work-set-items > li { grid-template-columns: minmax(0, 1fr); }
+    .work-set-status { text-align: left; }
+}
