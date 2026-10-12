@@ -68,7 +68,10 @@ beforeEach(() => {
     resumeRows = [[thread()]];
     route();
 });
-afterEach(cleanup);
+afterEach(() => {
+    cleanup();
+    localStorage.clear();
+});
 
 describe("Resume Work on Home", () => {
     it("loads recent work through the existing IPC and opens exact cited memories", async () => {
@@ -88,6 +91,26 @@ describe("Resume Work on Home", () => {
         fireEvent.click(screen.getByRole("button", { name: "Open Vault" }));
         expect(onOpenVault).toHaveBeenCalledOnce();
         expect(calls("resume_work")).toHaveLength(1);
+    });
+
+    it("leaves out the sections the person turned off in Settings", async () => {
+        localStorage.setItem("fndr-home-sections", JSON.stringify({ deadlines: false, sets: false }));
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+
+        await screen.findByText("Fixed weekday aliases");
+        expect(screen.queryByText("Nothing is due in the next three days.")).toBeNull();
+        expect(screen.queryByRole("region", { name: /your sets/i })).toBeNull();
+        expect(calls("resume_work")).toHaveLength(1);
+    });
+
+    it("shows nothing and loads nothing when every section is off", () => {
+        localStorage.setItem(
+            "fndr-home-sections",
+            JSON.stringify({ routine: false, deadlines: false, threads: false, sets: false }),
+        );
+        const { container } = render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        expect(container).toBeEmptyDOMElement();
+        expect(calls("resume_work")).toHaveLength(0);
     });
 
     it("never resolves or opens a set on page load", async () => {

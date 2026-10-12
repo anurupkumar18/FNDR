@@ -1,3 +1,4 @@
+import { HOME_SECTIONS, setHomeSection, useHomeSections } from "@/shared/home/homeSections";
 import { SettingsTabList, SettingsTabPanel, type SettingsTab } from "./SettingsTabs";
 import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
@@ -174,6 +175,7 @@ export function ControlPanel({
     evalUi: _evalUi = false,
 }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
+    const homeSections = useHomeSections();
     const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
     const [tabDirection, setTabDirection] = useState<"forward" | "back">("forward");
     const panelContentRef = useRef<HTMLDivElement>(null);
@@ -545,6 +547,26 @@ export function ControlPanel({
                             )}
 
                             <SettingsTabPanel idPrefix={TABS_ID} id="general" active={settingsTab === "general"} direction={tabDirection}>
+                                <section className="panel-section settings-section--home" aria-labelledby="settings-home-title">
+                                    <h3 id="settings-home-title">Home</h3>
+                                    <p className="section-hint">Choose what appears below the search on Home. The rest scrolls into view.</p>
+                                    {HOME_SECTIONS.map((section) => (
+                                        <label key={section.id} className="settings-switch-row">
+                                            <span>
+                                                {section.label}
+                                                <small className="settings-switch-hint">{section.hint}</small>
+                                            </span>
+                                            <input
+                                                type="checkbox"
+                                                role="switch"
+                                                className="settings-switch"
+                                                aria-label={section.label}
+                                                checked={homeSections[section.id]}
+                                                onChange={(event) => setHomeSection(section.id, event.target.checked)}
+                                            />
+                                        </label>
+                                    ))}
+                                </section>
                                 <section className="panel-section settings-section--about" aria-labelledby="settings-profile-title">
                                     <h3 id="settings-profile-title">About</h3>
                                     <p className="section-hint">Personalize FNDR and its appearance on this Mac.</p>

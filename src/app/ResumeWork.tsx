@@ -1,6 +1,8 @@
 import { useEffect, useId, useState } from "react";
 import { resolveWorkSet, resumeWork, type ResumeThread } from "@/shared/ipc/tauri";
+import { useHomeSections } from "@/shared/home/homeSections";
 import { pickSet } from "./homeWorkSet";
+import { HomeReveal } from "./HomeReveal";
 import { HomeDeadlines } from "./HomeDeadlines";
 import { HomeSets } from "./HomeSets";
 import { RoutineOfferCard } from "./RoutineOfferCard";
@@ -42,9 +44,12 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
     const [refresh, setRefresh] = useState(0);
     const [setsVersion, setSetsVersion] = useState(0);
     const [arrange, setArrange] = useState(false);
+    const shown = useHomeSections();
     const arrangeId = useId();
 
+    const showThreads = shown.threads;
     useEffect(() => {
+        if (!showThreads) return;
         let cancelled = false;
         setThreads([]);
         setStatus("loading");
@@ -57,16 +62,30 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
             if (!cancelled) setStatus("error");
         });
         return () => { cancelled = true; };
-    }, [refresh]);
+    }, [refresh, showThreads]);
+
+    if (!shown.routine && !shown.deadlines && !shown.threads && !shown.sets) return null;
 
     return (
         <div className="home-work">
-            <div className="home-work-options">
-                <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
-                <label htmlFor={arrangeId}>Arrange side by side when a set opens</label>
-            </div>
-            <RoutineOfferCard arrange={arrange} />
-            <HomeDeadlines arrange={arrange} />
+            <HomeReveal>
+                <div className="home-work-options">
+                    <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
+                    <label htmlFor={arrangeId}>Arrange side by side when a set opens</label>
+                </div>
+            </HomeReveal>
+            {shown.routine && (
+                <HomeReveal>
+                    <RoutineOfferCard arrange={arrange} />
+                </HomeReveal>
+            )}
+            {shown.deadlines && (
+                <HomeReveal>
+                    <HomeDeadlines arrange={arrange} />
+                </HomeReveal>
+            )}
+            {shown.threads && (
+                <HomeReveal>
             <section className="resume-work" aria-labelledby="resume-work-title" aria-busy={status === "loading"}>
                 <div className="resume-work-header">
                     <div>
@@ -119,7 +138,13 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                     </ul>
                 )}
             </section>
-            <HomeSets refreshKey={setsVersion} arrange={arrange} />
+                </HomeReveal>
+            )}
+            {shown.sets && (
+                <HomeReveal>
+                    <HomeSets refreshKey={setsVersion} arrange={arrange} />
+                </HomeReveal>
+            )}
         </div>
     );
 }

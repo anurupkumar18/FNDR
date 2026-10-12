@@ -575,12 +575,31 @@
 .app-main.search-centered.has-resume {
     justify-content: flex-start;
     overflow-y: auto;
-    padding-top: 72px;
-    padding-bottom: 28px;
+    padding-top: 0;
+    padding-bottom: 40px;
+    container-type: size;
+    scrollbar-width: thin;
 }
 
 .has-resume .home-hero-stage {
     flex-shrink: 0;
+}
+
+/* The first screen is the hero, centered. A strip of what follows shows
+   blurred underneath so the page reads as having more behind it. */
+.home-hero-fold {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 70vh;
+    min-height: calc(100cqh - 88px);
+    padding: 72px 0 24px;
+    box-sizing: border-box;
+}
+
+.home-hero-stage:not(:has(.home-work)) .home-hero-fold {
+    min-height: 100cqh;
 }
 
 .search-shell {

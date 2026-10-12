@@ -1279,3 +1279,12 @@
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
 }
+
+.settings-switch-hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-weight: 400;
+    line-height: 1.35;
+}

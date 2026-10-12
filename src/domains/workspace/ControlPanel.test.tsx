@@ -357,7 +357,7 @@ describe("ControlPanel", () => {
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
 
         const tabs = [
-            ["General", ["About"]],
+            ["General", ["Home", "About"]],
             ["Capture", ["Capture"]],
             ["Privacy", ["Privacy"]],
             ["Voice", ["Voice"]],
@@ -416,6 +416,19 @@ describe("ControlPanel", () => {
         expect(screen.getByRole("tab", { name: "AI" })).toHaveAttribute("aria-selected", "true");
         fireEvent.keyDown(screen.getByRole("tab", { name: "AI" }), { key: "ArrowRight" });
         expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("lets the person choose which sections Home shows, from the General tab", () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const switches = ["Routine offers", "Due soon", "Pick up where you left off", "Your sets"];
+        for (const name of switches) {
+            expect(screen.getByRole("switch", { name })).toBeChecked();
+        }
+        fireEvent.click(screen.getByRole("switch", { name: "Due soon" }));
+        expect(screen.getByRole("switch", { name: "Due soon" })).not.toBeChecked();
+        expect(JSON.parse(localStorage.getItem("fndr-home-sections") ?? "{}")).toMatchObject({ deadlines: false });
     });
 
     it("keeps a half-typed field when the person visits another tab", async () => {

@@ -629,15 +629,17 @@ function App() {
                 <main className={`app-main ${isFocusMode ? "search-centered" : "has-active-search"}${isHomeActive && !EVAL_UI ? " has-resume" : ""}`}>
                 {isFocusMode ? (
                     <div className="home-hero-stage">
-                        <HomeHero
-                            userName={displayName}
-                            now={now}
-                            greeting={homeGreeting}
-                            onHeroSearch={(q) => {
-                                setQueryDraft(q);
-                                void handleSearchSubmit(q);
-                            }}
-                        />
+                        <div className="home-hero-fold">
+                            <HomeHero
+                                userName={displayName}
+                                now={now}
+                                greeting={homeGreeting}
+                                onHeroSearch={(q) => {
+                                    setQueryDraft(q);
+                                    void handleSearchSubmit(q);
+                                }}
+                            />
+                        </div>
                         {isHomeActive && !EVAL_UI && (
                             <ResumeWork
                                 onOpenMemory={handleOpenMemoryById}
