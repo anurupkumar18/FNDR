@@ -18,6 +18,7 @@ vi.mock("./AppPanels", () => ({
         ? <><button type="button" onClick={onClosePanel}>Close mock panel</button><span data-testid="vault-focus">{memoryVaultFocusId}</span></>
         : null,
 }));
+vi.mock("@/shared/voice/VoiceOutputSection", () => ({ VoiceOutputSection: () => null }));
 vi.mock("./BiometricLockScreen", () => ({
     BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));

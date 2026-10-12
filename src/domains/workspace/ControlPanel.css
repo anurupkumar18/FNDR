@@ -23,9 +23,9 @@
 .settings-panel {
     position: fixed;
     top: 0;
-    right: -420px;
+    right: -460px;
     bottom: 0;
-    width: 400px;
+    width: 440px;
     max-width: 100vw;
     background: color-mix(in srgb, var(--cp-bg, var(--panel-bg)) 92%, transparent);
     backdrop-filter: blur(24px) saturate(140%);
