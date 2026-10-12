@@ -460,26 +460,7 @@ export function ScreenGuidePanel({
                 onClose={onClose}
             />
 
-            <div className="sg-panel-body">
-                <section
-                    className={`sg-readiness ${enabled && !isPrivateMode ? "is-ready" : "is-off"}`}
-                    role={activityOwnsLiveStatus ? undefined : "status"}
-                    aria-live={activityOwnsLiveStatus ? undefined : "polite"}
-                    aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
-                >
-                    <span className="sg-readiness-dot" aria-hidden="true" />
-                    <div>
-                        <strong>{statusCopy(settings, status, loading, isPrivateMode)}</strong>
-                        <span>
-                            {isPrivateMode
-                                ? "Exit Private Mode in Settings → Capture to use Screen Guide"
-                                : enabled
-                                ? `Hold ${settings?.shortcut ?? "Control+Alt+Space"} from any app`
-                                : `${settings?.shortcut ?? "Control+Alt+Space"} is available when enabled`}
-                        </span>
-                    </div>
-                </section>
-
+            <div className="sg-panel-body sg-bento">
                 {error && (
                     <div className="sg-panel-error" role="alert">
                         <p>{error}</p>
@@ -523,6 +504,28 @@ export function ScreenGuidePanel({
                     </aside>
                 )}
 
+                <div className="sg-bento-grid">
+                    <div className="sg-bento-col">
+                <section
+                    className={`sg-readiness ${enabled && !isPrivateMode ? "is-ready" : "is-off"}`}
+                    role={activityOwnsLiveStatus ? undefined : "status"}
+                    aria-live={activityOwnsLiveStatus ? undefined : "polite"}
+                    aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
+                >
+                    <span className="sg-readiness-dot" aria-hidden="true" />
+                    <div>
+                        <strong>{statusCopy(settings, status, loading, isPrivateMode)}</strong>
+                        <span>
+                            {isPrivateMode
+                                ? "Exit Private Mode in Settings → Capture to use Screen Guide"
+                                : enabled
+                                ? `Hold ${settings?.shortcut ?? "Control+Alt+Space"} from any app`
+                                : `${settings?.shortcut ?? "Control+Alt+Space"} is available when enabled`}
+                        </span>
+                    </div>
+                </section>
+
+                <p className="sg-tile-title" aria-hidden="true">Basics</p>
                 <section className="sg-settings-card" aria-label="Screen Guide settings">
                     <label className="sg-setting-row">
                         <span>
@@ -610,7 +613,73 @@ export function ScreenGuidePanel({
                         />
                     </label>
                 </section>
+                <p className="sg-tile-title" aria-hidden="true">Ask</p>
+                <section className="sg-ask-card">
+                    <label htmlFor="sg-question">Ask about your display or find a named file</label>
+                    <p className="sg-ask-hint" id="sg-question-hint">
+                        Type a question now, or hold to talk. Screen Guide reads the display only for
+                        this question; explicit file lookups check names only in Documents, Desktop,
+                        and Downloads.
+                    </p>
+                    <div className="sg-question-row">
+                        <input
+                            id="sg-question"
+                            type="text"
+                            value={question}
+                            disabled={questionDisabled}
+                            aria-describedby="sg-question-hint"
+                            placeholder="Where is the setting I need? or Find my I-20 document"
+                            onChange={(event) => setQuestion(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    void submitQuestion();
+                                }
+                            }}
+                        />
+                        <button
+                            type="button"
+                            className="ui-action-btn sg-ask-button"
+                            disabled={questionDisabled || !question.trim()}
+                            onClick={() => void submitQuestion()}
+                            aria-label="Ask Screen Guide"
+                        >
+                            {submitting ? "Sending…" : "Ask"}
+                        </button>
+                    </div>
 
+                    <button
+                        type="button"
+                        className={`sg-hold-button ${holding ? "is-holding" : ""}`}
+                        disabled={questionDisabled}
+                        aria-label={holding ? "Release to ask" : "Hold to talk"}
+                        aria-pressed={holding}
+                        onPointerDown={(event) => {
+                            event.currentTarget.setPointerCapture?.(event.pointerId);
+                            beginHold();
+                        }}
+                        onPointerUp={endHold}
+                        onPointerCancel={endHold}
+                        onKeyDown={(event) => {
+                            if (!event.repeat && (event.key === " " || event.key === "Enter")) {
+                                event.preventDefault();
+                                beginHold();
+                            }
+                        }}
+                        onKeyUp={(event) => {
+                            if (event.key === " " || event.key === "Enter") {
+                                event.preventDefault();
+                                endHold();
+                            }
+                        }}
+                    >
+                        <span className="sg-mic-dot" aria-hidden="true" />
+                        {holding ? "Release to ask" : "Hold to talk"}
+                    </button>
+                </section>
+                    </div>
+                    <div className="sg-bento-col">
+                <p className="sg-tile-title" aria-hidden="true">Answers</p>
                 <section className="sg-settings-card" aria-labelledby="sg-model-title">
                     <div className="sg-setting-row sg-model-row">
                         <span>
@@ -690,7 +759,8 @@ export function ScreenGuidePanel({
                             <small>
                                 {computerUse && !computerUse.backend
                                     ? "FNDR could not start its own way of clicking and typing on this Mac, so this stays off. The ChatGPT app's Computer Use is not supported: FNDR could not check its actions one by one."
-                                    : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the name of the app in front, the on-screen text of the app being operated (and a picture of its window, if the helper has Screen Recording access), and up to 5 memory snippets when you refer to the past. Opening apps, playing media, following links and searching run without asking; other clicks, typing and links you did not ask for wait for your tap. Sending, deleting, buying, passwords, Terminal and blocklisted apps are always refused. Say “stop” anytime."}
+                                    : "Talk to the notch in Do mode and FNDR opens apps, clicks and types for you."
+                            }
                             </small>
                         </span>
                         <input
@@ -716,75 +786,14 @@ export function ScreenGuidePanel({
                             }
                         />
                     </label>
+                    <details className="sg-more">
+                        <summary>What Operate shares</summary>
+                        <p>
+                            Talk to the notch in Do mode and FNDR opens apps, clicks and types for you. Sent to ChatGPT on your plan: what you say, the name of the app in front, the on-screen text of the app being operated (and a picture of its window, if the helper has Screen Recording access), and up to 5 memory snippets when you refer to the past. Opening apps, playing media, following links and searching run without asking; other clicks, typing and links you did not ask for wait for your tap. Sending, deleting, buying, passwords, Terminal and blocklisted apps are always refused. Say “stop” anytime.
+                        </p>
+                    </details>
                     {canOperateComputer ? <OperatorPermissions /> : null}
                 </section>
-
-                <VoiceOutputSection />
-
-                <section className="sg-ask-card">
-                    <label htmlFor="sg-question">Ask about your display or find a named file</label>
-                    <p className="sg-ask-hint" id="sg-question-hint">
-                        Type a question now, or hold to talk. Screen Guide reads the display only for
-                        this question; explicit file lookups check names only in Documents, Desktop,
-                        and Downloads.
-                    </p>
-                    <div className="sg-question-row">
-                        <input
-                            id="sg-question"
-                            type="text"
-                            value={question}
-                            disabled={questionDisabled}
-                            aria-describedby="sg-question-hint"
-                            placeholder="Where is the setting I need? or Find my I-20 document"
-                            onChange={(event) => setQuestion(event.target.value)}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    void submitQuestion();
-                                }
-                            }}
-                        />
-                        <button
-                            type="button"
-                            className="ui-action-btn sg-ask-button"
-                            disabled={questionDisabled || !question.trim()}
-                            onClick={() => void submitQuestion()}
-                            aria-label="Ask Screen Guide"
-                        >
-                            {submitting ? "Sending…" : "Ask"}
-                        </button>
-                    </div>
-
-                    <button
-                        type="button"
-                        className={`sg-hold-button ${holding ? "is-holding" : ""}`}
-                        disabled={questionDisabled}
-                        aria-label={holding ? "Release to ask" : "Hold to talk"}
-                        aria-pressed={holding}
-                        onPointerDown={(event) => {
-                            event.currentTarget.setPointerCapture?.(event.pointerId);
-                            beginHold();
-                        }}
-                        onPointerUp={endHold}
-                        onPointerCancel={endHold}
-                        onKeyDown={(event) => {
-                            if (!event.repeat && (event.key === " " || event.key === "Enter")) {
-                                event.preventDefault();
-                                beginHold();
-                            }
-                        }}
-                        onKeyUp={(event) => {
-                            if (event.key === " " || event.key === "Enter") {
-                                event.preventDefault();
-                                endHold();
-                            }
-                        }}
-                    >
-                        <span className="sg-mic-dot" aria-hidden="true" />
-                        {holding ? "Release to ask" : "Hold to talk"}
-                    </button>
-                </section>
-
                 <section className="sg-diagnostics-card" aria-labelledby="sg-diagnostics-title">
                     <div>
                         <strong id="sg-diagnostics-title">Troubleshoot the next turn</strong>
@@ -881,7 +890,11 @@ export function ScreenGuidePanel({
                         )}
                     </div>
                 </section>
-
+                    </div>
+                    <div className="sg-bento-col">
+                <div className="sg-bento-voice">
+                    <VoiceOutputSection />
+                </div>
                 <aside className="sg-privacy-note">
                     <strong>{privacyHeading}</strong>
                     <p>
@@ -901,6 +914,12 @@ export function ScreenGuidePanel({
                         deletable local bundle.
                     </p>
                 </aside>
+
+
+
+
+                    </div>
+                </div>
 
             </div>
         </div>

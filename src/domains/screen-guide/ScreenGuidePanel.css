@@ -536,3 +536,176 @@
     opacity: 0.7;
     vertical-align: middle;
 }
+
+/* ===== Bento layout: one page, three columns of tiles, no page scrolling ===== */
+.sg-panel-body.sg-bento {
+    width: min(1240px, calc(100% - 48px));
+    padding: 20px 0 24px;
+    gap: 14px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.sg-bento-grid {
+    display: grid;
+    flex: 1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    align-items: start;
+}
+
+.sg-bento-col {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.sg-bento .sg-readiness,
+.sg-bento .sg-settings-card,
+.sg-bento .sg-ask-card,
+.sg-bento .sg-diagnostics-card,
+.sg-bento .sg-privacy-note,
+.sg-bento .sg-bento-voice > section {
+    border-radius: 20px;
+    border-color: color-mix(in srgb, var(--border) 80%, transparent);
+    background:
+        linear-gradient(160deg, color-mix(in srgb, var(--text-primary) 5%, transparent), transparent 62%),
+        color-mix(in srgb, var(--surface-elevated, #202020) 70%, transparent);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent) inset;
+    transition: border-color 220ms ease, transform 220ms ease;
+}
+
+.sg-bento .sg-settings-card:hover,
+.sg-bento .sg-ask-card:hover,
+.sg-bento .sg-bento-voice > section:hover {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.sg-bento .sg-readiness {
+    padding: 14px 18px;
+}
+
+.sg-tile-title {
+    margin: 4px 4px -6px;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.sg-bento .sg-setting-row {
+    min-height: 56px;
+    gap: 14px;
+    padding: 10px 16px;
+}
+
+.sg-bento .sg-setting-row strong {
+    font-size: 0.82rem;
+}
+
+.sg-bento .sg-setting-row small {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.sg-bento .sg-shortcut-row {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 16px;
+}
+
+.sg-bento .sg-ask-card {
+    padding: 14px 16px;
+    gap: 10px;
+}
+
+.sg-bento .sg-diagnostics-card {
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px;
+}
+
+.sg-bento .sg-diagnostics-card p {
+    max-width: none;
+}
+
+.sg-bento .sg-diagnostics-actions {
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.sg-bento .sg-privacy-note {
+    padding: 14px 16px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.sg-bento .sg-privacy-note strong {
+    color: var(--text-primary);
+    font-size: 0.78rem;
+}
+
+.sg-bento .sg-privacy-note p {
+    margin: 4px 0 0;
+}
+
+.sg-more {
+    padding: 0 16px 12px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.sg-more summary {
+    width: max-content;
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.sg-more p {
+    margin: 6px 0 0;
+}
+
+@media (max-width: 1100px) {
+    .sg-bento-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 720px) {
+    .sg-bento-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .sg-bento-col > * {
+        animation: sg-tile-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .sg-bento-col:nth-child(2) > * {
+        animation-delay: 70ms;
+    }
+
+    .sg-bento-col:nth-child(3) > * {
+        animation-delay: 140ms;
+    }
+}
+
+@keyframes sg-tile-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
