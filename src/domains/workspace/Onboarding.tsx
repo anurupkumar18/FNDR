@@ -12,6 +12,7 @@ import {
     downloadModel,
     refreshAiModels,
 } from "@/shared/ipc/onboarding";
+import { ttsInstall, ttsStatus, type TtsStatus } from "@/shared/ipc/tauri";
 import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { formatBytes } from "@/shared/utils/format";
@@ -421,6 +422,31 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const mountedRef = useRef(true);
     const activatingModelIdRef = useRef<string | null>(null);
     const statusGenerationFloorRef = useRef<number | null>(null);
+    const [voiceStatus, setVoiceStatus] = useState<TtsStatus | null>(null);
+    const [wantVoice, setWantVoice] = useState(true);
+    const voiceStartedRef = useRef(false);
+
+    useEffect(() => {
+        let live = true;
+        void ttsStatus()
+            .then((next) => live && setVoiceStatus(next))
+            .catch(() => undefined);
+        return () => {
+            live = false;
+        };
+    }, []);
+
+    const offerVoice = voiceStatus !== null && voiceStatus.state !== "ready" && voiceStatus.state !== "downloading";
+
+    // The voice downloads in the background (the backend task outlives this step)
+    // once the person acts on this step with the box ticked.
+    const beginVoice = useCallback(() => {
+        if (!offerVoice || !wantVoice || voiceStartedRef.current) return;
+        voiceStartedRef.current = true;
+        void ttsInstall(true).catch(() => {
+            voiceStartedRef.current = false;
+        });
+    }, [offerVoice, wantVoice]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -647,6 +673,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     async function handleDownload() {
         if (!selected) return;
         setError(null);
+        beginVoice();
         if (selected.download_url === "already_downloaded") {
             startActivity({
                 id: "activation",
@@ -807,6 +834,25 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
             {error && <div className="ob-error-box" role="alert">{error}</div>}
 
+            {offerVoice && voiceStatus && (
+                <label className="ob-voice-consent">
+                    <input
+                        id="ob-download-voice"
+                        type="checkbox"
+                        checked={wantVoice}
+                        onChange={(event) => setWantVoice(event.target.checked)}
+                    />
+                    <span>
+                        <strong>{`Also download FNDR's natural voice (${Math.round(voiceStatus.totalBytes / 1_000_000)} MB)`}</strong>
+                        <small>
+                            Kokoro speaks FNDR's replies in a natural voice that runs on this Mac. It downloads once from
+                            Hugging Face and GitHub in the background, checked against pinned checksums. You can remove it in
+                            Settings.
+                        </small>
+                    </span>
+                </label>
+            )}
+
             {!isDownloading && (
                 <>
                     <button
@@ -821,7 +867,10 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     </button>
                     <button
                         className="ob-btn-ghost"
-                        onClick={() => onSave({ ...state, step: "permissions" })}
+                        onClick={() => {
+                            beginVoice();
+                            onSave({ ...state, step: "permissions" });
+                        }}
                     >
                         {embedderMissing
                             ? "Skip for now (capture stays paused until the search model is installed)"
@@ -833,7 +882,10 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             {isDownloading && (
                 <button
                     className="ob-btn-ghost"
-                    onClick={() => onSave({ ...state, step: "permissions" })}
+                    onClick={() => {
+                        beginVoice();
+                        onSave({ ...state, step: "permissions" });
+                    }}
                 >
                     Skip for now (downloads continue in the background)
                 </button>
