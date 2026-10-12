@@ -126,14 +126,14 @@ describe("createNotchVoice", () => {
 });
 
 describe("installNotchVoices", () => {
-    it("registers the plan voice once, ahead of the offline voices", () => {
+    it("registers the plan voice once, behind the on-device voice", () => {
         const registry = createSpeechRegistry({ storage: null });
         const realtime = { ...fake("codex_realtime"), voices: async () => [], close: vi.fn(async () => undefined) };
         const create = vi.fn(() => realtime);
         expect(installNotchVoices(registry, create)).toBe(realtime);
         expect(installNotchVoices(registry, create)).toBe(realtime);
         expect(create).toHaveBeenCalledTimes(1);
-        expect(registry.order()[0]).toBe("codex_realtime");
+        expect(registry.order().slice(0, 2)).toEqual(["local_neural", "codex_realtime"]);
         expect(registry.has("webview_basic")).toBe(true);
     });
 });
