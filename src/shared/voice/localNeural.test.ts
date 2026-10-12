@@ -194,6 +194,6 @@ describe("registry order", () => {
         registry.registerProvider(fake("system_enhanced", []));
         registry.registerProvider(harness().provider);
         registry.registerProvider(fake("codex_realtime", []));
-        expect(registry.order()).toEqual(["codex_realtime", "local_neural", "system_enhanced"]);
+        expect(registry.order()).toEqual(["local_neural", "codex_realtime", "system_enhanced"]);
     });
 });

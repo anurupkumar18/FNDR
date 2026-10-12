@@ -82,7 +82,7 @@ describe("speech registry", () => {
     });
 
     it("prefers the ChatGPT plan voice, then the neural, system and webview voices", () => {
-        expect(DEFAULT_ORDER).toEqual(["codex_realtime", "local_neural", "system_enhanced", "webview_basic"]);
+        expect(DEFAULT_ORDER).toEqual(["local_neural", "codex_realtime", "system_enhanced", "webview_basic"]);
         registry.registerProvider(fake("webview_basic"));
         registry.registerProvider(fake("system_enhanced"));
         registry.registerProvider(fake("codex_realtime"));
@@ -301,7 +301,7 @@ describe("speech registry", () => {
         registry.registerProvider(codex);
         installOfflineVoices(registry);
         installOfflineVoices(registry);
-        expect(registry.order()).toEqual(["codex_realtime", "local_neural", "system_enhanced", "webview_basic"]);
-        expect(registry.providers()[0]).toBe(codex);
+        expect(registry.order()).toEqual(["local_neural", "codex_realtime", "system_enhanced", "webview_basic"]);
+        expect(registry.providers()[1]).toBe(codex);
     });
 });

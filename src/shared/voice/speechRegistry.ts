@@ -11,7 +11,7 @@ import type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechPro
 import { createSystemEnhancedProvider } from "./systemEnhanced";
 import { createWebviewBasicProvider } from "./webviewBasic";
 
-export const DEFAULT_ORDER: readonly SpeechProviderId[] = ["codex_realtime", "local_neural", "system_enhanced", "webview_basic"];
+export const DEFAULT_ORDER: readonly SpeechProviderId[] = ["local_neural", "codex_realtime", "system_enhanced", "webview_basic"];
 
 const STORAGE_KEY = "fndr.voice.output";
 const MAX_QUEUED = 3;
