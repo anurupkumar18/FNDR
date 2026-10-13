@@ -272,6 +272,26 @@ describe("speech registry", () => {
         expect(broken.settings()).toEqual({ preferred: "auto" });
     });
 
+    it("names the voice while a long line is still being spoken, not only once it ends", async () => {
+        const codex = fake("codex_realtime", "stalls");
+        const system = fake("system_enhanced");
+        registry.registerProvider(codex);
+        registry.registerProvider(system);
+        const changes: [SpeechProviderId, string][] = [];
+        registry.onProviderChange((id, reason) => changes.push([id, reason]));
+        const done = registry.speak("A long line");
+        await vi.advanceTimersByTimeAsync(1499);
+        // The ChatGPT voice was asked first and has not started, so nothing names it.
+        expect(changes).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(system.speaking()).toBe(true);
+        expect(changes).toEqual([["system_enhanced", "codex_realtime: did not start speaking in time"]]);
+        expect(registry.activeProvider()).toBe("system_enhanced");
+        system.finish();
+        await expect(done).resolves.toEqual({ spoken: true, provider: "system_enhanced" });
+        expect(changes).toHaveLength(1);
+    });
+
     it("tells listeners when the voice in use changes, and only then", async () => {
         const codex = fake("codex_realtime");
         const system = fake("system_enhanced");

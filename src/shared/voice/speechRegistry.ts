@@ -132,7 +132,8 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
         listeners.forEach((listener) => listener(id, reason));
     };
 
-    const tryProvider = async (provider: SpeechProvider, item: Pending, mine: number): Promise<Attempt> => {
+    /** `started` is called once the provider is heard to be speaking, which can be long before the line ends. */
+    const tryProvider = async (provider: SpeechProvider, item: Pending, mine: number, started: () => void): Promise<Attempt> => {
         const startedAt = now();
         const remaining = () => startTimeoutMs - (now() - startedAt);
         let availability: { ok: boolean; reason?: string } | typeof STALLED;
@@ -147,6 +148,7 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
 
         if (current) current.provider = provider;
         const speech = provider.speak(item.text, item.opts);
+        if (provider.speaking()) started();
         let early: void | typeof STALLED;
         try {
             early = await withDeadline(speech, remaining());
@@ -160,6 +162,7 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
             speech.catch(() => undefined);
             return { failed: "did not start speaking in time", cool: true };
         }
+        started();
         try {
             await speech;
         } catch (err) {
@@ -179,11 +182,14 @@ export function createSpeechRegistry(deps: SpeechRegistryDeps = {}): SpeechRegis
                 skipped.push(`${provider.label}: cooling down after a failure`);
                 continue;
             }
-            const attempt = await tryProvider(provider, item, mine);
+            const named = () => {
+                if (mine === generation) announce(id, index === 0 ? "preferred" : skipped.join("; "));
+            };
+            const attempt = await tryProvider(provider, item, mine, named);
             if (mine !== generation || attempt === "cancelled") return;
             if (attempt === "spoken") {
                 coolUntil.delete(id);
-                announce(id, index === 0 ? "preferred" : skipped.join("; "));
+                named();
                 finish(item, { spoken: true, provider: id });
                 return;
             }

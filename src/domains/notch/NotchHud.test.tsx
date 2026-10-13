@@ -51,6 +51,19 @@ vi.mock("@tauri-apps/api/core", () => coreMocks);
 vi.mock("@/shared/ipc/onboarding", () => onboardingMocks);
 vi.mock("@/shared/utils/openExternalUrl", () => ({ openExternalUrl: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/shared/ipc/tauri", () => ipcMocks);
+// The app has one speech registry per window. Each test gets its own, so a voice
+// that failed, cooled down or spoke in one test cannot change the next.
+const voices = vi.hoisted(() => ({ registry: null as unknown, create: null as unknown as () => unknown }));
+vi.mock("@/shared/voice/speechRegistry", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/shared/voice/speechRegistry")>();
+    voices.create = actual.createSpeechRegistry;
+    return {
+        ...actual,
+        get speechRegistry() {
+            return voices.registry;
+        },
+    };
+});
 
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { speechRegistry } from "@/shared/voice/speechRegistry";
@@ -143,6 +156,7 @@ async function openPanel() {
 
 describe("NotchHud", () => {
     beforeEach(() => {
+        voices.registry = voices.create();
         handlers.clear();
         FakeMediaRecorder.instances = [];
         Object.defineProperty(globalThis, "MediaRecorder", {
