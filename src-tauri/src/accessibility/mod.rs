@@ -425,10 +425,9 @@ fn type_text_into_frontmost_app(text: &str) -> Result<(), String> {
 /// when `replace` is set. The clipboard keeps the text afterwards.
 /// Uses pbcopy + osascript keystroke — avoids enigo CGEventPost which can SIGABRT
 /// on macOS when called outside the right event context.
-fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
+pub(crate) fn write_clipboard_text(text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    // 1. Write text to clipboard via pbcopy.
     let mut child = std::process::Command::new("pbcopy")
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -441,6 +440,18 @@ fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
     child
         .wait()
         .map_err(|e| format!("pbcopy did not finish: {e}"))?;
+    Ok(())
+}
+
+fn read_clipboard_text() -> Option<String> {
+    let output = std::process::Command::new("pbpaste").output().ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    (output.status.success() && !text.is_empty()).then_some(text)
+}
+
+fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
+    // 1. Write text to clipboard via pbcopy.
+    write_clipboard_text(text)?;
 
     std::thread::sleep(Duration::from_millis(30));
 
@@ -863,6 +874,20 @@ pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
 /// before the FNDR window is raised).
 pub(crate) fn capture_focused_context_snapshot(
 ) -> Result<(FieldContext, Option<Vec<u8>>, PendingAutofillTarget), String> {
+    capture_field_snapshot(true)
+}
+
+/// The same capture without the screen grab Autofill takes for an unlabeled
+/// field. A screen grab costs about three seconds, and dictation needs the
+/// microphone live as soon as the key is down.
+pub(crate) fn capture_focused_field_only(
+) -> Result<(FieldContext, PendingAutofillTarget), String> {
+    capture_field_snapshot(false).map(|(context, _image, target)| (context, target))
+}
+
+fn capture_field_snapshot(
+    with_screen_image: bool,
+) -> Result<(FieldContext, Option<Vec<u8>>, PendingAutofillTarget), String> {
     if !has_accessibility_permission() {
         return Err("Accessibility permission not granted. Enable FNDR in System Settings → Privacy → Accessibility.".to_string());
     }
@@ -957,8 +982,7 @@ pub(crate) fn capture_focused_context_snapshot(
         // Snapshot pixels only when AX metadata is absent. OCR is deliberately
         // deferred so callers can release short native window-exclusion gates
         // before the 3-5 second Vision pass.
-        let screen_image = label
-            .is_empty()
+        let screen_image = (with_screen_image && label.is_empty())
             .then(capture_screen_context_image)
             .flatten();
 
@@ -1073,17 +1097,28 @@ unsafe fn focused_role_matches(target: &AutofillTarget) -> bool {
     target.element_role.is_empty() || role.is_empty() || role == target.element_role
 }
 
-/// Type into a field captured by `capture_focused_context_snapshot` without
-/// touching the Autofill target, so dictation and Autofill never share one.
-pub(crate) fn inject_text_into_pending_target(
+/// Insert at the caret of the app that owned the field at key-down, keeping
+/// what is already in the field and the person's clipboard text. Autofill's
+/// injector replaces the whole field, which is wrong for dictation.
+pub(crate) fn insert_text_at_caret(
     pending: &PendingAutofillTarget,
     text: &str,
 ) -> Result<(), String> {
     let target = pending
         .0
-        .clone()
+        .as_ref()
         .ok_or_else(|| "No field was captured".to_string())?;
-    inject_text_into_target(text, true, target)
+    if unsafe { frontmost_pid() } != Some(target.pid) {
+        return Err("The field's app is no longer in front".to_string());
+    }
+    let previous_clipboard = read_clipboard_text();
+    paste_into_frontmost_app(text, false)?;
+    // The target reads the pasteboard when it handles the keystroke.
+    std::thread::sleep(Duration::from_millis(200));
+    if let Some(previous) = previous_clipboard {
+        let _ = write_clipboard_text(&previous);
+    }
+    Ok(())
 }
 
 /// The words on screen right now, for dictation's vocabulary. OCR takes

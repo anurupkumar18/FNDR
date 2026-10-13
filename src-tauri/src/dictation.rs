@@ -7,7 +7,7 @@
 //! session and the field capture stay in `ipc/commands/dictation.rs`.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A key held for less than this is a tap, not speech.
 pub const QUICK_TAP: Duration = Duration::from_millis(250);
@@ -306,6 +306,13 @@ pub fn is_quick_tap(held: Duration) -> bool {
     held < QUICK_TAP
 }
 
+/// How long the key was down, measured between the two key events themselves.
+/// Capturing the field and starting the microphone take time after key-down; a
+/// hold timed from the end of that work would read as a tap.
+pub fn held_for(pressed: Instant, released: Instant) -> Duration {
+    released.saturating_duration_since(pressed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +519,15 @@ mod tests {
         assert_eq!(parse_voice_event(other), None);
         assert_eq!(parse_voice_event("not json"), None);
         assert_eq!(parse_voice_event(r#"{"surface":"dictation"}"#), None);
+    }
+
+    #[test]
+    fn a_slow_start_does_not_turn_a_long_hold_into_a_tap() {
+        let pressed = Instant::now();
+        let released = pressed + Duration::from_millis(1500);
+        assert!(!is_quick_tap(held_for(pressed, released)));
+        assert!(is_quick_tap(held_for(pressed, pressed + Duration::from_millis(90))));
+        assert_eq!(held_for(released, pressed), Duration::ZERO);
     }
 
     #[test]

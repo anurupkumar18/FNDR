@@ -9,29 +9,30 @@
 use crate::accessibility::{self, PendingAutofillTarget};
 use crate::config::DictationConfig;
 use crate::dictation::{
-    clean_transcript, is_quick_tap, parse_voice_event, plan_insertion, ClipboardReason,
+    clean_transcript, held_for, is_quick_tap, parse_voice_event, plan_insertion, ClipboardReason,
     InsertFacts, InsertPlan, ScreenVocabulary, SkipReason, VoiceOutcome,
 };
 use crate::voice::{VoiceManager, VoiceMode, VoiceSurface, VOICE_STATE_EVENT};
 use crate::AppState;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Listener, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// How long delivery waits for the screen read. OCR can take seconds; the text
+/// must not wait on it, so a late vocabulary is dropped for this dictation.
+const VOCABULARY_WAIT: Duration = Duration::from_millis(1200);
 
 /// A session older than this never got its transcript; the next press replaces it.
 const STALE_SESSION: Duration = Duration::from_secs(45);
 
 enum Transition {
-    Pressed,
-    Released,
+    Pressed(Instant),
+    Released(Instant),
     Voice(VoiceOutcome),
 }
 
@@ -39,7 +40,8 @@ struct ActiveDictation {
     pressed_at: Instant,
     session_id: Option<String>,
     target: Option<PendingAutofillTarget>,
-    vocabulary: JoinHandle<ScreenVocabulary>,
+    vocabulary: Receiver<ScreenVocabulary>,
+    learned_words: Vec<String>,
 }
 
 #[derive(Default)]
@@ -98,8 +100,8 @@ pub fn register_dictation_shortcut(
     app.global_shortcut()
         .on_shortcut(shortcut, move |_app, _shortcut, event| {
             let transition = match event.state() {
-                ShortcutState::Pressed => Transition::Pressed,
-                ShortcutState::Released => Transition::Released,
+                ShortcutState::Pressed => Transition::Pressed(Instant::now()),
+                ShortcutState::Released => Transition::Released(Instant::now()),
             };
             let _ = press_queue.send(transition);
         })
@@ -123,8 +125,8 @@ fn start_worker(app: AppHandle) -> Result<Sender<Transition>, String> {
             let mut active: Option<ActiveDictation> = None;
             while let Ok(transition) = inbox.recv() {
                 match transition {
-                    Transition::Pressed => on_pressed(&app, &mut active),
-                    Transition::Released => on_released(&app, &mut active),
+                    Transition::Pressed(at) => on_pressed(&app, &mut active, at),
+                    Transition::Released(at) => on_released(&app, &mut active, at),
                     Transition::Voice(outcome) => on_voice(&app, &mut active, outcome),
                 }
             }
@@ -133,7 +135,7 @@ fn start_worker(app: AppHandle) -> Result<Sender<Transition>, String> {
     Ok(queue)
 }
 
-fn on_pressed(app: &AppHandle, active: &mut Option<ActiveDictation>) {
+fn on_pressed(app: &AppHandle, active: &mut Option<ActiveDictation>, pressed_at: Instant) {
     if let Some(current) = active.as_ref() {
         if current.pressed_at.elapsed() < STALE_SESSION {
             return;
@@ -148,39 +150,54 @@ fn on_pressed(app: &AppHandle, active: &mut Option<ActiveDictation>) {
         return;
     }
     let learned_words = state.config.read().dictation.learned_words.clone();
+    tracing::info!("dictation: key down");
 
-    let (context, target) = match accessibility::capture_focused_context_snapshot() {
-        Ok((context, _image, target)) => (Some(context), Some(target)),
+    let capture_started = Instant::now();
+    let (context, target) = match accessibility::capture_focused_field_only() {
+        Ok((context, target)) => (Some(context), Some(target)),
         Err(err) => {
             tracing::info!("dictation: no field captured, the result will be copied: {err}");
             (None, None)
         }
     };
+    tracing::info!(ms = capture_started.elapsed().as_millis() as u64, "dictation: field captured");
     let field_text = context
         .map(|c| format!("{}\n{}\n{}\n{}", c.label, c.window_title, c.app_name, c.current_value))
         .unwrap_or_default();
-    let vocabulary = std::thread::spawn(move || {
+    let (vocabulary_tx, vocabulary) = channel();
+    let screen_learned_words = learned_words.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
         let screen = accessibility::read_screen_text();
-        ScreenVocabulary::from_screen_text(&format!("{field_text}\n{screen}"))
-            .with_learned_words(&learned_words)
+        tracing::info!(
+            chars = screen.chars().count(),
+            ms = started.elapsed().as_millis() as u64,
+            "dictation: screen read finished"
+        );
+        let _ = vocabulary_tx.send(
+            ScreenVocabulary::from_screen_text(&format!("{field_text}\n{screen}"))
+                .with_learned_words(&screen_learned_words),
+        );
     });
 
     let voice = app.state::<VoiceManager>();
     match tauri::async_runtime::block_on(voice.start(VoiceSurface::Dictation, VoiceMode::PushToTalk))
     {
         Ok(session) => {
+            tracing::info!(captured = target.is_some(), "dictation: listening");
             *active = Some(ActiveDictation {
-                pressed_at: Instant::now(),
+                pressed_at,
                 session_id: Some(session.session_id),
                 target,
                 vocabulary,
+                learned_words,
             });
         }
         Err(err) => tracing::warn!("dictation: voice session did not start: {err}"),
     }
 }
 
-fn on_released(app: &AppHandle, active: &mut Option<ActiveDictation>) {
+fn on_released(app: &AppHandle, active: &mut Option<ActiveDictation>, released_at: Instant) {
     let Some(current) = active.as_ref() else {
         return;
     };
@@ -188,7 +205,9 @@ fn on_released(app: &AppHandle, active: &mut Option<ActiveDictation>) {
         return;
     };
     let voice = app.state::<VoiceManager>();
-    if is_quick_tap(current.pressed_at.elapsed()) {
+    let held = held_for(current.pressed_at, released_at);
+    tracing::info!(held_ms = held.as_millis() as u64, "dictation: key up");
+    if is_quick_tap(held) {
         active.take();
         if let Err(err) = tauri::async_runtime::block_on(voice.cancel(&session_id)) {
             tracing::warn!("dictation: could not cancel a tapped session: {err}");
@@ -200,6 +219,12 @@ fn on_released(app: &AppHandle, active: &mut Option<ActiveDictation>) {
 }
 
 fn on_voice(app: &AppHandle, active: &mut Option<ActiveDictation>, outcome: VoiceOutcome) {
+    // The transcript is what the person said; keep it out of the logs.
+    let kind = match &outcome {
+        VoiceOutcome::Final { .. } => "final",
+        VoiceOutcome::Ended { .. } => "ended",
+    };
+    tracing::info!(kind, "dictation: voice event");
     let session_matches = |id: &str| active.as_ref().and_then(|a| a.session_id.as_deref()) == Some(id);
     match outcome {
         VoiceOutcome::Ended { session_id } if session_matches(&session_id) => {
@@ -215,7 +240,13 @@ fn on_voice(app: &AppHandle, active: &mut Option<ActiveDictation>, outcome: Voic
 }
 
 fn deliver(app: &AppHandle, finished: ActiveDictation, transcript: &str) {
-    let vocabulary = finished.vocabulary.join().unwrap_or_default();
+    let vocabulary = finished
+        .vocabulary
+        .recv_timeout(VOCABULARY_WAIT)
+        .unwrap_or_else(|_| {
+            tracing::info!("dictation: the screen read was not ready, using learned words only");
+            ScreenVocabulary::default().with_learned_words(&finished.learned_words)
+        });
     let cleaned = clean_transcript(transcript, &vocabulary);
     let state = accessibility::dictation_target_state(finished.target.as_ref());
     let facts = InsertFacts {
@@ -223,12 +254,13 @@ fn deliver(app: &AppHandle, finished: ActiveDictation, transcript: &str) {
         target_captured: state.captured,
         target_still_focused: state.still_focused,
     };
+    tracing::info!(?facts, chars = cleaned.chars().count(), "dictation: delivering");
     match plan_insertion(&cleaned, facts) {
         InsertPlan::Type(text) => {
             let typed = finished
                 .target
                 .as_ref()
-                .map(|target| accessibility::inject_text_into_pending_target(target, &text));
+                .map(|target| accessibility::insert_text_at_caret(target, &text));
             match typed {
                 Some(Ok(())) => tracing::info!(chars = text.chars().count(), "dictation: typed"),
                 Some(Err(err)) => {
@@ -249,7 +281,7 @@ fn deliver(app: &AppHandle, finished: ActiveDictation, transcript: &str) {
 }
 
 fn copy_and_tell(app: &AppHandle, text: &str, reason: ClipboardReason) {
-    if let Err(err) = copy_to_clipboard(text) {
+    if let Err(err) = accessibility::write_clipboard_text(text) {
         tracing::warn!("dictation: clipboard copy failed: {err}");
         return;
     }
@@ -260,21 +292,6 @@ fn copy_and_tell(app: &AppHandle, text: &str, reason: ClipboardReason) {
     if let Some(state) = app.try_state::<Arc<AppState>>() {
         crate::notify::send(app, &state, "dictation_copied", "Dictation", body);
     }
-}
-
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new("/usr/bin/pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|err| err.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| "pbcopy has no stdin".to_string())?
-        .write_all(text.as_bytes())
-        .map_err(|err| err.to_string())?;
-    let status = child.wait().map_err(|err| err.to_string())?;
-    status.success().then_some(()).ok_or_else(|| format!("pbcopy exited with {status}"))
 }
 
 const MAX_LEARNED_WORDS: usize = 200;
