@@ -11,6 +11,7 @@ pub mod companion;
 pub mod config;
 pub mod context_runtime;
 pub mod decision;
+pub mod dictation;
 pub mod downloads;
 pub mod embed;
 pub mod embedding;
