@@ -25,7 +25,8 @@ jobs:
   build-release:
     name: Build and publish macOS release
     needs: verify
-    runs-on: macos-14
+    # The native speech helper uses SpeechAnalyzer from the macOS 26 SDK.
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       # Developer ID signing + notarization turn on when these secrets exist.

@@ -10,7 +10,7 @@ FNDR previously had no distributable artifact: installation required a developer
 
 ## Decision
 
-- **Single release path:** pushing a `v*` tag runs `.github/workflows/release.yml` (tauri-action on `macos-14`), which builds an aarch64 DMG, publishes a GitHub Release, and emits an updater manifest (`latest.json`).
+- **Single release path:** pushing a `v*` tag runs `.github/workflows/release.yml` (tauri-action on `macos-26`), which builds an aarch64 DMG, publishes a GitHub Release, and emits an updater manifest (`latest.json`).
 - **Stable public download:** the same release job also uploads `FNDR-latest.dmg` alongside tauri-action's versioned artifacts after signature verification. GitHub's `releases/latest/download/FNDR-latest.dmg` redirect is the stable public download URL; it does not replace the updater manifest or versioned DMG.
 - **Ad-hoc signing:** builds are ad-hoc signed. First launch requires right-click → Open. Notarization can be layered in later by adding Apple credentials to the same workflow, without redesign.
 - **Auto-update:** `tauri-plugin-updater` with minisign signatures, independent of Apple signing. The public key is committed in `tauri.conf.json`; the private key lives outside the repo (`~/.tauri/fndr-updater.key`) and in GitHub Actions secrets (`TAURI_SIGNING_PRIVATE_KEY`, empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
