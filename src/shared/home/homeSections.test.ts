@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { parseHomeSections, setHomeSection, useHomeSections } from "./homeSections";
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+});
 
 describe("home sections", () => {
     it("shows every section until the person turns one off", () => {
@@ -21,5 +24,18 @@ describe("home sections", () => {
 
         const again = renderHook(() => useHomeSections());
         expect(again.result.current).toMatchObject({ deadlines: false, threads: true });
+    });
+
+    it("keeps a choice for this session when storage refuses the write", () => {
+        const { result } = renderHook(() => useHomeSections());
+        const blockedWrite = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+            throw new Error("storage unavailable");
+        });
+
+        act(() => setHomeSection("deadlines", false));
+        expect(result.current.deadlines).toBe(false);
+
+        blockedWrite.mockRestore();
+        act(() => setHomeSection("deadlines", true));
     });
 });
