@@ -19,6 +19,7 @@ vi.mock("./AppPanels", () => ({
         : null,
 }));
 vi.mock("@/shared/voice/VoiceOutputSection", () => ({ VoiceOutputSection: () => null }));
+vi.mock("@/shared/voice/DictationSection", () => ({ DictationSection: () => null }));
 vi.mock("./BiometricLockScreen", () => ({
     BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));

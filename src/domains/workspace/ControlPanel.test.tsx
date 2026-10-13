@@ -17,6 +17,9 @@ const checkUpdateMock = vi.fn();
 vi.mock("@/shared/voice/VoiceOutputSection", () => ({
     VoiceOutputSection: () => <div data-testid="voice-output-section" />,
 }));
+vi.mock("@/shared/voice/DictationSection", () => ({
+    DictationSection: () => <div data-testid="dictation-section" />,
+}));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
     check: (...args: unknown[]) => checkUpdateMock(...args),

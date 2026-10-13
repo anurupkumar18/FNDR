@@ -14,6 +14,7 @@ import type {
     RuntimeMetricsSnapshot,
     ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
+    DictationSettings,
     VoiceOutputSettings,
     Stats,
     ResumeThread,
@@ -793,6 +794,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
+    let dictationSettings: DictationSettings = { enabled: false, shortcut: "Control+Alt+D", learned_words: [] };
     let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1, neural_voice: "" };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
@@ -1360,6 +1362,26 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 // Deliberate no-op: never hand a path to the OS from the browser preview.
                 return undefined;
+            }
+            case "get_dictation_settings":
+                return { ...dictationSettings, learned_words: [...dictationSettings.learned_words] };
+            case "set_dictation_settings": {
+                const settings = payloadRecord(payload)?.settings as Partial<DictationSettings> | undefined;
+                if (
+                    !settings
+                    || typeof settings.enabled !== "boolean"
+                    || typeof settings.shortcut !== "string"
+                    || !settings.shortcut
+                    || !Array.isArray(settings.learned_words)
+                ) {
+                    throw new Error("Preview set_dictation_settings requires complete settings.");
+                }
+                dictationSettings = {
+                    enabled: settings.enabled,
+                    shortcut: settings.shortcut,
+                    learned_words: settings.learned_words.filter((word): word is string => typeof word === "string"),
+                };
+                return { ...dictationSettings, learned_words: [...dictationSettings.learned_words] };
             }
             case "get_voice_output_settings":
                 return { ...voiceOutputSettings };

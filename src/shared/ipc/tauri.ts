@@ -2812,6 +2812,21 @@ export interface VoiceOutputSettings {
     neural_voice?: string;
 }
 
+export interface DictationSettings {
+    enabled: boolean;
+    shortcut: string;
+    /** Spellings the person taught FNDR, such as names and product terms. */
+    learned_words: string[];
+}
+
+export async function getDictationSettings(): Promise<DictationSettings> {
+    return invoke<DictationSettings>("get_dictation_settings");
+}
+
+export async function setDictationSettings(settings: DictationSettings): Promise<DictationSettings> {
+    return invoke<DictationSettings>("set_dictation_settings", { settings });
+}
+
 export async function getVoiceOutputSettings(): Promise<VoiceOutputSettings> {
     return invoke<VoiceOutputSettings>("get_voice_output_settings");
 }

@@ -14,6 +14,7 @@ export type {
     VoiceUnavailableReason,
 } from "./useVoice";
 export { VoiceOutputSection } from "./VoiceOutputSection";
+export { DictationSection } from "./DictationSection";
 export { createSpeechRegistry, installOfflineVoices, speechRegistry, DEFAULT_ORDER } from "./speechRegistry";
 export type { SpeakOutcome, SpeechRegistry, SpeechSettings, ProviderChangeListener } from "./speechRegistry";
 export type { SpeakOptions, SpeechProvider, SpeechProviderId } from "./speechProvider";

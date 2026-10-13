@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 
-export type VoiceSurface = "home_search" | "screen_guide" | "notch_ask" | "notch_do";
+export type VoiceSurface = "home_search" | "screen_guide" | "notch_ask" | "notch_do" | "dictation";
 /** `stop_words`: Notch Do while it works. The helper hears only "stop" or
  *  "cancel" and sends no text (ADR 020 amendment, 2026-10-09). */
 export type VoiceMode = "toggle" | "push_to_talk" | "stop_words";

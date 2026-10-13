@@ -1,6 +1,7 @@
 import { HOME_SECTIONS, setHomeSection, useHomeSections } from "@/shared/home/homeSections";
 import { SettingsTabList, SettingsTabPanel, type SettingsTab } from "./SettingsTabs";
 import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
+import { DictationSection } from "@/shared/voice/DictationSection";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -795,6 +796,7 @@ export function ControlPanel({
                                     <h3 id="settings-voice-title">Voice</h3>
                                     <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
                                     <VoiceOutputSection />
+                                    <DictationSection />
                                 </section>
                             </SettingsTabPanel>
                             <SettingsTabPanel idPrefix={TABS_ID} id="ai" active={settingsTab === "ai"} direction={tabDirection}>
