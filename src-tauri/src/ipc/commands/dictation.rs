@@ -23,7 +23,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Listener, Manager};
+use tauri::{AppHandle, Listener, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// A session older than this never got its transcript; the next press replaces it.
@@ -275,4 +275,155 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
     let status = child.wait().map_err(|err| err.to_string())?;
     status.success().then_some(()).ok_or_else(|| format!("pbcopy exited with {status}"))
+}
+
+const MAX_LEARNED_WORDS: usize = 200;
+
+fn normalized(mut config: DictationConfig) -> DictationConfig {
+    config.shortcut = config.shortcut.trim().to_string();
+    let mut seen = std::collections::HashSet::new();
+    config.learned_words = config
+        .learned_words
+        .iter()
+        .map(|word| word.trim().to_string())
+        .filter(|word| !word.is_empty() && seen.insert(word.to_lowercase()))
+        .take(MAX_LEARNED_WORDS)
+        .collect();
+    config
+}
+
+/// Dictation holds its key down, so a shortcut another feature owns, or one
+/// that is not registered in this build but is promised elsewhere, would fight it.
+fn validate_shortcut_conflicts(
+    dictation: &DictationConfig,
+    config: &crate::config::Config,
+) -> Result<(), String> {
+    if !dictation.enabled {
+        return Ok(());
+    }
+    let wanted: Shortcut = dictation
+        .shortcut
+        .parse()
+        .map_err(|err| format!("Invalid Dictation shortcut '{}': {err}", dictation.shortcut))?;
+    let others = [
+        ("Omnibar", Some(super::omnibar::OMNIBAR_SHORTCUT.to_string())),
+        ("the notch", Some(super::notch::NOTCH_HUD_SHORTCUT.to_string())),
+        ("Auto-fill", config.autofill.enabled.then(|| config.autofill.shortcut.clone())),
+        ("Screen Guide", config.screen_guide.enabled.then(|| config.screen_guide.shortcut.clone())),
+    ];
+    for (name, shortcut) in others {
+        let Some(shortcut) = shortcut else { continue };
+        if shortcut.parse::<Shortcut>().is_ok_and(|other| other == wanted) {
+            return Err(format!(
+                "Dictation shortcut '{}' conflicts with {name}.",
+                dictation.shortcut
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_dictation_settings(
+    state: State<'_, Arc<AppState>>,
+) -> Result<DictationConfig, String> {
+    Ok(normalized(state.inner().config.read().dictation.clone()))
+}
+
+#[tauri::command]
+pub async fn set_dictation_settings(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    settings: DictationConfig,
+) -> Result<DictationConfig, String> {
+    let mut next = normalized(settings);
+    let shortcut: Shortcut = next
+        .shortcut
+        .parse()
+        .map_err(|err| format!("Invalid Dictation shortcut '{}': {err}", next.shortcut))?;
+    next.shortcut = shortcut.into_string();
+    validate_shortcut_conflicts(&next, &state.inner().config.read())?;
+
+    let previous = state.inner().config.read().dictation.clone();
+    register_dictation_shortcut(&app, &next)?;
+
+    let saved = {
+        let mut config = state.inner().config.write();
+        config.dictation = next.clone();
+        let result = config
+            .save()
+            .map_err(|err: Box<dyn std::error::Error>| err.to_string());
+        if result.is_err() {
+            config.dictation = previous.clone();
+        }
+        result
+    };
+    if let Err(err) = saved {
+        return match register_dictation_shortcut(&app, &previous) {
+            Ok(()) => Err(err),
+            Err(rollback) => Err(format!(
+                "{err} The previous Dictation shortcut could not be restored: {rollback}"
+            )),
+        };
+    }
+    Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn enabled(shortcut: &str) -> DictationConfig {
+        DictationConfig {
+            enabled: true,
+            shortcut: shortcut.to_string(),
+            learned_words: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn learned_words_are_trimmed_deduped_and_capped() {
+        let config = normalized(DictationConfig {
+            enabled: true,
+            shortcut: " Control+Alt+D ".into(),
+            learned_words: vec![" Kunj ".into(), "kunj".into(), "".into(), "LanceDB".into()],
+        });
+        assert_eq!(config.shortcut, "Control+Alt+D");
+        assert_eq!(config.learned_words, vec!["Kunj", "LanceDB"]);
+
+        let many = DictationConfig {
+            learned_words: (0..500).map(|i| format!("word{i}")).collect(),
+            ..DictationConfig::default()
+        };
+        assert_eq!(normalized(many).learned_words.len(), MAX_LEARNED_WORDS);
+    }
+
+    #[test]
+    fn the_default_shortcut_conflicts_with_nothing_fndr_ships() {
+        let mut config = Config::default();
+        config.autofill.enabled = true;
+        config.screen_guide.enabled = true;
+        assert!(validate_shortcut_conflicts(&enabled("Control+Alt+D"), &config).is_ok());
+    }
+
+    #[test]
+    fn a_shortcut_another_surface_owns_is_refused() {
+        let mut config = Config::default();
+        config.autofill.enabled = true;
+        config.screen_guide.enabled = true;
+        for taken in ["Alt+Space", "Alt+N", "Alt+F", "Control+Alt+Space"] {
+            let err = validate_shortcut_conflicts(&enabled(taken), &config).unwrap_err();
+            assert!(err.contains("conflicts with"), "{taken}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_dictation_is_not_validated() {
+        let off = DictationConfig {
+            shortcut: "Alt+Space".into(),
+            ..DictationConfig::default()
+        };
+        assert!(validate_shortcut_conflicts(&off, &Config::default()).is_ok());
+    }
 }

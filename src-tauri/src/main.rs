@@ -870,6 +870,8 @@ fn main() {
             ipc::commands::get_focus_status,
             // Auto-fill
             ipc::commands::get_autofill_settings,
+            ipc::commands::get_dictation_settings,
+            ipc::commands::set_dictation_settings,
             ipc::commands::set_autofill_settings,
             ipc::commands::get_voice_output_settings,
             ipc::commands::set_voice_output_settings,
