@@ -26,6 +26,17 @@ The run by hand stops at `incorrect updater private key password`. `TAURI_SIGNIN
 4. Resume or drop the paused documentation pass so the shared checkout can fast-forward.
 5. Open items in `docs/handoffs/2026-10-08-test-determinism.md`, updated today.
 
+## What caps product quality, measured 2026-10-13
+
+Read from the owner's vault, counts only. These decide what is worth building next more than any open ticket does.
+
+- **The vault is starved.** 162 memories. FNDR captured on 9 of the 27 days from 2026-09-17, none after 2026-10-09. Every figure measured on this vault, here and in earlier evidence, rests on that.
+- **Work has no identity outside a code repository.** 21 of 162 memories carry a project, because a project is detected only from a repository path. Resume threads fall back to the window title: 71 threads, 54 with one or two memories, one with 64. Work sets, Home's recent threads and meeting prep are all built on those threads.
+- **The insight graph adds nothing to search.** Every one of its 659 nodes has one source memory. VS-69 was built without the graph, measured, and dropped: no change in Recall@5 or MRR@10 on three personas (`docs/team/tickets/proposed/cloud-proposals.md`).
+- **The synthetic gate is at its ceiling.** Recall@5 is 1.000, 0.950 and 1.000, so it can catch a regression and cannot show an improvement.
+
+Next product decision, for the owner: define a piece of work for a knowledge worker (a document and what was open with it, a course, a recurring meeting) and assign it at capture with evidence, then rebuild Resume threads on it. Until the vault has weeks of real days, measure it on the persona corpora extended with cross-app work.
+
 ## Process notes
 
 - Worked: a contract test that ties the release image to the tested image; proving the workflow by hand before any tag.
