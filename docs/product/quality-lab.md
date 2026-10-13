@@ -30,6 +30,8 @@ The suite may be `knowledge-worker`, `office-pm`, or `software-engineer`. `prepa
 
 The `fixtures` run manifest includes structured measurements alongside its raw log: CER by positive fixture, baseline-budget status, worst CER case, all admission decisions, motion-sequence dedupe outcomes, and test summaries. OCR CER budgets are historical regression ceilings, not quality targets; always inspect CER values and human-readable OCR/memory text. A passing fixture suite does not mean OCR or summaries are good.
 
+In a fresh checkout, install frontend dependencies with `npm ci --ignore-scripts` first. The `fixtures` command builds `dist/` when it is missing because Tauri requires that directory while compiling the Rust integration tests.
+
 The profile is stored at `~/Library/Application Support/com.fndr.app.quality-lab/<suite>`. The existing demo seeder verifies that this path cannot overlap the owner profile. It links the owner's model directory to avoid a second multi-gigabyte model copy. Because it is a symlink, do not install, update, or remove models from the Lab app; those operations could change the shared model files. Resetting a Lab profile moves only that suite data directory to Trash.
 
 ## Native synthetic image replay
