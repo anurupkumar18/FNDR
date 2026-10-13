@@ -50,11 +50,13 @@ let cachedRaw: string | null | undefined;
 let cachedChoice: HomeSectionChoice = ALL_ON;
 
 function snapshot(): HomeSectionChoice {
-    let raw: string | null = null;
+    const saved = storage();
+    if (!saved) return cachedChoice;
+    let raw: string | null;
     try {
-        raw = storage()?.getItem(STORAGE_KEYS.homeSections) ?? null;
+        raw = saved.getItem(STORAGE_KEYS.homeSections);
     } catch {
-        raw = null;
+        return cachedChoice;
     }
     if (raw !== cachedRaw) {
         cachedRaw = raw;
@@ -74,13 +76,19 @@ function subscribe(listener: () => void): () => void {
 
 export function setHomeSection(id: HomeSectionId, shown: boolean): void {
     const next = { ...snapshot(), [id]: shown };
+    const raw = JSON.stringify(next);
+    let written = false;
     try {
-        storage()?.setItem(STORAGE_KEYS.homeSections, JSON.stringify(next));
+        const saved = storage();
+        if (saved) {
+            saved.setItem(STORAGE_KEYS.homeSections, raw);
+            written = true;
+        }
     } catch {
         // Private windows can refuse storage; the choice then lasts until reload.
-        cachedRaw = undefined;
-        cachedChoice = next;
     }
+    cachedRaw = written ? raw : null;
+    cachedChoice = next;
     window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
