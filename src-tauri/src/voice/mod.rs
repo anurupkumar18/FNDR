@@ -59,6 +59,8 @@ pub enum VoiceSurface {
     ScreenGuide,
     NotchAsk,
     NotchDo,
+    /// Hold-to-dictate into whatever field has focus, in any app.
+    Dictation,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -467,6 +469,7 @@ fn validate_surface_mode(surface: VoiceSurface, mode: VoiceMode) -> Result<(), S
         (surface, mode),
         (VoiceSurface::HomeSearch, VoiceMode::Toggle)
             | (VoiceSurface::ScreenGuide, VoiceMode::PushToTalk)
+            | (VoiceSurface::Dictation, VoiceMode::PushToTalk)
             | (VoiceSurface::NotchAsk, _)
             | (VoiceSurface::NotchDo, VoiceMode::Toggle)
             | (VoiceSurface::NotchDo, VoiceMode::StopWords)

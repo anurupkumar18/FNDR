@@ -1030,6 +1030,70 @@ pub(crate) fn inject_text_into_field_for_request(
     inject_text_into_target(text, prefer_typed, target)
 }
 
+/// What dictation needs to know about the field it captured at key-down,
+/// asked again when the transcript arrives.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DictationTargetState {
+    pub captured: bool,
+    pub still_focused: bool,
+    pub secure_field_focused: bool,
+}
+
+pub(crate) fn dictation_target_state(pending: Option<&PendingAutofillTarget>) -> DictationTargetState {
+    unsafe {
+        let front = frontmost_pid();
+        let secure_field_focused = front.is_some_and(|pid| operate::focused_is_secure(pid));
+        let Some(target) = pending.and_then(|pending| pending.0.as_ref()) else {
+            return DictationTargetState {
+                captured: false,
+                still_focused: false,
+                secure_field_focused,
+            };
+        };
+        DictationTargetState {
+            captured: true,
+            still_focused: front == Some(target.pid) && focused_role_matches(target),
+            secure_field_focused,
+        }
+    }
+}
+
+unsafe fn focused_role_matches(target: &AutofillTarget) -> bool {
+    let app_el = AXUIElementCreateApplication(target.pid);
+    if app_el.is_null() {
+        return false;
+    }
+    let focused = ax_copy_attr_value(app_el, "AXFocusedUIElement").unwrap_or(std::ptr::null_mut());
+    CFRelease(app_el);
+    if focused.is_null() {
+        return false;
+    }
+    let role = ax_string_attr(focused, "AXRole").unwrap_or_default();
+    CFRelease(focused);
+    target.element_role.is_empty() || role.is_empty() || role == target.element_role
+}
+
+/// Type into a field captured by `capture_focused_context_snapshot` without
+/// touching the Autofill target, so dictation and Autofill never share one.
+pub(crate) fn inject_text_into_pending_target(
+    pending: &PendingAutofillTarget,
+    text: &str,
+) -> Result<(), String> {
+    let target = pending
+        .0
+        .clone()
+        .ok_or_else(|| "No field was captured".to_string())?;
+    inject_text_into_target(text, true, target)
+}
+
+/// The words on screen right now, for dictation's vocabulary. OCR takes
+/// seconds: run it off the key-down path.
+pub(crate) fn read_screen_text() -> String {
+    capture_screen_context_image()
+        .map(|image| recognize_screen_context(&image))
+        .unwrap_or_default()
+}
+
 fn inject_text_into_target(
     text: &str,
     prefer_typed: bool,

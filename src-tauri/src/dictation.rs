@@ -81,7 +81,7 @@ fn screen_terms(text: &str) -> Vec<String> {
     for line in text.lines() {
         let mut sentence_start = true;
         let mut token = String::new();
-        let mut flush = |token: &mut String, sentence_start: &mut bool, found: &mut Vec<String>| {
+        let flush = |token: &mut String, sentence_start: &mut bool, found: &mut Vec<String>| {
             if token.is_empty() {
                 return;
             }
@@ -254,6 +254,34 @@ pub enum InsertPlan {
     Type(String),
     Clipboard(String, ClipboardReason),
     Skip(SkipReason),
+}
+
+/// What a `voice://state` event means for a dictation session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceOutcome {
+    Final { session_id: String, text: String },
+    Ended { session_id: String },
+}
+
+/// Reads a `voice://state` payload. Events for other surfaces and the
+/// listening and partial states that precede the end are `None`.
+pub fn parse_voice_event(payload: &str) -> Option<VoiceOutcome> {
+    let event: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if event.get("surface")?.as_str()? != "dictation" {
+        return None;
+    }
+    let session_id = event.get("sessionId")?.as_str()?.to_string();
+    let state = event.get("state")?;
+    match state.get("kind")?.as_str()? {
+        "final" => Some(VoiceOutcome::Final {
+            session_id,
+            text: state.get("text")?.as_str()?.to_string(),
+        }),
+        "error" | "unavailable" | "stop_word" | "speech_ignored" | "idle" => {
+            Some(VoiceOutcome::Ended { session_id })
+        }
+        _ => None,
+    }
 }
 
 /// A dictated password never reaches the clipboard: a secure field skips both paths.
@@ -438,6 +466,52 @@ mod tests {
             plan_insertion("  ", facts(false, true, true)),
             InsertPlan::Skip(SkipReason::Empty)
         );
+    }
+
+    #[test]
+    fn reads_the_final_text_of_a_dictation_session() {
+        let payload = r#"{"version":1,"sessionId":"s-1","surface":"dictation","state":{"kind":"final","text":"hello there"}}"#;
+        assert_eq!(
+            parse_voice_event(payload),
+            Some(VoiceOutcome::Final {
+                session_id: "s-1".into(),
+                text: "hello there".into()
+            })
+        );
+    }
+
+    #[test]
+    fn errors_and_missing_speech_end_the_session() {
+        for kind in ["error", "unavailable", "stop_word", "speech_ignored", "idle"] {
+            let payload = format!(
+                r#"{{"version":1,"sessionId":"s-2","surface":"dictation","state":{{"kind":"{kind}"}}}}"#
+            );
+            assert_eq!(
+                parse_voice_event(&payload),
+                Some(VoiceOutcome::Ended {
+                    session_id: "s-2".into()
+                }),
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn listening_and_partial_states_keep_the_session_open() {
+        for state in [r#"{"kind":"listening","level":0.2}"#, r#"{"kind":"partial","text":"hel"}"#] {
+            let payload = format!(
+                r#"{{"version":1,"sessionId":"s-3","surface":"dictation","state":{state}}}"#
+            );
+            assert_eq!(parse_voice_event(&payload), None);
+        }
+    }
+
+    #[test]
+    fn other_surfaces_and_junk_are_not_dictation() {
+        let other = r#"{"version":1,"sessionId":"s-4","surface":"screen_guide","state":{"kind":"final","text":"x"}}"#;
+        assert_eq!(parse_voice_event(other), None);
+        assert_eq!(parse_voice_event("not json"), None);
+        assert_eq!(parse_voice_event(r#"{"surface":"dictation"}"#), None);
     }
 
     #[test]

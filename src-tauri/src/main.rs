@@ -652,6 +652,13 @@ fn main() {
                 );
             }
 
+            if let Err(err) = ipc::commands::register_dictation_shortcut(
+                app.handle(),
+                &state.config.read().dictation.clone(),
+            ) {
+                tracing::warn!("Dictation shortcut registration failed: {err}");
+            }
+
             if let Err(err) = ipc::commands::register_screen_guide_shortcut(
                 app.handle(),
                 &state.config.read().screen_guide.clone(),

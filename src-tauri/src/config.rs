@@ -545,6 +545,36 @@ impl MemoryQualityConfig {
     }
 }
 
+pub const DEFAULT_DICTATION_SHORTCUT: &str = "Control+Alt+D";
+
+/// Hold the shortcut, speak, release: FNDR types the cleaned text into the
+/// field that had focus. Off until the person turns it on, because it holds a
+/// global shortcut and opens the microphone.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_dictation_shortcut")]
+    pub shortcut: String,
+    /// Spellings the person taught FNDR, such as names and product terms.
+    #[serde(default)]
+    pub learned_words: Vec<String>,
+}
+
+fn default_dictation_shortcut() -> String {
+    DEFAULT_DICTATION_SHORTCUT.to_string()
+}
+
+impl Default for DictationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shortcut: default_dictation_shortcut(),
+            learned_words: Vec::new(),
+        }
+    }
+}
+
 /// Auto-fill configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutofillConfig {
@@ -739,6 +769,9 @@ pub struct Config {
     /// Intelligent Screen Auto-Fill configuration.
     #[serde(default)]
     pub autofill: AutofillConfig,
+    /// Hold-to-dictate into the focused field of any app.
+    #[serde(default)]
+    pub dictation: DictationConfig,
     /// Click-through, local-only Screen Guide configuration.
     #[serde(default)]
     pub screen_guide: ScreenGuideConfig,
@@ -1277,6 +1310,7 @@ impl Default for Config {
             proactive_surface_enabled: true,
             decay_half_life_days: 21,
             autofill: AutofillConfig::default(),
+            dictation: DictationConfig::default(),
             screen_guide: ScreenGuideConfig::default(),
             operator: OperatorConfig::default(),
             actions_kill_switch: false,

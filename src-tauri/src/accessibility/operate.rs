@@ -410,7 +410,7 @@ fn bring_to_front(app: &AppRef) -> Result<(), String> {
     }
 }
 
-unsafe fn focused_is_secure(pid: i32) -> bool {
+pub(super) unsafe fn focused_is_secure(pid: i32) -> bool {
     let application = AXUIElementCreateApplication(pid);
     if application.is_null() {
         return false;

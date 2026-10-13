@@ -32,6 +32,9 @@ pub use autofill::*;
 mod voice_output;
 pub use voice_output::*;
 
+mod dictation;
+pub use dictation::*;
+
 mod omnibar;
 pub use omnibar::*;
 
