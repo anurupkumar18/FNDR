@@ -3,6 +3,9 @@ name: release
 on:
   push:
     tags: [ "v*" ]
+  # A run by hand builds, signs and checks the app exactly as a tag push does,
+  # then keeps the DMG as a workflow artifact. It publishes nothing.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -10,10 +13,19 @@ permissions:
 jobs:
   verify:
     name: Typecheck and test
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      # The updater compares the installed version with the one in the build,
+      # so a tag that names another version ships an update nobody receives.
+      - name: The tag names the app version
+        if: github.event_name == 'push'
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" = "$GITHUB_REF_NAME" ]; then exit 0; fi
+          echo "::error::Tag $GITHUB_REF_NAME does not name app version $version. Set the version in package.json, package-lock.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml and src-tauri/Cargo.lock, then tag v<version>."
+          exit 1
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -25,7 +37,9 @@ jobs:
   build-release:
     name: Build and publish macOS release
     needs: verify
-    runs-on: macos-14
+    # The same image as the Rust tests in test.yml: the speech helper needs the
+    # macOS 26 SDK to compile, and src/dev/releaseDrift.test.ts holds the two together.
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       # Developer ID signing + notarization turn on when these secrets exist.
@@ -72,7 +86,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
+          # Empty on a run by hand: with no tag, tauri-action builds and uploads nothing.
+          tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: "FNDR ${{ github.ref_name }}"
           releaseBody: |
             FNDR for macOS 13+ on Apple Silicon.
@@ -95,7 +110,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
+          # Empty on a run by hand: with no tag, tauri-action builds and uploads nothing.
+          tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: "FNDR ${{ github.ref_name }}"
           releaseBody: |
             FNDR for macOS 13+ on Apple Silicon.
@@ -125,6 +141,7 @@ jobs:
       # every full release carries the same asset name. Keep tauri-action's
       # versioned DMG and updater artifacts; this is an additional public alias.
       - name: Publish stable DMG download URL
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -133,3 +150,12 @@ jobs:
           cp "$dmg_path" "$RUNNER_TEMP/FNDR-latest.dmg"
           gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/FNDR-latest.dmg" --clobber
           gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -Fx 'FNDR-latest.dmg'
+
+      - name: Keep the DMG from a run by hand
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FNDR-dmg-unpublished
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 3
