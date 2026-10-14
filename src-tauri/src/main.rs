@@ -607,11 +607,11 @@ fn main() {
             app.manage(state.clone());
             app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
-            // Start the Companion API (iPhone/Watch local-network surface) as a
-            // background task so app startup is not blocked on TLS init. The
-            // server lives on a sibling port to MCP; pairing tokens are issued
-            // and stored via StateStore. See ADR-008.
-            {
+            // The Companion API (iPhone/Watch local-network surface) starts at
+            // launch only once a device is paired; otherwise nothing listens
+            // on the local network until the person starts it from the Mac
+            // (`companion_start_server`). TLS init runs off the startup path.
+            if fndr_lib::companion::should_start_at_launch(&state) {
                 let companion_state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     match fndr_lib::companion::start(companion_state, None, None).await {
