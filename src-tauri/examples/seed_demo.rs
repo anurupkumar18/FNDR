@@ -3,7 +3,7 @@
 //! Usage: cargo run --example seed_demo -- --data-dir <dir> --corpus <json>
 //! Refuses to write into the real profile (com.fndr.app).
 
-use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveTime, TimeZone};
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Timelike};
 use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::memory_quality::partition_surfaceable;
@@ -109,9 +109,28 @@ fn validate_seed_target(data_dir: &Path, real_profile: &Path) -> Result<PathBuf,
     Ok(requested)
 }
 
+/// The latest hour a `minutes_ago` entry is counted back from.
+const LATEST_ANCHOR_HOUR: u32 = 21;
+
+/// What `minutes_ago` counts back from: now, or 21:00 today once it is
+/// later. The corpora say "yesterday" with entries 22 and 26 hours old;
+/// seeded at 23:30, 22 hours back was 01:30 today, and "the survey themes
+/// I coded yesterday" missed. From 21:00 every entry lands on the day its
+/// query names. Before about 03:00 "earlier today" cannot hold at all.
+fn seed_anchor(now: DateTime<Local>) -> DateTime<Local> {
+    if now.hour() < LATEST_ANCHOR_HOUR {
+        return now;
+    }
+    let evening = now
+        .date_naive()
+        .and_hms_opt(LATEST_ANCHOR_HOUR, 0, 0)
+        .expect("valid hour");
+    Local.from_local_datetime(&evening).single().unwrap_or(now)
+}
+
 fn timestamp_ms(entry: &SeedEntry, now: DateTime<Local>) -> i64 {
     if let Some(minutes) = entry.minutes_ago {
-        return now.timestamp_millis() - minutes * 60_000;
+        return seed_anchor(now).timestamp_millis() - minutes * 60_000;
     }
     let t = NaiveTime::parse_from_str(&entry.time, "%H:%M").expect("time HH:MM");
     let date = now.date_naive() + ChronoDuration::days(entry.day_offset);
@@ -305,6 +324,33 @@ mod tests {
         assert!(entry.project.is_empty());
         assert!(entry.next_steps.is_empty());
         assert_eq!(entry.minutes_ago, None);
+    }
+
+    #[test]
+    fn late_in_the_evening_yesterday_still_means_yesterday() {
+        let late = Local.with_ymd_and_hms(2026, 10, 13, 23, 30, 0).unwrap();
+        let day_of = |entry: &SeedEntry| {
+            Local
+                .timestamp_millis_opt(timestamp_ms(entry, late))
+                .single()
+                .unwrap()
+                .date_naive()
+        };
+        let yesterday = late.date_naive() - ChronoDuration::days(1);
+        for minutes in [1320, 1560] {
+            let entry = parse(&format!(
+                r#"{{"id":"a","minutes_ago":{minutes},"app_name":"A","window_title":"W","summary":"s","ocr_text":"o","session":"s"}}"#
+            ));
+            assert_eq!(day_of(&entry), yesterday, "{minutes} minutes");
+        }
+        for minutes in [55, 190] {
+            let entry = parse(&format!(
+                r#"{{"id":"a","minutes_ago":{minutes},"app_name":"A","window_title":"W","summary":"s","ocr_text":"o","session":"s"}}"#
+            ));
+            assert_eq!(day_of(&entry), late.date_naive(), "{minutes} minutes");
+        }
+        // In the afternoon nothing moves.
+        assert_eq!(seed_anchor(fixed_now()), fixed_now());
     }
 
     #[test]
