@@ -201,6 +201,55 @@ pub fn finalize_extraction(draft: &mut StructuredMemoryExtraction, input: &str) 
     });
 }
 
+/// Keep a few complete OCR lines from an explicit image import as observations.
+/// Salience chooses lines, but every stored quote comes from the original OCR.
+pub fn source_observations_from_ocr(input: &str, app_name: &str) -> Option<ExtractionEvidence> {
+    let source = extraction_source_text(input);
+    if source.trim().is_empty() {
+        return None;
+    }
+    let lines: Vec<_> = source.lines().collect();
+    let incomplete_last_line = input.chars().nth(4000).is_some() && !source.ends_with('\n');
+    let mut selected = HashSet::new();
+    let mut statements = Vec::new();
+    for span in crate::capture::text_cleanup::rank_salient_spans(&source, app_name) {
+        // The salience splitter can join a short heading to the next OCR
+        // line. Select the last line of that exact span so its quote includes
+        // the content and the following qualifier.
+        let span_text = span.text.trim();
+        let Some(offset) = source.find(span_text) else {
+            continue;
+        };
+        let line = source[..offset + span_text.len()].lines().count();
+        if !selected.insert(line) {
+            continue;
+        }
+        let Some(quote) = quote_at(&lines, line, incomplete_last_line) else {
+            continue;
+        };
+        if quote.chars().count() > MAX_QUOTE_CHARS {
+            continue;
+        }
+        statements.push(SourceStatement {
+            kind: "observation".into(),
+            line: line as u32,
+            quote,
+        });
+        if statements.len() >= MAX_STATEMENTS {
+            break;
+        }
+    }
+    if statements.is_empty() {
+        return None;
+    }
+    Some(ExtractionEvidence {
+        version: 1,
+        source_sha256: source_hash(&source),
+        statements,
+        issues: Vec::new(),
+    })
+}
+
 /// Recheck host evidence after capture fusion. Evidence points into its original
 /// model input, not into subsequently cleaned or concatenated record text.
 pub fn validate_source_evidence(
@@ -221,7 +270,7 @@ pub fn validate_source_evidence(
         evidence.statements.retain(|statement| {
             let valid = quote_at(&lines, statement.line as usize, incomplete_last_line).as_deref()
                 == Some(statement.quote.as_str())
-                && matches!(statement.kind.as_str(), "intent" | "action")
+                && matches!(statement.kind.as_str(), "intent" | "action" | "observation")
                 && statement.quote.chars().count() <= MAX_QUOTE_CHARS;
             if !valid {
                 issues.push("source_quote_mismatch".into());
@@ -252,7 +301,7 @@ fn parse_evidence(value: &Value) -> Option<ExtractionEvidence> {
         || evidence.issues.len() > MAX_ISSUES
         || evidence.statements.iter().any(|s| {
             s.line == 0
-                || !matches!(s.kind.as_str(), "intent" | "action")
+                || !matches!(s.kind.as_str(), "intent" | "action" | "observation")
                 || s.quote.trim().is_empty()
                 || s.quote.chars().count() > MAX_QUOTE_CHARS
         })
@@ -549,5 +598,45 @@ mod tests {
             extraction_source_text(&"é".repeat(4001)).chars().count(),
             4000
         );
+    }
+
+    #[test]
+    fn explicit_image_ocr_keeps_exact_observations_with_source_lines() {
+        let source = "Changelog - Docs\nChangelog\nThe latest release adds faster search indexing and repairs a memory leak in the background\nworker.";
+        let evidence = source_observations_from_ocr(source, "Meta glasses import").unwrap();
+        assert_eq!(evidence.version, 1);
+        assert!(evidence
+            .statements
+            .iter()
+            .all(|statement| statement.kind == "observation"));
+        assert!(evidence.statements.iter().any(|statement| {
+            statement.line == 3
+                && statement.quote.contains("faster search indexing")
+                && statement
+                    .quote
+                    .contains("memory leak in the background\nworker.")
+        }));
+        let raw = json!({"source_evidence": evidence}).to_string();
+        assert_eq!(source_evidence_sets_from_raw(&raw).len(), 1);
+    }
+
+    #[test]
+    fn explicit_image_ocr_preserves_both_speakers_without_creating_tasks() {
+        let source = "Priya: Finished the export bug fix, opening a PR now.\nSam: Nice, I will review it after lunch.";
+        let evidence = source_observations_from_ocr(source, "Meta glasses import").unwrap();
+        let rendered = render_source_statements(&evidence);
+        assert!(rendered.contains("Priya: Finished the export bug fix"));
+        assert!(rendered.contains("Sam: Nice, I will review it after lunch."));
+        assert!(evidence
+            .statements
+            .iter()
+            .all(|statement| statement.kind == "observation"));
+        assert!(source_observations_from_ocr("   ", "Meta glasses import").is_none());
+    }
+
+    #[test]
+    fn explicit_image_ocr_does_not_keep_a_quote_cut_before_its_qualifier() {
+        let source = format!("{} Do not publish until approved.", "x".repeat(3990));
+        assert!(source_observations_from_ocr(&source, "Meta glasses import").is_none());
     }
 }
