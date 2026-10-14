@@ -22,10 +22,10 @@ The initial native run, before fixing refusal classification, displayed 6/12 pas
 ## Source-grounded observations
 
 - The browser article's stored summary retained both labeled changes: faster search indexing and a background-worker memory-leak repair.
-- The chat image's visible snippet was only `import process`. Its longer stored context mentioned a bug fix and a PR review after lunch, but omitted the labeled names Priya and Sam. The grounded Ask refusal is a real usefulness gap despite the target citation.
-- The paper image's stored summary said top-five accuracy improved, but omitted the labeled twelve-percent amount and the comparison against either signal alone on a held-out set. Its paraphrase target ranked seventh, and the grounded Ask refused.
+- The chat image's visible snippet was only `import process`. Its longer stored context mentioned a bug fix and a PR review after lunch, but omitted the labeled names Priya and Sam. Grounded Ask stopped at the verifier with `all hits below confidence threshold`; the target appeared among evidence citations but not in the returned cards.
+- The paper image's stored summary said top-five accuracy improved, but omitted the labeled twelve-percent amount and the comparison against either signal alone on a held-out set. Its paraphrase target ranked seventh. Grounded Ask reached composition with a partial-answer verifier outcome, then the model returned the exact not-found response.
 - All three imports recorded `vlm_route: fallback_ocr_only` and `extraction_failure_reason: system_pressure`. The stored image memory was built from the local LLM-on-OCR fallback, so this run does not measure the pixel-VLM path. The exact OCR text and private journey artifacts remain in the local lab profile only.
-- Ask currently renders each regular memory to the model from `record.snippet`. This explains why a target citation can coexist with a refusal when the snippet omits a required fact. The synthetic profile and manifest demonstrate the symptom; a separate behavior change and native rerun are needed to confirm a remedy.
+- Ask currently renders each regular memory to the model from `record.snippet`. That is a plausible cause of the paper answer's missing amount, since its snippet omitted the amount. It does not explain the chat refusal, which occurred earlier at the verifier. A separate behavior change and native rerun are needed to confirm either remedy.
 
 ## Verification
 
@@ -35,4 +35,4 @@ The initial native run, before fixing refusal classification, displayed 6/12 pas
 
 ## Next investigation
 
-Keep VS-72 through VS-74 open for source review and Search/Ask quality. The immediate code lead is the Ask context builder's snippet-only input for regular memories. The paper paraphrase rank also needs retrieval trace review. Do not treat the passing unsupported checks as proof that grounded questions work.
+Keep VS-72 through VS-74 open for source review and Search/Ask quality. Investigate the chat verifier threshold, the paper's snippet-only Ask context, and the paper paraphrase rank as separate leads. Do not treat the passing unsupported checks as proof that grounded questions work.
