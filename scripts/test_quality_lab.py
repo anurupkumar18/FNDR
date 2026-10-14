@@ -98,6 +98,22 @@ class QualityLabProfileTests(unittest.TestCase):
         self.assertEqual(command[:4], ["npm", "run", "tauri", "dev"])
         self.assertIn("--no-watch", command)
 
+    def test_prepare_requests_capture_paused_before_native_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            profile = quality_lab.profile_for(home, "knowledge-worker")
+            corpus = quality_lab.ROOT / "scripts/demo/knowledge-worker-week.json"
+
+            def seed(*_args, **_kwargs):
+                profile.mkdir(parents=True)
+
+            with patch.object(quality_lab, "paths", return_value=(profile, home / "owner")):
+                with patch.object(quality_lab, "run", side_effect=seed) as run:
+                    quality_lab.prepare("knowledge-worker", reset=False)
+
+            self.assertEqual(run.call_args.kwargs["env"]["FNDR_DEMO_PAUSE_CAPTURE"], "1")
+            self.assertEqual(run.call_args.kwargs["env"]["FNDR_DEMO_CORPUS"], str(corpus))
+
     def test_fixture_lane_builds_frontend_when_dist_is_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(quality_lab, "ROOT", Path(directory)):

@@ -62,7 +62,7 @@ use std::sync::Arc;
 use storage::{StateStore, Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
 
-const USER_CAPTURE_PAUSED_STATE_KEY: &str = "capture.user_paused";
+pub const USER_CAPTURE_PAUSED_STATE_KEY: &str = "capture.user_paused";
 
 /// Queued insight-graph upsert work (see `capture` flush + idle `commit_graph_updates`).
 #[derive(Debug, Clone)]

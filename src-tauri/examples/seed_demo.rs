@@ -7,7 +7,8 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveTime, TimeZone};
 use fndr_lib::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use fndr_lib::embedding::{Embedder, EMBEDDING_DIM};
 use fndr_lib::memory_quality::partition_surfaceable;
-use fndr_lib::storage::{MemoryRecord, Store};
+use fndr_lib::storage::{MemoryRecord, StateStore, Store};
+use fndr_lib::USER_CAPTURE_PAUSED_STATE_KEY;
 use serde::Deserialize;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,11 @@ fn arg(name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1).cloned())
+}
+
+fn pause_capture_on_start(data_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    StateStore::new(data_dir)?.save_json(USER_CAPTURE_PAUSED_STATE_KEY, &true)?;
+    Ok(())
 }
 
 fn resolved_path_for_safety(path: &Path) -> Result<PathBuf, String> {
@@ -251,12 +257,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             records.len() - stored
         );
     }
+    if std::env::args().any(|value| value == "--pause-capture") {
+        pause_capture_on_start(&data_dir)?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_seed_starts_capture_paused_on_first_launch() {
+        let root = tempfile::tempdir().expect("temp profile");
+        pause_capture_on_start(root.path()).expect("save capture preference");
+        let state = StateStore::new(root.path()).expect("reopen state");
+        assert_eq!(
+            state
+                .load_json::<bool>(USER_CAPTURE_PAUSED_STATE_KEY)
+                .expect("load capture preference"),
+            Some(true)
+        );
+    }
 
     fn parse(json: &str) -> SeedEntry {
         serde_json::from_str(json).expect("seed entry")
