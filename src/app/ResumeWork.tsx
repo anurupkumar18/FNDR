@@ -118,6 +118,9 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                                         <span>{thread.app_name && thread.app_name !== thread.title ? `${thread.app_name} · ` : ""}{activityAge(thread.age_minutes)}</span>
                                     </div>
                                     {thread.last_state && <p>{thread.last_state.replace(/\bin_progress\b/g, "in progress")}</p>}
+                                    {thread.grouped_by && thread.grouped_by.length > 0 && (
+                                        <p className="resume-work-grouped">Grouped by the words its windows share: {thread.grouped_by.join(", ")}</p>
+                                    )}
                                     {thread.key && <ThreadChanges threadKey={thread.key} title={title} />}
                                     <WorkSetOpener name={title} load={load} continueMemoryId={latestSource} arrange={arrange}>
                                         {latestSource && (

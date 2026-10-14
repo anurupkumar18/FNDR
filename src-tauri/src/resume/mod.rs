@@ -3,6 +3,7 @@
 //! token-budgeted evidence.
 
 pub mod pack;
+pub(crate) mod work_names;
 
 use crate::inference::extraction_evidence::{
     has_source_evidence, render_source_statements, source_evidence_sets_from_raw,
@@ -22,6 +23,10 @@ pub struct ResumeThread {
     /// take. An identifier, never shown.
     pub key: String,
     pub title: String,
+    /// The words shared across windows that made this one thread, as they
+    /// were written in a window title. Empty when the thread is one window
+    /// or one explicit project and nothing was inferred.
+    pub grouped_by: Vec<String>,
     /// App of the newest memory, shown as a label beside the title.
     pub app_name: String,
     pub last_state: String,
@@ -34,8 +39,10 @@ pub struct ResumeThread {
     pub pack: PackResult,
 }
 
-/// Groups a memory into a thread: its project, falling back to its
-/// session_key, then to the domain of its url, then to its app name.
+/// The grouping a memory has by itself: its project, falling back to its
+/// session_key, then to the domain of its url, then to its app name. Windows
+/// that share a name are then joined across these groups by
+/// `work_names::work_threads`, which is what every surface reads.
 pub(crate) fn thread_key(record: &MemoryRecord) -> String {
     if !record.project.trim().is_empty() {
         return record.project.clone();
@@ -119,13 +126,22 @@ fn clip_at_word(text: &str, max_chars: usize) -> String {
     format!("{}…", clipped[..cut].trim_end_matches([',', ';', ':', ' ']))
 }
 
-fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize) -> ResumeThread {
+fn build_thread(
+    mut group: Vec<MemoryRecord>,
+    threads: &work_names::WorkThreads,
+    now_ms: i64,
+    budget_tokens: usize,
+) -> ResumeThread {
     group.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
     let newest = group
         .last()
         .expect("build_thread requires a non-empty group");
 
-    let mut title = thread_title(newest);
+    // A thread joined by a name goes by that name; one window keeps its own.
+    let mut title = threads
+        .title(newest)
+        .map(str::to_string)
+        .unwrap_or_else(|| thread_title(newest));
     let age_minutes = (now_ms - newest.timestamp).max(0) / 60_000;
     let mut last_state = thread_state(newest, &title);
     // When the only name available is the app, the sentence about the work is
@@ -201,8 +217,9 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
     let pack = pack_within_budget(candidates, budget_tokens);
 
     ResumeThread {
-        key: thread_key(newest),
+        key: threads.key(newest),
         title,
+        grouped_by: threads.names(newest),
         app_name: newest.app_name.trim().to_string(),
         last_state,
         age_minutes,
@@ -224,6 +241,28 @@ pub(crate) fn admits(record: &MemoryRecord, blocklist: &[String]) -> bool {
         && !record.snippet.starts_with("Downloaded: ")
 }
 
+/// The admitted memories from `since_ms` on, or from the start of the naming
+/// window if that is earlier, with the threads named over all of them. Every
+/// surface that needs a thread key reads it from here, so the key of a
+/// thread does not depend on how far back that surface looks.
+pub(crate) async fn admitted_with_threads(
+    store: &Store,
+    blocklist: &[String],
+    since_ms: i64,
+    now_ms: i64,
+) -> Result<(Vec<MemoryRecord>, work_names::WorkThreads), String> {
+    let start_ms = since_ms.min(now_ms - work_names::NAMING_WINDOW_MS);
+    let records: Vec<MemoryRecord> = store
+        .get_memories_in_range(start_ms, now_ms)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
+        .into_iter()
+        .filter(|record| admits(record, blocklist))
+        .collect();
+    let named = work_names::work_threads(&records);
+    Ok((records, named))
+}
+
 /// Builds Resume Work threads from memories captured in the last `hours`
 /// hours, each packed within `budget_tokens`. Threads are ordered most
 /// recently active first.
@@ -237,22 +276,19 @@ pub async fn build_resume_threads(
     let window_ms = i64::from(hours) * 60 * 60 * 1000;
     let start_ms = now_ms - window_ms;
 
-    let records = store
-        .get_memories_in_range(start_ms, now_ms)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    let (records, named) = admitted_with_threads(store, blocklist, start_ms, now_ms).await?;
 
     let mut by_key: HashMap<String, Vec<MemoryRecord>> = HashMap::new();
     for record in records {
-        if !admits(&record, blocklist) {
+        if record.timestamp < start_ms {
             continue;
         }
-        by_key.entry(thread_key(&record)).or_default().push(record);
+        by_key.entry(named.key(&record)).or_default().push(record);
     }
 
     let mut threads: Vec<ResumeThread> = by_key
         .into_values()
-        .map(|group| build_thread(group, now_ms, budget_tokens))
+        .map(|group| build_thread(group, &named, now_ms, budget_tokens))
         .collect();
     threads.sort_by_key(|thread| thread.age_minutes);
     Ok(threads)
@@ -346,7 +382,7 @@ mod tests {
         chat.window_title = "FNDR".into();
         chat.display_summary =
             "Reviewed the app's development status, including commits and UI rendering.".into();
-        let thread = build_thread(vec![chat], 1_800_000_060_000, 800);
+        let thread = build_thread(vec![chat], &Default::default(), 1_800_000_060_000, 800);
         assert_eq!(
             thread.title,
             "Reviewed the app's development status, including commits and UI rendering"
@@ -361,7 +397,7 @@ mod tests {
         page.app_name = "Google Chrome".into();
         page.window_title = "Gamete Chromosome Count".into();
         page.display_summary = "Answered questions on meiosis and chromosome counts.".into();
-        let thread = build_thread(vec![page], 1_800_000_060_000, 800);
+        let thread = build_thread(vec![page], &Default::default(), 1_800_000_060_000, 800);
         assert_eq!(thread.title, "Gamete Chromosome Count");
         assert_eq!(
             thread.last_state,
@@ -384,7 +420,7 @@ mod tests {
             }
         })
         .to_string();
-        let thread = build_thread(vec![observed], 1_800_000_060_000, 1000);
+        let thread = build_thread(vec![observed], &Default::default(), 1_800_000_060_000, 1000);
         assert!(thread.next_steps.is_empty());
         assert!(thread.suggested_next_steps.is_empty());
         let packed = serde_json::to_string(&thread.pack).unwrap();
@@ -447,7 +483,7 @@ mod tests {
         newer.outcome = "done".to_string();
         newer.next_steps = vec!["Measure p95 latency".to_string()];
 
-        let thread = build_thread(vec![older, newer], now, 10_000);
+        let thread = build_thread(vec![older, newer], &Default::default(), now, 10_000);
 
         assert_eq!(thread.key, "FNDR");
         assert_eq!(thread.title, "FNDR");
@@ -580,5 +616,95 @@ mod tests {
             after.is_empty(),
             "hidden and deleted records must not return"
         );
+    }
+
+    fn window(id: &str, app: &str, title: &str, timestamp: i64) -> MemoryRecord {
+        MemoryRecord {
+            id: id.into(),
+            timestamp,
+            app_name: app.into(),
+            window_title: title.into(),
+            session_key: crate::capture::build_session_key(app, title, None),
+            memory_context: format!("Worked in {title}."),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn windows_that_share_a_name_are_one_thread_with_one_key_however_far_back_a_surface_looks(
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store =
+            tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+                .await
+                .expect("join")
+                .expect("store");
+        let now = chrono::Utc::now().timestamp_millis();
+        let day = 24 * 60 * 60 * 1000;
+        let mut private = window(
+            "private",
+            "Notes",
+            "Smart Reminders salary notes",
+            now - 500_000,
+        );
+        private.app_name = "PrivateNotes".into();
+        store
+            .add_batch_preserving_ids(&[
+                window(
+                    "deck",
+                    "Keynote",
+                    "Smart Reminders Launch Review.key",
+                    now - 5 * day,
+                ),
+                window(
+                    "checklist",
+                    "Notion",
+                    "Launch checklist v3 - Smart Reminders",
+                    now - 600_000,
+                ),
+                window(
+                    "faq",
+                    "Notion",
+                    "Support FAQ - Smart Reminders",
+                    now - 300_000,
+                ),
+                window("lunch", "Mail", "Lunch order", now - 200_000),
+                private,
+            ])
+            .await
+            .expect("insert");
+        let blocklist = vec!["PrivateNotes".to_string()];
+
+        // A day back: the deck from five days ago still names the thread.
+        let today = build_resume_threads(&store, 24, 2000, &blocklist)
+            .await
+            .expect("today");
+        let named = today
+            .iter()
+            .find(|thread| thread.key == "work:smart reminders")
+            .expect("named thread");
+        assert_eq!(named.title, "Smart Reminders");
+        assert_eq!(named.evidence, vec!["checklist", "faq"]);
+        assert_eq!(named.grouped_by, vec!["Smart Reminders"]);
+        let lunch = today
+            .iter()
+            .find(|thread| thread.evidence == vec!["lunch"])
+            .expect("lunch thread");
+        assert!(lunch.grouped_by.is_empty());
+        // A blocked app's window neither joins a thread nor names one.
+        assert!(today
+            .iter()
+            .all(|thread| !thread.evidence.contains(&"private".to_string())));
+
+        // A week back: the same key, now with the deck.
+        let week = build_resume_threads(&store, 7 * 24, 2000, &blocklist)
+            .await
+            .expect("week");
+        let named = week
+            .iter()
+            .find(|thread| thread.key == "work:smart reminders")
+            .expect("named thread");
+        assert_eq!(named.evidence, vec!["deck", "checklist", "faq"]);
     }
 }

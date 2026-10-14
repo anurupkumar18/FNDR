@@ -93,6 +93,17 @@ describe("Resume Work on Home", () => {
         expect(calls("resume_work")).toHaveLength(1);
     });
 
+    it("says which shared words made several windows one thread, and nothing for a single window", async () => {
+        resumeRows = [[
+            { ...thread("Smart Reminders"), grouped_by: ["Smart Reminders", "Reminders launch"] },
+            { ...thread("Parser"), grouped_by: [] },
+        ]];
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+
+        expect(await screen.findByText("Grouped by the words its windows share: Smart Reminders, Reminders launch")).toBeInTheDocument();
+        expect(screen.getAllByText(/^Grouped by/)).toHaveLength(1);
+    });
+
     it("leaves out the sections the person turned off in Settings", async () => {
         localStorage.setItem("fndr-home-sections", JSON.stringify({ deadlines: false, sets: false }));
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);

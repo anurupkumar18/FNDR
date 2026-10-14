@@ -8,7 +8,8 @@ use super::stuck::{detect_stuck, past_match_for, StuckKind, LOOKBACK_MS};
 use super::thread_digest::{compute_digest, worth_a_nudge};
 use crate::config::Config;
 use crate::graph::GraphStore;
-use crate::resume::{admits, thread_key};
+use crate::resume::admits;
+use crate::resume::work_names::work_threads;
 use crate::storage::{StateStore, Store};
 use crate::AppState;
 use std::collections::{BTreeMap, HashSet};
@@ -118,11 +119,12 @@ fn evaluate_signals_on_a_profile_copy() {
             .collect();
         let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
         let mut first_seen: BTreeMap<String, i64> = BTreeMap::new();
+        let threads = work_threads(&admitted_rows);
         for row in &admitted_rows {
-            first_seen.entry(thread_key(row)).or_insert(row.timestamp);
+            first_seen.entry(threads.key(row)).or_insert(row.timestamp);
         }
         for (key, marker) in &first_seen {
-            let digest = compute_digest(key, *marker, false, &admitted_rows, &tasks);
+            let digest = compute_digest(key, *marker, false, &admitted_rows, &threads, &tasks);
             *tally.entry("threads").or_default() += 1;
             if digest.new_memories > 0 {
                 *tally.entry("with_new").or_default() += 1;
@@ -146,7 +148,7 @@ fn evaluate_signals_on_a_profile_copy() {
             if digest.task_count > 0 {
                 let ids: HashSet<&str> = admitted_rows
                     .iter()
-                    .filter(|r| r.timestamp > *marker && thread_key(r) == *key)
+                    .filter(|r| r.timestamp > *marker && threads.key(r) == *key)
                     .map(|r| r.id.as_str())
                     .collect();
                 let from_source = tasks

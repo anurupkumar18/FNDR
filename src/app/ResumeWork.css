@@ -60,6 +60,7 @@
 .home-quiet { color: var(--home-quiet); }
 .resume-work-header p,
 .resume-work-thread-heading span,
+.resume-work-grouped,
 .resume-work-next > span { color: var(--home-quiet); font-size: 12px; }
 .resume-work-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .home-work button {
