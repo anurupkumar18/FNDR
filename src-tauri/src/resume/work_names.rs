@@ -148,16 +148,19 @@ fn subject_segments(record: &MemoryRecord) -> Vec<String> {
 
 /// The candidate names in one memory's window title, each with the way it
 /// was written. A phrase is two neighbouring words; an identifier is a word
-/// with a digit in it ("Q4", "a4") or a number of three digits or more.
-fn candidate_names(record: &MemoryRecord) -> Vec<(String, String)> {
+/// with a digit in it ("Q4", "a4") or a number of three digits or more. The
+/// flag says the name is in the part the title leads with.
+fn candidate_names(record: &MemoryRecord) -> Vec<(String, String, bool)> {
     let mut out = Vec::new();
-    for segment in subject_segments(record) {
+    for (at, segment) in subject_segments(record).into_iter().enumerate() {
+        let leads = at == 0;
         let words = words(&segment);
         for pair in words.windows(2) {
             if !(all_digits(&pair[0].lower) && all_digits(&pair[1].lower)) {
                 out.push((
                     format!("{} {}", pair[0].lower, pair[1].lower),
                     format!("{} {}", pair[0].written, pair[1].written),
+                    leads,
                 ));
             }
         }
@@ -167,7 +170,7 @@ fn candidate_names(record: &MemoryRecord) -> Vec<(String, String)> {
             let identifier = (all_digits(&word.lower) && word.lower.len() >= 3)
                 || (has_digit && has_letter && !is_version(&word.lower));
             if identifier {
-                out.push((format!("#{}", word.lower), word.written.clone()));
+                out.push((format!("#{}", word.lower), word.written.clone(), leads));
             }
         }
     }
@@ -190,6 +193,9 @@ struct Group {
     /// Set when the memories carry an explicit project, which outranks a name.
     project: bool,
     names: BTreeSet<String>,
+    /// The names a title of these windows leads with. A title leads with the
+    /// thing itself and ends with where it is kept.
+    leading: BTreeSet<String>,
     /// The words on screen in these windows, lowercased and single-spaced,
     /// with a space at each end, so a name is found as whole words.
     text: String,
@@ -225,6 +231,7 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
             place: place(record),
             project: !record.project.trim().is_empty(),
             names: BTreeSet::new(),
+            leading: BTreeSet::new(),
             text: String::from(" "),
         });
         if group.text.len() < MAX_TEXT_CHARS {
@@ -240,8 +247,11 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
                 }
             }
         }
-        for (name, as_written) in candidate_names(record) {
+        for (name, as_written, leads) in candidate_names(record) {
             written.entry(name.clone()).or_insert(as_written);
+            if leads {
+                group.leading.insert(name.clone());
+            }
             group.names.insert(name);
         }
     }
@@ -257,9 +267,17 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
     }
 
     // A name is shared by two windows or more. A phrase that sits in most
-    // windows of one place and nowhere else names the place: a workspace, a
-    // site, a kind of page.
-    let names_the_place = |held_by: &BTreeSet<usize>| {
+    // windows of one place and nowhere else names the place (a workspace, a
+    // site, a kind of page), unless half the titles that carry it lead with
+    // it: then one piece of work simply fills that place.
+    let names_the_place = |name: &str, held_by: &BTreeSet<usize>| {
+        let leads_in = held_by
+            .iter()
+            .filter(|&&index| groups[index].leading.contains(name))
+            .count();
+        if leads_in * 2 >= held_by.len() {
+            return false;
+        }
         let mut places = held_by.iter().map(|&index| groups[index].place.as_str());
         let first = places.next().unwrap_or_default();
         if places.any(|other| other != first) {
@@ -270,7 +288,7 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
     };
     let mut shared: Vec<(&str, &BTreeSet<usize>)> = holders
         .iter()
-        .filter(|(_, held_by)| held_by.len() >= 2 && !names_the_place(held_by))
+        .filter(|(name, held_by)| held_by.len() >= 2 && !names_the_place(name, held_by))
         .map(|(name, held_by)| (*name, held_by))
         .collect();
     if shared.len() > MAX_NAMES {
@@ -293,8 +311,9 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
             }
         }
     }
-    // Each set of names, most widely shared first; a phrase before an
-    // identifier, then by spelling, so the choice never depends on order.
+    // Each set of names: phrases before identifiers, since "Q3 Metrics" says
+    // more than "Q3", then most widely shared first, then by spelling, so
+    // the choice never depends on order.
     let mut name_sets: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for index in 0..shared.len() {
         let root = find(&mut parent, index);
@@ -302,16 +321,11 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
     }
     for members in name_sets.values_mut() {
         members.sort_by(|&a, &b| {
-            shared[b]
-                .1
-                .len()
-                .cmp(&shared[a].1.len())
-                .then_with(|| {
-                    shared[a]
-                        .0
-                        .starts_with('#')
-                        .cmp(&shared[b].0.starts_with('#'))
-                })
+            shared[a]
+                .0
+                .starts_with('#')
+                .cmp(&shared[b].0.starts_with('#'))
+                .then_with(|| shared[b].1.len().cmp(&shared[a].1.len()))
                 .then_with(|| shared[a].0.cmp(shared[b].0))
         });
     }

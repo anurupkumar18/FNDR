@@ -46,12 +46,20 @@ Decided the same day by the owner's other session, after the owner said to desig
 |---|---:|---:|---:|---:|
 | knowledge-worker | 0.06 | 0.33 | 0.42 | 1.00 |
 | office-pm | 0.05 | 0.69 | 0.84 | 0.98 |
-| software-engineer | 0.14 | 0.37 | 0.46 | 0.94 |
+| software-engineer | 0.03 | 0.37 | 0.46 | 0.94 |
 
 **The text pass (VS-97, same day).** A window whose title names nothing, such as a chat channel or a rubric page, joins a thread when its on-screen text uses two of that thread's names and no name of any other thread. A window with its own project never moves. Screen text is searched for names FNDR already took from titles; it is never a source of new names and nothing in it is followed.
 
 `resume::work_names::tests::naming_finds_far_more_of_a_personas_work_and_is_seldom_wrong` holds floors under these numbers.
 
+**What the run on a real store changed (same day).** The score above is computed on window titles. Run through the real work-set resolver on a seeded store with its project labels removed, the first version was wrong, for three reasons the score could not see. Each is fixed and has a test.
+
+1. *The store's `session_key` is not a window.* On write it becomes the first two parts of a page's path, so every Google Doc is `docs.google.com:document/d` and every Gmail message `mail.google.com:mail/u`. Resume fell back to it, which is also the cause of the one 74-memory thread on the owner's vault. `resume::thread_key` now falls back to the window (app, site and title words, without a count in brackets) before the session key.
+2. *One piece of work can fill a site.* Three windows of one pull request were most of the GitHub windows, so their shared phrases were taken for the site's name. A phrase that at least half its titles lead with is never a place name: a title leads with the thing and ends with where it is kept.
+3. *Work sets absorbed neighbours.* `workset::rank::tied` joins threads that sit close in time and share two title words. A named thread runs for days, so everything was close. A named thread now takes in no neighbour.
+
+After the fixes, on the office persona's 40 unlabelled memories: 9 threads, 4 of them named and holding 34 memories. "pull up everything for smart reminders" opens 4 pages of that launch, "open the q3 metrics review" 3 of that review, "the senior product designer hiring" 6 of that search, and none from another piece of work. Before, each opened pages from all three.
+
 **Options weighed.** Chaining any two windows that share a rare word reached 0.88 found on one persona but was right only 0.3 to 0.6 of the time, because one stray word joins two large threads. A cap on how common a name may be dropped the largest real project of the week. Attaching a window when its on-screen text mentions one name of a thread found 0.96 on one persona and fell to 0.43 right on another, because an inbox mentions every project; requiring two names of one thread and none of another kept every precision floor, and that is what was built. Showing links without joining (the Vault's `sessionLinks`) leaves a work set at one place.
 
-**Limits.** 86 synthetic entries, and the rule was shaped on them. The owner's vault is too small to judge it (162 memories). A product or repository name used across several pieces of work can still join them: the wrong pairs on the software-engineer persona are of that kind. The thread card shows the shared words ("Grouped by the words its windows share") so a wrong grouping can be seen for what it rests on. Not yet seen in the running app.
+**Limits.** 86 synthetic entries, and the rule was shaped on them. The owner's vault is too small to judge it (162 memories). A product or repository name used across several pieces of work can still join them: the wrong pairs on the software-engineer persona are of that kind. The thread card shows the shared words ("Grouped by the words its windows share") so a wrong grouping can be seen for what it rests on. Checked on a seeded store through the real resolver (`work_set_eval_on_a_vault_copy`, which now also prints thread counts); not yet seen in the running app.

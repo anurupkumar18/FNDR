@@ -40,12 +40,15 @@ pub struct ResumeThread {
 }
 
 /// The grouping a memory has by itself: its project, falling back to its
-/// session_key, then to the domain of its url, then to its app name. Windows
+/// window, then its session_key, the domain of its url and its app name. Windows
 /// that share a name are then joined across these groups by
 /// `work_names::work_threads`, which is what every surface reads.
 pub(crate) fn thread_key(record: &MemoryRecord) -> String {
     if !record.project.trim().is_empty() {
         return record.project.clone();
+    }
+    if let Some(window) = window_key(record) {
+        return window;
     }
     if !record.session_key.trim().is_empty() {
         return record.session_key.clone();
@@ -58,6 +61,45 @@ pub(crate) fn thread_key(record: &MemoryRecord) -> String {
         return domain;
     }
     record.app_name.clone()
+}
+
+/// One window: its app, its site and the words of its title, without a
+/// count in brackets ("Inbox (14)"). `session_key` cannot stand in for it:
+/// the store rewrites that to the first two parts of a page's path, which
+/// gives every Google Doc and every Gmail message one key.
+fn window_key(record: &MemoryRecord) -> Option<String> {
+    let mut title = String::new();
+    let mut in_count = false;
+    for word in record.window_title.split_whitespace() {
+        // "(14)" or "(page 6 of 22)": a counter, not part of the name.
+        let opens = word.starts_with('(') && word[1..].starts_with(|ch: char| ch.is_ascii_digit());
+        if opens || in_count {
+            in_count = !word.ends_with(')');
+            continue;
+        }
+        for run in word.split(|ch: char| !ch.is_alphanumeric()) {
+            if !run.is_empty() {
+                if !title.is_empty() {
+                    title.push(' ');
+                }
+                title.push_str(&run.to_lowercase());
+            }
+        }
+    }
+    if title.is_empty() {
+        return None;
+    }
+    let site = record
+        .url
+        .as_deref()
+        .and_then(crate::capture::extract_domain)
+        .unwrap_or_default();
+    Some(format!(
+        "window:{}|{}|{}",
+        record.app_name.trim().to_lowercase(),
+        site,
+        title
+    ))
 }
 
 /// What a person sees as the thread's name. The grouping key is an internal
@@ -344,7 +386,10 @@ mod tests {
             session_key: "google_chrome:title:grades_for_anurup_kumar_4500_001_fall_2026".into(),
             ..Default::default()
         };
-        assert_eq!(super::thread_key(&record), record.session_key);
+        assert_eq!(
+            super::thread_key(&record),
+            "window:google chrome||grades for anurup kumar 4500 001 fall 2026"
+        );
         assert_eq!(
             super::thread_title(&record),
             "Grades for Anurup Kumar: 4500-001 Fall 2026"
@@ -440,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_key_prefers_project_then_session_then_domain_then_app() {
+    fn thread_key_prefers_project_then_window_then_session_then_domain_then_app() {
         assert_eq!(
             thread_key(&MemoryRecord {
                 project: "FNDR".to_string(),
@@ -448,6 +493,27 @@ mod tests {
                 ..Default::default()
             }),
             "FNDR"
+        );
+        // The store gives every Google Doc one session key. Two documents
+        // are two windows, and the unread count is not part of a window.
+        let doc = |title: &str| MemoryRecord {
+            app_name: "Google Chrome".to_string(),
+            window_title: title.to_string(),
+            url: Some("https://docs.google.com/document/d/abc/edit".to_string()),
+            session_key: "google_chrome:docs.google.com:document/d".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            thread_key(&doc("Essay draft - Google Docs")),
+            "window:google chrome|docs.google.com|essay draft google docs"
+        );
+        assert_ne!(
+            thread_key(&doc("Essay draft - Google Docs")),
+            thread_key(&doc("Budget - Google Docs"))
+        );
+        assert_eq!(
+            thread_key(&doc("Inbox (14) - Gmail")),
+            thread_key(&doc("Inbox (23) - Gmail"))
         );
         assert_eq!(
             thread_key(&MemoryRecord {

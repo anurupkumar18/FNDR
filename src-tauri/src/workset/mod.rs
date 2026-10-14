@@ -254,6 +254,7 @@ async fn gather(state: &AppState, query: &str) -> Result<Inputs, String> {
             .await?
             .into_iter()
             .map(|thread| ThreadInput {
+                named: !thread.grouped_by.is_empty(),
                 title: thread.title,
                 member_ids: thread.evidence,
             })
@@ -514,6 +515,37 @@ mod tests {
                         record.window_title.chars().take(70).collect::<String>(),
                         record.project,
                         record.session_key.chars().take(40).collect::<String>()
+                    );
+                }
+            }
+            // Resume threads of the week: how many, how large, how many were
+            // joined by a shared name. Titles only with FNDR_WORKSET_LIST.
+            let threads =
+                crate::resume::build_resume_threads(&state.store, THREAD_WINDOW_HOURS, 1, &[])
+                    .await
+                    .unwrap();
+            let named = threads.iter().filter(|t| !t.grouped_by.is_empty());
+            let mut sizes: Vec<usize> = threads.iter().map(|t| t.evidence.len()).collect();
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            println!(
+                "threads: {}; named by shared words: {} holding {} memories; sizes: {:?}",
+                threads.len(),
+                named.clone().count(),
+                named.map(|t| t.evidence.len()).sum::<usize>(),
+                &sizes[..sizes.len().min(12)]
+            );
+            if std::env::var("FNDR_WORKSET_LIST").is_ok() {
+                for thread in &threads {
+                    println!(
+                        "  thread {:?} | {} memories | grouped by {:?} | {:?}",
+                        thread.title,
+                        thread.evidence.len(),
+                        thread.grouped_by,
+                        thread
+                            .evidence
+                            .iter()
+                            .map(|id| id.chars().take(18).collect::<String>())
+                            .collect::<Vec<_>>()
                     );
                 }
             }

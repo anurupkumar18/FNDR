@@ -13,6 +13,9 @@ use crate::storage::{MemoryRecord, Task};
 pub struct ThreadInput {
     pub title: String,
     pub member_ids: Vec<String>,
+    /// Joined across windows by a shared name (`resume::work_names`). Its
+    /// members were chosen on evidence, so it takes in no neighbour.
+    pub named: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -397,6 +400,8 @@ struct Group<'a> {
     due_soon: bool,
     score: f32,
     matches: bool,
+    /// See `ThreadInput::named`.
+    named: bool,
 }
 
 fn base_name(path: &str) -> String {
@@ -536,6 +541,7 @@ fn describe<'a>(
         due_soon,
         score: relevance + 0.6 * overlap + task_boost + recency,
         matches,
+        named: false,
     }
 }
 
@@ -544,6 +550,11 @@ fn describe<'a>(
 /// the search found for the request on its own in another app or site. A
 /// second page of the same site is a second piece of work, not a companion.
 fn tied(seed: &Group, other: &Group) -> bool {
+    // A named thread runs for days, so the gaps below say nothing about it,
+    // and its windows were already chosen by the names they share.
+    if seed.named || other.named {
+        return false;
+    }
     let apart = seed.start.max(other.start) - seed.end.min(other.end);
     let shared_files = seed.files.intersection(&other.files).count();
     let shared_words = seed.title_words.intersection(&other.title_words).count();
@@ -623,14 +634,16 @@ pub fn rank(inputs: &Inputs) -> Resolution {
         }
         members.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.id.cmp(&b.id)));
         let newest = members.last().map(|m| m.id.clone()).unwrap_or_default();
-        groups.push(describe(
+        let mut group = describe(
             format!("thread:{newest}"),
             thread.title.clone(),
             members,
             inputs,
             &topic,
             &hits,
-        ));
+        );
+        group.named = thread.named;
+        groups.push(group);
     }
 
     // A hit or a task's memory outside every recent thread is its own
@@ -795,7 +808,63 @@ mod tests {
         ThreadInput {
             title: title.into(),
             member_ids: ids.iter().map(|id| id.to_string()).collect(),
+            named: false,
         }
+    }
+
+    #[test]
+    fn a_thread_joined_by_a_name_opens_its_own_places_and_takes_in_no_neighbour() {
+        let launch_doc = page(
+            rec(
+                "launch-doc",
+                "Google Chrome",
+                "Smart Reminders launch review notes",
+                300,
+            ),
+            "https://docs.example.com/launch",
+        );
+        let launch_board = page(
+            rec(
+                "launch-board",
+                "Google Chrome",
+                "Smart Reminders sprint board",
+                20,
+            ),
+            "https://board.example.com/launch",
+        );
+        // Another thread across the same days whose titles share two long words.
+        let metrics_sheet = page(
+            rec(
+                "metrics-sheet",
+                "Google Chrome",
+                "Quarterly metrics launch review sheet",
+                200,
+            ),
+            "https://sheets.example.com/metrics",
+        );
+        let metrics_deck = page(
+            rec(
+                "metrics-deck",
+                "Google Chrome",
+                "Quarterly metrics review deck",
+                30,
+            ),
+            "https://slides.example.com/metrics",
+        );
+        let named = |title: &str, ids: &[&str]| ThreadInput {
+            named: true,
+            ..thread(title, ids)
+        };
+        let set = best(rank(&inputs(
+            "pull up smart reminders",
+            vec![launch_doc, launch_board, metrics_sheet, metrics_deck],
+            vec![
+                named("Smart Reminders", &["launch-doc", "launch-board"]),
+                named("Quarterly metrics", &["metrics-sheet", "metrics-deck"]),
+            ],
+        )));
+        assert_eq!(set.title, "Smart Reminders");
+        assert_eq!(ids(&set), vec!["launch-board", "launch-doc"]);
     }
 
     fn hit(id: &str, score: f32) -> Hit {

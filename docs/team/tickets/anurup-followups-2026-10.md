@@ -802,6 +802,8 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 
 **Why.** VS-95 was checked by tests only, and its rule was shaped on 86 synthetic entries.
 
+**Progress, 2026-10-13.** Done on a seeded store without the app: the work-set evaluation prints thread counts and, with `FNDR_WORKSET_LIST`, each thread. That run found and fixed three faults (ADR 031 addendum). Still open: the native app, and a copy of a real week.
+
 **Do.** Seed a persona profile, open Home and a work set in the native app, and confirm a named thread opens more than one place. Add a read-only count to the signals evaluation (threads, windows per thread, named threads) and run it on a copy of a vault with at least a week of daily capture. Record wrong groupings by their shared words, never by content.
 
 **Done when.** A native run is recorded, and the counts exist for one real week.
