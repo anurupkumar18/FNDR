@@ -783,7 +783,6 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 - labels: area::vault-search, type::feature, prio::p1
 - milestone: W04-Prove
 - estimate: 6h
-- depends: VS-69
 
 **Why.** On the owner's vault 54 of 71 Resume threads hold one or two memories, because a thread is one window title unless a memory has a project. Work sets, Home and meeting prep are built on those threads.
 
