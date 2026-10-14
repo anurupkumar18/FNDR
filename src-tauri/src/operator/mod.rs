@@ -2,6 +2,8 @@
 //! Mac through FNDR-native tools and a computer-use MCP server, with every
 //! action gated by `policy` and written to `journal`.
 
+#[cfg(test)]
+pub(crate) mod eval;
 pub mod journal;
 pub mod layout;
 pub mod mcp;

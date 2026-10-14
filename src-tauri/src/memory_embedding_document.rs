@@ -671,8 +671,6 @@ fn trim_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use uuid::Uuid;
 
     fn rich_record() -> MemoryRecord {
         let mut record = MemoryRecord::default();

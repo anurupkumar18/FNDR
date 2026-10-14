@@ -103,22 +103,88 @@ pub fn step_report_schema() -> Value {
 /// written is refused here, before anything touches the Mac.
 const NOTHING_TO_DO: &str = "Nothing to do in that request.";
 
+/// Where a request goes, decided on this Mac before anything leaves it. The
+/// run and the evaluation suite (`operator::eval`) both ask this one function.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Route {
+    /// "Save this as <name>": the set this session opened last is saved.
+    SaveSet { name: String },
+    /// A set the person saved, by its index in their saved names.
+    SavedSet {
+        index: usize,
+        layout: Option<crate::operator::layout::Layout>,
+    },
+    /// A whole piece of work, resolved from memories with no model (ADR 027).
+    WorkSet {
+        layout: Option<crate::operator::layout::Layout>,
+    },
+    /// The cloud planner turn, with memory snippets only when the request
+    /// points at the past.
+    Planner { memory_snippets: bool },
+}
+
+pub fn route(request: &str, saved_names: &[String]) -> Route {
+    if let Some(name) = save_set_name(request) {
+        return Route::SaveSet { name };
+    }
+    let layout = layout_asked_for(request);
+    if let Some(index) = named_set_asked_for(request, saved_names) {
+        return Route::SavedSet { index, layout };
+    }
+    if asks_for_work_set(request) {
+        return Route::WorkSet { layout };
+    }
+    Route::Planner {
+        memory_snippets: refers_to_past(request),
+    }
+}
+
+/// Whether a finished run must say it left something out.
+pub fn leaves_something_out(request: &str) -> bool {
+    asks_for_something_never_done(request)
+}
+
+/// Words that ask for something Notch Do never does wherever they stand.
+const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|reply|replies|forward|delete|deletes|deleting|remove|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
+
+/// Words that ask for it only as the verb a request or a clause starts with:
+/// "text Sam", "email the team", "order a pizza", "pay the bill". As nouns
+/// ("this email", "the text of", "in order", "the pay range doc") they are
+/// what the person wants to read or open.
+const NEVER_AS_VERB: &[&str] = &["text", "message", "email", "order", "pay"];
+
+/// Words before a clause's verb that change nothing.
+const CLAUSE_LEAD: &[&str] = &[
+    "please", "can", "could", "would", "you", "hey", "fndr", "and", "then", "also", "just", "now",
+];
+
 /// Whether the request's words ask for something Notch Do never does.
 fn asks_for_something_never_done(request: &str) -> bool {
     static NEVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let never = NEVER.get_or_init(|| {
-        regex::Regex::new(
-            r"(?i)\b(send|sends|sending|email|message|text|reply|delete|deletes|remove|erase|trash|buy|purchase|pay|order|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b",
-        )
-        .expect("never-tier pattern compiles")
-    });
-    never.is_match(request)
+    let never = NEVER
+        .get_or_init(|| regex::Regex::new(NEVER_ANYWHERE).expect("never-tier pattern compiles"));
+    if never.is_match(request) {
+        return true;
+    }
+    let lower = request.to_lowercase();
+    lower
+        .split(|c: char| matches!(c, ',' | ';' | '.' | '!' | '?'))
+        .flat_map(|clause| clause.split(" and ").flat_map(|part| part.split(" then ")))
+        .any(|clause| {
+            let words: Vec<&str> = clause
+                .split(|c: char| !c.is_alphanumeric() && c != '\'')
+                .filter(|word| !word.is_empty())
+                .skip_while(|word| CLAUSE_LEAD.contains(word))
+                .collect();
+            words.len() >= 2 && NEVER_AS_VERB.contains(&words[0])
+        })
 }
 
 /// What a finished run adds when the request also asked for something Notch
 /// Do never does. The planner leaves that part out, so without this a run
 /// for "buy it" would end in a plain "Done".
-pub const LEFT_OUT: &str = "Left out: Notch Do does not send, delete, buy, enter passwords or change settings.";
+pub const LEFT_OUT: &str =
+    "Left out: Notch Do does not send, delete, buy, enter passwords or change settings.";
 
 pub fn with_left_out_note(summary: String, request: &str) -> String {
     if asks_for_something_never_done(request) {

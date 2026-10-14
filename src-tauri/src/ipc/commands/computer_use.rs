@@ -25,8 +25,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use super::codex_account::{
-    configured_mcp_server_names, is_plain_config_key, parse_account, ready_executable, AppServer,
-    account_model, read_only_feature_args, refresh_codex_features, with_model,
+    account_model, configured_mcp_server_names, is_plain_config_key, parse_account,
+    read_only_feature_args, ready_executable, refresh_codex_features, with_model, AppServer,
 };
 use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
 use crate::operator::journal::{redact, Journal, JournalEntry};
@@ -1237,85 +1237,94 @@ async fn run(
     commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
-    if let Some(name) = plan::save_set_name(&transcript) {
-        return save_last_set(&state, &ctx, &name);
-    }
-    let named = crate::workset::resolve_named(&state, &transcript).await;
-    if named.is_some() || plan::asks_for_work_set(&transcript) {
-        (ctx.emit)(ComputerUseEvent::Planning {
-            run_id: ctx.run_id.clone(),
-            used_memories: 0,
-        });
-        let resolution = match named {
-            Some(resolution) => resolution,
-            None => crate::workset::resolve(&state, &transcript).await,
-        };
-        let layout = plan::layout_asked_for(&transcript);
-        let open_state = state.clone();
-        return run_work_set(
-            ctx,
-            resolution,
-            commands,
-            move |item| {
-                let state = open_state.clone();
-                async move {
-                    let id = item.memory_id.clone();
-                    crate::workset::open_items(&state, &[item])
-                        .await
-                        .pop()
-                        .unwrap_or(ItemOutcome {
-                            memory_id: id,
-                            label: String::new(),
-                            kind: None,
-                            ok: false,
-                            detail: "Nothing was opened".to_string(),
-                            outcome: None,
-                            arrangement: None,
-                        })
-                }
-            },
-            move |set, opened| async move {
-                let requested: Vec<String> = set
-                    .items
-                    .iter()
-                    .map(|item| item.memory_id.clone())
-                    .collect();
-                let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
-                let arranged = match layout {
-                    Some(layout) => {
-                        let windows = opened
-                            .iter()
-                            .map(|item| crate::workset::arrange::Opened {
-                                app: item.app_name.clone(),
-                                label: item.label.clone(),
-                            })
-                            .collect();
-                        Some(
-                            crate::workset::arrange::after_open(&state, windows, layout)
-                                .await
-                                .sentence(),
-                        )
-                    }
-                    None => None,
-                };
-                crate::workset::note_opened(
-                    &state,
-                    &requested,
-                    &ids,
-                    &set.title,
-                    crate::workset::routines::Source::Notch,
-                );
-                arranged
-            },
-        )
-        .await;
-    }
-    let snippets = if plan::refers_to_past(&transcript) {
-        memory::snippets(&state, &transcript).await
-    } else {
-        Vec::new()
+    let saved = crate::workset::saved_sets(&state);
+    let names: Vec<String> = saved.iter().map(|set| set.name.clone()).collect();
+    let (resolution, layout) = match plan::route(&transcript, &names) {
+        plan::Route::SaveSet { name } => return save_last_set(&state, &ctx, &name),
+        plan::Route::Planner { memory_snippets } => {
+            let snippets = if memory_snippets {
+                memory::snippets(&state, &transcript).await
+            } else {
+                Vec::new()
+            };
+            return run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await;
+        }
+        plan::Route::SavedSet { index, layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (
+                crate::workset::resolve_saved(&state, &saved[index]).await,
+                layout,
+            )
+        }
+        plan::Route::WorkSet { layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (crate::workset::resolve(&state, &transcript).await, layout)
+        }
     };
-    run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
+    let open_state = state.clone();
+    run_work_set(
+        ctx,
+        resolution,
+        commands,
+        move |item| {
+            let state = open_state.clone();
+            async move {
+                let id = item.memory_id.clone();
+                crate::workset::open_items(&state, &[item])
+                    .await
+                    .pop()
+                    .unwrap_or(ItemOutcome {
+                        memory_id: id,
+                        label: String::new(),
+                        kind: None,
+                        ok: false,
+                        detail: "Nothing was opened".to_string(),
+                        outcome: None,
+                        arrangement: None,
+                    })
+            }
+        },
+        move |set, opened| async move {
+            let requested: Vec<String> = set
+                .items
+                .iter()
+                .map(|item| item.memory_id.clone())
+                .collect();
+            let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
+            let arranged = match layout {
+                Some(layout) => {
+                    let windows = opened
+                        .iter()
+                        .map(|item| crate::workset::arrange::Opened {
+                            app: item.app_name.clone(),
+                            label: item.label.clone(),
+                        })
+                        .collect();
+                    Some(
+                        crate::workset::arrange::after_open(&state, windows, layout)
+                            .await
+                            .sentence(),
+                    )
+                }
+                None => None,
+            };
+            crate::workset::note_opened(
+                &state,
+                &requested,
+                &ids,
+                &set.title,
+                crate::workset::routines::Source::Notch,
+            );
+            arranged
+        },
+    )
+    .await
 }
 
 /// "Save this as <name>": saves the set this session opened last, on this
@@ -1479,9 +1488,7 @@ async fn run_with_snippets(
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
     let codex = ready_executable().map_err(RunError::Failed)?;
-    let backend = detect_backend().ok_or_else(|| {
-        RunError::Failed(NO_HELPER.to_string())
-    })?;
+    let backend = detect_backend().ok_or_else(|| RunError::Failed(NO_HELPER.to_string()))?;
     let user_servers = configured_mcp_server_names(&codex)
         .await
         .map_err(RunError::Failed)?;
@@ -1601,7 +1608,10 @@ async fn run_with_snippets(
         run_id: ctx.run_id.clone(),
         ok: true,
         summary: plan::with_left_out_note(
-            with_report(format!("Done: {}.", done.join(", ")), session.last_report.as_deref()),
+            with_report(
+                format!("Done: {}.", done.join(", ")),
+                session.last_report.as_deref(),
+            ),
             &ctx.request,
         ),
     });
@@ -2133,7 +2143,10 @@ mod tests {
             ..Default::default()
         };
         let mut guards = Guards::open();
-        assert_eq!(app_in_front(&seen("Google Chrome"), &guards).as_deref(), Some("Google Chrome"));
+        assert_eq!(
+            app_in_front(&seen("Google Chrome"), &guards).as_deref(),
+            Some("Google Chrome")
+        );
         assert_eq!(app_in_front(&seen(""), &guards), None);
         guards.off_limits = Arc::new(|app| app == "1Password");
         assert_eq!(app_in_front(&seen("1Password"), &guards), None);
@@ -2146,7 +2159,10 @@ mod tests {
             with_report("Done: Summarize article.".into(), Some(" It argues X. ")),
             "Done: Summarize article. Reported: It argues X."
         );
-        assert_eq!(with_report("Done: Open Chrome.".into(), None), "Done: Open Chrome.");
+        assert_eq!(
+            with_report("Done: Open Chrome.".into(), None),
+            "Done: Open Chrome."
+        );
         assert_eq!(with_report("Done.".into(), Some("  ")), "Done.");
     }
 
@@ -2479,6 +2495,96 @@ mod tests {
         );
     }
 
+    /// The Notch Do suite's planner cases against the real planner, on the
+    /// person's ChatGPT sign-in. Planning only: the session has no
+    /// computer-use tools and a planning turn refuses every tool request, so
+    /// nothing on this Mac is read or done. Writes the raw answers to
+    /// `scripts/operator/recordings/<date>-live.json`, which
+    /// `operator::eval` rescores offline from then on.
+    ///
+    /// `FNDR_NOTCH_DO_LIVE_EVAL=1 cargo test --lib notch_do_live_planner_eval -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "sends the suite's synthetic requests to the planner on the person's ChatGPT plan"]
+    async fn notch_do_live_planner_eval() {
+        if std::env::var("FNDR_NOTCH_DO_LIVE_EVAL").is_err() {
+            return;
+        }
+        let suite = crate::operator::eval::load_suite();
+        let codex =
+            crate::ipc::commands::codex_account::ready_executable().expect("Codex is installed");
+        let mut session = Session::open(&codex, &[])
+            .await
+            .expect("signed in with ChatGPT");
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let emit = |_: ComputerUseEvent| {};
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let guards = Guards::open();
+        let mut answers = serde_json::Map::new();
+        let (mut passed, mut scored) = (0usize, 0usize);
+        for case in suite.cases.iter().filter(|case| {
+            case.plan.is_some()
+                && matches!(
+                    plan::route(&case.request, &case.saved_sets),
+                    plan::Route::Planner { .. }
+                )
+        }) {
+            let mut observed = Observed::default();
+            let planner = session.planner_thread.clone();
+            let mut turn = TurnContext {
+                run_id: "eval",
+                step: None,
+                guards: &guards,
+                observed: &mut observed,
+                journal: &journal,
+                emit: &emit,
+                commands: &mut receiver,
+            };
+            let request = plan_request_text(&case.request, &[], case.in_front.as_deref());
+            let answer = tokio::time::timeout(
+                PLAN_TIMEOUT,
+                session.run_turn(&mut turn, &planner, &request, plan::plan_output_schema()),
+            )
+            .await
+            .map_err(|_| "timed out".to_string())
+            .and_then(|answer| answer.map_err(|error| format!("{error:?}")))
+            .unwrap_or_else(|error| format!("ERROR {error}"));
+            let wrong = crate::operator::eval::plan_mismatches(case, &answer);
+            scored += 1;
+            if wrong.is_empty() {
+                passed += 1;
+            }
+            println!(
+                "{}: {}",
+                case.id,
+                if wrong.is_empty() {
+                    "ok".to_string()
+                } else {
+                    wrong.join("; ")
+                }
+            );
+            answers.insert(case.id.clone(), serde_json::Value::String(answer));
+        }
+        session.server.shutdown().await;
+        let share = passed as f64 / scored.max(1) as f64;
+        println!("planner: {passed} of {scored} plans as labeled");
+        let recording = json!({
+            "recorded_at": chrono::Utc::now().to_rfc3339(),
+            "codex": codex.display().to_string(),
+            "prompt_version": crate::inference::prompts::LLM_PROMPT_VERSION,
+            // The share today; rescoring later may not fall below it.
+            "pass_floor": (share * 100.0).floor() / 100.0,
+            "answers": answers,
+        });
+        let path = crate::operator::eval::repo_path(&format!(
+            "scripts/operator/recordings/{}-live.json",
+            chrono::Local::now().format("%Y-%m-%d")
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec_pretty(&recording).unwrap()).unwrap();
+        println!("recorded {}", path.display());
+    }
+
     /// A planner that asks to read the screen is refused: nothing is read or
     /// done before the plan is shown and started.
     #[tokio::test]
@@ -2639,7 +2745,10 @@ mod tests {
         let asked: Arc<Mutex<Vec<String>>> = Arc::default();
         let recorded = asked.clone();
         let emit = move |event: ComputerUseEvent| {
-            if let ComputerUseEvent::Approval { request_key, tool, .. } = &event {
+            if let ComputerUseEvent::Approval {
+                request_key, tool, ..
+            } = &event
+            {
                 recorded.lock().unwrap().push(tool.clone());
                 commands
                     .send(RunCommand::Respond {

@@ -121,3 +121,18 @@ These tickets reconcile merged work with the remaining native and real-use evide
 **Done when.** Recall and false suggestions have denominators and counts, and the native empty-state sentence is visibly confirmed or fixed.
 
 **Evidence.** Content-safe score table and native check in `docs/evidence/W04/`.
+
+## AG-06 Measure Notch Do with a labeled suite before changing it
+- assignee: anurupkumar
+- labels: area::command, type::feature, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: AG-02
+
+**Why.** AG-02 and AG-05 ask for a "twenty-task Notch Do set" and none existed, so a change to the planner prompt, the routing words or the policy had nothing to be scored against.
+
+**Result, 2026-10-14.** `scripts/operator/notch-do-cases.json` (30 cases) and `operator::eval`: routing scored on every test run through `plan::route`, which the run now uses; plan labels scored on recorded planner answers. It found five misroutes from never-do words used as nouns, fixed. The live planner test exists and has not been run.
+
+**Done when.** A live recording exists and its floor holds, and the suite has cases for the operate step's tool policy.
+
+**Evidence.** Test output; the first recording under `scripts/operator/recordings/`.
