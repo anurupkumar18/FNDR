@@ -700,6 +700,18 @@ const previewResumeThreads: ResumeThread[] = [
         evidence: ["memory-beta-rubric"],
         pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
     },
+    {
+        key: "work:pantry app",
+        title: "Pantry App",
+        grouped_by: ["Pantry App", "Demo script"],
+        app_name: "Keynote",
+        last_state: "Cut the demo script to four minutes and moved the architecture slide.",
+        age_minutes: 12,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
 ];
 
 function requiredString(

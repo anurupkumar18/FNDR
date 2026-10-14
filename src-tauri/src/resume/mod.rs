@@ -205,6 +205,14 @@ fn build_thread(
         title = clip_at_word(last_state.trim_end_matches('.'), 80);
         last_state = String::new();
     }
+    // The words that joined windows are shown only when this view holds
+    // more than one of them; one window explains itself.
+    let windows: HashSet<String> = group.iter().map(thread_key).collect();
+    let grouped_by = if windows.len() >= 2 {
+        threads.names(newest)
+    } else {
+        Vec::new()
+    };
     let newest_source_backed = has_source_evidence(&newest.raw_evidence);
     let next_steps: Vec<String> = newest
         .next_steps
@@ -272,7 +280,7 @@ fn build_thread(
     ResumeThread {
         key: threads.key(newest),
         title,
-        grouped_by: threads.names(newest),
+        grouped_by,
         app_name: newest.app_name.trim().to_string(),
         last_state,
         age_minutes,
@@ -726,6 +734,22 @@ mod tests {
             memory_context: format!("Worked in {title}."),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_named_thread_seen_through_one_window_keeps_its_name_but_claims_no_grouping() {
+        let deck = window(
+            "deck",
+            "Keynote",
+            "Smart Reminders Launch Review.key",
+            1_000,
+        );
+        let faq = window("faq", "Notion", "Support FAQ - Smart Reminders", 2_000);
+        let named = work_names::work_threads(&[deck, faq.clone()]);
+        let thread = build_thread(vec![faq], &named, 3_000, 800);
+        assert_eq!(thread.key, "work:smart reminders");
+        assert_eq!(thread.title, "Smart Reminders");
+        assert!(thread.grouped_by.is_empty());
     }
 
     #[tokio::test]
