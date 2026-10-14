@@ -42,14 +42,16 @@ Decided the same day by the owner's other session, after the owner said to desig
 
 **Evidence (decision 4's measurement).** The three persona corpora file each entry under a project. With that label hidden, the share of same-project pairs the grouping finds, and the share of the pairs it makes that are right:
 
-| Persona | Found before | Found now | Right |
-|---|---:|---:|---:|
-| knowledge-worker | 0.06 | 0.33 | 1.00 |
-| office-pm | 0.05 | 0.69 | 0.98 |
-| software-engineer | 0.14 | 0.37 | 0.93 |
+| Persona | Found before | Found, titles only | Found, with the text pass | Right, with the text pass |
+|---|---:|---:|---:|---:|
+| knowledge-worker | 0.06 | 0.33 | 0.42 | 1.00 |
+| office-pm | 0.05 | 0.69 | 0.84 | 0.98 |
+| software-engineer | 0.14 | 0.37 | 0.46 | 0.94 |
+
+**The text pass (VS-97, same day).** A window whose title names nothing, such as a chat channel or a rubric page, joins a thread when its on-screen text uses two of that thread's names and no name of any other thread. A window with its own project never moves. Screen text is searched for names FNDR already took from titles; it is never a source of new names and nothing in it is followed.
 
 `resume::work_names::tests::naming_finds_far_more_of_a_personas_work_and_is_seldom_wrong` holds floors under these numbers.
 
-**Options weighed.** Chaining any two windows that share a rare word reached 0.88 found on one persona but was right only 0.3 to 0.6 of the time, because one stray word joins two large threads. A cap on how common a name may be dropped the largest real project of the week. Attaching a window when its on-screen text mentions a thread's name found 0.96 on one persona and fell to 0.43 right on another, so it waits for a guard. Showing links without joining (the Vault's `sessionLinks`) leaves a work set at one place.
+**Options weighed.** Chaining any two windows that share a rare word reached 0.88 found on one persona but was right only 0.3 to 0.6 of the time, because one stray word joins two large threads. A cap on how common a name may be dropped the largest real project of the week. Attaching a window when its on-screen text mentions one name of a thread found 0.96 on one persona and fell to 0.43 right on another, because an inbox mentions every project; requiring two names of one thread and none of another kept every precision floor, and that is what was built. Showing links without joining (the Vault's `sessionLinks`) leaves a work set at one place.
 
 **Limits.** 86 synthetic entries, and the rule was shaped on them. The owner's vault is too small to judge it (162 memories). A product or repository name used across several pieces of work can still join them: the wrong pairs on the software-engineer persona are of that kind. The thread card shows the shared words ("Grouped by the words its windows share") so a wrong grouping can be seen for what it rests on. Not yet seen in the running app.

@@ -783,7 +783,6 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 - labels: area::vault-search, type::feature, prio::p1
 - milestone: W04-Prove
 - estimate: 6h
-- depends: VS-69
 
 **Why.** On the owner's vault 54 of 71 Resume threads hold one or two memories, because a thread is one window title unless a memory has a project. Work sets, Home and meeting prep are built on those threads.
 
@@ -818,6 +817,8 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 **Why.** Titles alone find a third to two thirds of a persona's work. A window whose text mentions a thread's name ("HIST 2100" on a rubric page) is the largest part of what is missed. A first try found 0.96 on one persona but was right only 0.43 of the time on another: an inbox mentions every project, and a product name is on every page.
 
 **Do.** Try the text pass with guards: skip a window whose text mentions two threads or more, and skip a name already ignored as a place. Keep the title rule's precision floor.
+
+**Result, 2026-10-13.** Built with one guard that covers both: a window joins only when its text uses two names of one thread and no name of any other. Found went from 0.33, 0.69 and 0.37 to 0.42, 0.84 and 0.46; right is 1.00, 0.98 and 0.94. The floors in the score test were raised to 0.40, 0.80 and 0.44.
 
 **Done when.** Found rises on at least two personas with every precision floor of VS-95 still held, or the pass is dropped with the numbers recorded.
 
