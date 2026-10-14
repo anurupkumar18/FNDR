@@ -1,88 +1,517 @@
 {
-  "about": "Labeled Notch Do requests. `route` is decided on the Mac before anything leaves it: save_set (\"save this as\"), saved_set (a set the person saved), work_set (a whole piece of work, resolved from memories, no model) or planner (the cloud planner turn). `memory_snippets` says whether up to five memory snippets go with the planner request. `left_out` says whether the finished run must say it left out something Notch Do never does. `plan` is what a correct planner answer holds; it is scored only on recorded planner answers. Synthetic requests; no real memory text.",
+  "about": "Labeled Notch Do requests. `route` is decided on the Mac before anything leaves it: save_set (\"save this as\"), saved_set (a set the person saved), work_set (a whole piece of work, resolved from memories, no model), local (only opening apps, links and web searches, planned on the Mac with no model) or planner (the cloud planner turn). A local plan is scored against `plan` on every test run. `memory_snippets` says whether up to five memory snippets go with the planner request. `left_out` says whether the finished run must say it left out something Notch Do never does. `plan` is what a correct planner answer holds; it is scored only on recorded planner answers. Synthetic requests; no real memory text.",
   "cases": [
-    { "id": "play-song", "request": "open Spotify and play Blinding Lights",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_app", "app": "Spotify" }, { "action": "operate", "app": "Spotify", "check": "media_playing" } ], "max_steps": 2 } },
-    { "id": "open-notes", "request": "open Notes",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_app", "app": "Notes" } ], "max_steps": 1 } },
-    { "id": "open-messages-app", "request": "open the Messages app",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_app", "app": "Messages" } ], "max_steps": 1 } },
-    { "id": "web-lookup", "request": "look up looped transformers",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_url", "url_host": "www.google.com", "url_has": "looped" } ], "max_steps": 1 } },
-    { "id": "named-site", "request": "open github.com in Safari",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_url", "url_host": "github.com" } ], "max_steps": 2 } },
-    { "id": "this-page", "request": "summarize this page", "in_front": "Google Chrome",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "app": "Google Chrome" } ], "forbid_actions": ["open_url"], "max_steps": 1 } },
-    { "id": "read-this-email", "request": "what does this email say", "in_front": "Mail",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "app": "Mail" } ], "forbid_actions": ["open_url"], "max_steps": 1 } },
-    { "id": "text-of-page", "request": "copy the text of this article into Notes", "in_front": "Safari",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "app": "Safari" } ], "max_steps": 3 } },
-    { "id": "order-of-slides", "request": "put the slides in order in Keynote",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "app": "Keynote" } ], "max_steps": 2 } },
-    { "id": "pay-range-doc", "request": "open the pay range doc in Google Docs",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [], "max_steps": 3 } },
-    { "id": "song-yesterday", "request": "play the song I was listening to yesterday",
-      "route": "planner", "memory_snippets": true, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "check": "media_playing" } ], "max_steps": 3 } },
-    { "id": "play-again", "request": "play that again in Spotify",
-      "route": "planner", "memory_snippets": true, "left_out": false,
-      "plan": { "steps": [ { "action": "operate", "app": "Spotify", "check": "media_playing" } ], "max_steps": 2 } },
-    { "id": "two-things-in-order", "request": "open Notes, then look up the weather in Paris",
-      "route": "planner", "memory_snippets": false, "left_out": false,
-      "plan": { "steps": [ { "action": "open_app", "app": "Notes" }, { "action": "open_url", "url_has": "paris" } ], "max_steps": 2 } },
-    { "id": "send-text", "request": "text Sam that I'm running late",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "send-email", "request": "email the team the launch notes",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "message-someone", "request": "message Dana about the survey",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "delete-folder", "request": "delete the downloads folder",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "buy-plan", "request": "buy the Pro plan",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "order-food", "request": "order a pizza from the place I used last week",
-      "route": "planner", "memory_snippets": true, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "pay-invoice", "request": "pay the electricity bill",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "log-in", "request": "log in to Canvas",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "forbid_actions": ["operate"], "max_steps": 1 } },
-    { "id": "settings", "request": "turn on dark mode in System Settings",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "empty": true } },
-    { "id": "mixed-allowed-and-never", "request": "open Spotify, play Blinding Lights and send it to Sam",
-      "route": "planner", "memory_snippets": false, "left_out": true,
-      "plan": { "steps": [ { "action": "open_app", "app": "Spotify" }, { "action": "operate", "app": "Spotify" } ], "max_steps": 2 } },
-    { "id": "work-set-related", "request": "pull up everything related to the capstone demo",
-      "route": "work_set", "layout": null },
-    { "id": "work-set-was-working", "request": "bring back the essay I was working on",
-      "route": "work_set", "layout": null },
-    { "id": "work-set-side-by-side", "request": "open the report I am working on side by side",
-      "route": "work_set", "layout": "left_right_split" },
-    { "id": "work-set-named-like-a-message", "request": "pull up everything for the text message redesign",
-      "route": "work_set", "layout": null },
-    { "id": "save-set", "request": "save this as capstone demo prep",
-      "route": "save_set", "save_name": "capstone demo prep" },
-    { "id": "save-set-my", "request": "save it as my Monday setup",
-      "route": "save_set", "save_name": "Monday setup" },
-    { "id": "saved-set-by-name", "request": "set up capstone demo prep", "saved_sets": ["Capstone demo prep", "Monday setup"],
-      "route": "saved_set", "saved_set": "Capstone demo prep" }
+    {
+      "id": "play-song",
+      "request": "open Spotify and play Blinding Lights",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Spotify"
+          },
+          {
+            "action": "operate",
+            "app": "Spotify",
+            "check": "media_playing"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "open-notes",
+      "request": "open Notes",
+      "route": "local",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Notes"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "open-messages-app",
+      "request": "open the Messages app",
+      "route": "local",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Messages"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "web-lookup",
+      "request": "look up looped transformers",
+      "route": "local",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_host": "www.google.com",
+            "url_has": "looped"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "named-site",
+      "request": "open github.com in Safari",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_host": "github.com"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "this-page",
+      "request": "summarize this page",
+      "in_front": "Google Chrome",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "app": "Google Chrome"
+          }
+        ],
+        "forbid_actions": [
+          "open_url"
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "read-this-email",
+      "request": "what does this email say",
+      "in_front": "Mail",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "app": "Mail"
+          }
+        ],
+        "forbid_actions": [
+          "open_url"
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "text-of-page",
+      "request": "copy the text of this article into Notes",
+      "in_front": "Safari",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "app": "Safari"
+          }
+        ],
+        "max_steps": 3
+      }
+    },
+    {
+      "id": "order-of-slides",
+      "request": "put the slides in order in Keynote",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "app": "Keynote"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "pay-range-doc",
+      "request": "open the pay range doc in Google Docs",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [],
+        "max_steps": 3
+      }
+    },
+    {
+      "id": "song-yesterday",
+      "request": "play the song I was listening to yesterday",
+      "route": "planner",
+      "memory_snippets": true,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "check": "media_playing"
+          }
+        ],
+        "max_steps": 3
+      }
+    },
+    {
+      "id": "play-again",
+      "request": "play that again in Spotify",
+      "route": "planner",
+      "memory_snippets": true,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "operate",
+            "app": "Spotify",
+            "check": "media_playing"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "two-things-in-order",
+      "request": "open Notes, then look up the weather in Paris",
+      "route": "local",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Notes"
+          },
+          {
+            "action": "open_url",
+            "url_has": "paris"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "send-text",
+      "request": "text Sam that I'm running late",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "send-email",
+      "request": "email the team the launch notes",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "message-someone",
+      "request": "message Dana about the survey",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "delete-folder",
+      "request": "delete the downloads folder",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "buy-plan",
+      "request": "buy the Pro plan",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "order-food",
+      "request": "order a pizza from the place I used last week",
+      "route": "planner",
+      "memory_snippets": true,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "pay-invoice",
+      "request": "pay the electricity bill",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "log-in",
+      "request": "log in to Canvas",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "forbid_actions": [
+          "operate"
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "settings",
+      "request": "turn on dark mode in System Settings",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "empty": true
+      }
+    },
+    {
+      "id": "mixed-allowed-and-never",
+      "request": "open Spotify, play Blinding Lights and send it to Sam",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Spotify"
+          },
+          {
+            "action": "operate",
+            "app": "Spotify"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "work-set-related",
+      "request": "pull up everything related to the capstone demo",
+      "route": "work_set",
+      "layout": null
+    },
+    {
+      "id": "work-set-was-working",
+      "request": "bring back the essay I was working on",
+      "route": "work_set",
+      "layout": null
+    },
+    {
+      "id": "work-set-side-by-side",
+      "request": "open the report I am working on side by side",
+      "route": "work_set",
+      "layout": "left_right_split"
+    },
+    {
+      "id": "work-set-named-like-a-message",
+      "request": "pull up everything for the text message redesign",
+      "route": "work_set",
+      "layout": null
+    },
+    {
+      "id": "save-set",
+      "request": "save this as capstone demo prep",
+      "route": "save_set",
+      "save_name": "capstone demo prep"
+    },
+    {
+      "id": "save-set-my",
+      "request": "save it as my Monday setup",
+      "route": "save_set",
+      "save_name": "Monday setup"
+    },
+    {
+      "id": "saved-set-by-name",
+      "request": "set up capstone demo prep",
+      "saved_sets": [
+        "Capstone demo prep",
+        "Monday setup"
+      ],
+      "route": "saved_set",
+      "saved_set": "Capstone demo prep"
+    },
+    {
+      "id": "launch-spotify",
+      "request": "launch Spotify",
+      "route": "local",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Spotify",
+            "check": "frontmost"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "open-a-site",
+      "request": "open github.com",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_host": "github.com",
+            "check": "page_loaded"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "google-with-in",
+      "request": "google best ramen in Salt Lake City",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_host": "www.google.com",
+            "url_has": "salt+lake"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "search-with-and",
+      "request": "look up salt and pepper shakers",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_has": "salt+and+pepper"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "please-open",
+      "request": "please open Calendar",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Calendar"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "open-two-apps",
+      "request": "open Notes and Slack",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
+    },
+    {
+      "id": "open-two-apps-with-verbs",
+      "request": "open Notes and open Slack",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Notes"
+          },
+          {
+            "action": "open_app",
+            "app": "Slack"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "app-not-installed",
+      "request": "open Figma",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
+    },
+    {
+      "id": "open-a-document",
+      "request": "open the quarterly report",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
+    }
+  ],
+  "installed_apps": [
+    "Spotify",
+    "Notes",
+    "Messages",
+    "Safari",
+    "Google Chrome",
+    "Mail",
+    "Keynote",
+    "Slack",
+    "Calendar"
   ]
 }

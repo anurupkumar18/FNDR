@@ -1052,7 +1052,7 @@ fn worth_retrying(verdict: &plan::Verdict) -> bool {
 
 /// One attempt at one step; returns what FNDR saw afterward.
 async fn attempt_step(
-    session: &mut Session,
+    session: Option<&mut Session>,
     ctx: &RunContext,
     observed: &mut Observed,
     commands: &mut mpsc::UnboundedReceiver<RunCommand>,
@@ -1158,6 +1158,12 @@ async fn attempt_step(
             detail: "A reopen runs only in a work set FNDR planned".to_string(),
         }),
         StepAction::Operate => {
+            let Some(session) = session else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "Operating an app needs the planner's session".to_string(),
+                });
+            };
             let media_app = (step.check == StepCheck::MediaPlaying).then_some(step.app.as_str());
             let track_before = match media_app {
                 Some(app) => native::media_state(app).await.1,
@@ -1239,8 +1245,15 @@ async fn run(
 ) -> Result<(), RunError> {
     let saved = crate::workset::saved_sets(&state);
     let names: Vec<String> = saved.iter().map(|set| set.name.clone()).collect();
-    let (resolution, layout) = match plan::route(&transcript, &names) {
+    let (resolution, layout) = match plan::route(&transcript, &names, &native::is_installed) {
         plan::Route::SaveSet { name } => return save_last_set(&state, &ctx, &name),
+        plan::Route::Local { plan } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            return carry_out(None, ctx, plan, commands, Observed::default()).await;
+        }
         plan::Route::Planner { memory_snippets } => {
             let snippets = if memory_snippets {
                 memory::snippets(&state, &transcript).await
@@ -1543,6 +1556,20 @@ async fn run_with_snippets(
     .map_err(|_| RunError::Failed("Planning took too long.".to_string()))??;
     let plan = plan::parse_plan(&plan_text)
         .map_err(|error| RunError::Failed(plan::explain_empty_plan(error, &ctx.request)))?;
+    let plan = plan::settled(plan, in_front.as_deref());
+    carry_out(Some(session), ctx, plan, commands, observed).await
+}
+
+/// Shows a plan, waits for it to start, and carries it out step by step.
+/// `session` is the Codex session an `operate` step needs; a plan FNDR made
+/// on this Mac (`plan::local_plan`) has none and starts no Codex.
+async fn carry_out(
+    mut session: Option<Session>,
+    ctx: RunContext,
+    plan: Plan,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    mut observed: Observed,
+) -> Result<(), RunError> {
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
@@ -1568,7 +1595,7 @@ async fn run_with_snippets(
                 attempt,
             });
             verdict = attempt_step(
-                &mut session,
+                session.as_mut(),
                 &ctx,
                 &mut observed,
                 &mut commands,
@@ -1599,7 +1626,9 @@ async fn run_with_snippets(
                     plan.steps[index].label, verdict.detail
                 ),
             });
-            session.server.shutdown().await;
+            if let Some(session) = session {
+                session.server.shutdown().await;
+            }
             return Ok(());
         }
         done.push(plan.steps[index].label.clone());
@@ -1610,12 +1639,16 @@ async fn run_with_snippets(
         summary: plan::with_left_out_note(
             with_report(
                 format!("Done: {}.", done.join(", ")),
-                session.last_report.as_deref(),
+                session
+                    .as_ref()
+                    .and_then(|session| session.last_report.as_deref()),
             ),
             &ctx.request,
         ),
     });
-    session.server.shutdown().await;
+    if let Some(session) = session {
+        session.server.shutdown().await;
+    }
     Ok(())
 }
 
@@ -2525,7 +2558,8 @@ mod tests {
         for case in suite.cases.iter().filter(|case| {
             case.plan.is_some()
                 && matches!(
-                    plan::route(&case.request, &case.saved_sets),
+                    plan::route(&case.request, &case.saved_sets, &|app| suite
+                        .is_installed(app)),
                     plan::Route::Planner { .. }
                 )
         }) {

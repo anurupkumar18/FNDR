@@ -411,7 +411,7 @@ mod tests {
             let named_in = |request: &str| {
                 let sets = saved_sets(&state);
                 let names: Vec<String> = sets.iter().map(|set| set.name.clone()).collect();
-                match crate::operator::plan::route(request, &names) {
+                match crate::operator::plan::route(request, &names, &|_| false) {
                     crate::operator::plan::Route::SavedSet { index, .. } => {
                         Some(sets[index].clone())
                     }

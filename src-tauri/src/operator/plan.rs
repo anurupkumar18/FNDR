@@ -118,12 +118,16 @@ pub enum Route {
     WorkSet {
         layout: Option<crate::operator::layout::Layout>,
     },
+    /// Only opening apps, opening links and web searches: planned here by
+    /// `local_plan`, carried out with no Codex session.
+    Local { plan: Plan },
     /// The cloud planner turn, with memory snippets only when the request
     /// points at the past.
     Planner { memory_snippets: bool },
 }
 
-pub fn route(request: &str, saved_names: &[String]) -> Route {
+/// `is_app` says whether a name is an app installed on this Mac.
+pub fn route(request: &str, saved_names: &[String], is_app: &dyn Fn(&str) -> bool) -> Route {
     if let Some(name) = save_set_name(request) {
         return Route::SaveSet { name };
     }
@@ -134,9 +138,216 @@ pub fn route(request: &str, saved_names: &[String]) -> Route {
     if asks_for_work_set(request) {
         return Route::WorkSet { layout };
     }
+    if let Some(plan) = local_plan(request, is_app) {
+        return Route::Local { plan };
+    }
     Route::Planner {
         memory_snippets: refers_to_past(request),
     }
+}
+
+/// The plan without steps that change nothing: opening the app that is
+/// already in front right before operating it. The planner adds one for
+/// "summarize this page" (3 of 23 recorded answers, 2026-10-14), and each
+/// costs a launch, a wait and a check.
+pub fn settled(mut plan: Plan, in_front: Option<&str>) -> Plan {
+    let Some(front) = in_front.map(str::trim).filter(|app| !app.is_empty()) else {
+        return plan;
+    };
+    let mut index = 0;
+    while index + 1 < plan.steps.len() {
+        let (step, next) = (&plan.steps[index], &plan.steps[index + 1]);
+        let opens_front =
+            step.action == StepAction::OpenApp && step.app.trim().eq_ignore_ascii_case(front);
+        let then_operates =
+            next.action == StepAction::Operate && next.app.trim().eq_ignore_ascii_case(front);
+        if opens_front && then_operates {
+            plan.steps.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+    plan
+}
+
+/// Words that open an app or a link.
+const OPEN_VERBS: &[&str] = &[
+    "open",
+    "launch",
+    "start",
+    "go to",
+    "switch to",
+    "bring up",
+    "show",
+];
+
+/// Words that ask for a web search; the rest of the clause is the query.
+const SEARCH_VERBS: &[&str] = &[
+    "look up",
+    "search the web for",
+    "search google for",
+    "search online for",
+    "search for",
+    "google",
+];
+
+/// Words before a request that change nothing.
+const REQUEST_LEAD: &[&str] = &["please", "can you", "could you", "hey fndr", "fndr"];
+
+/// A search query for a URL: unreserved characters kept, spaces as `+`,
+/// every other byte as `%XX`.
+fn query_encoded(query: &str) -> String {
+    query
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// A clause that opens an app, opens a link or searches the web, as a step.
+/// None for anything else, so the request goes to the planner.
+fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
+    let mut clause = clause
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .trim()
+        .to_string();
+    loop {
+        let lower = clause.to_lowercase();
+        let Some(lead) = REQUEST_LEAD
+            .iter()
+            .find(|lead| lower.starts_with(&format!("{lead} ")))
+        else {
+            break;
+        };
+        clause = clause[lead.len()..].trim().to_string();
+    }
+    let lower = clause.to_lowercase();
+    let after = |verb: &str| -> Option<String> {
+        lower
+            .starts_with(&format!("{verb} "))
+            .then(|| clause[verb.len()..].trim().to_string())
+            .filter(|rest| !rest.is_empty())
+    };
+    if let Some(query) = SEARCH_VERBS.iter().find_map(|verb| after(verb)) {
+        let encoded = query_encoded(&query);
+        let label = format!(
+            "Look up {}",
+            query
+                .split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        return Some(PlanStep {
+            action: StepAction::OpenUrl,
+            label,
+            app: String::new(),
+            url: format!("https://www.google.com/search?q={encoded}"),
+            goal: String::new(),
+            check: StepCheck::PageLoaded,
+            item: None,
+        });
+    }
+    let target = OPEN_VERBS.iter().find_map(|verb| after(verb))?;
+    // "in Safari", "on my phone": a place the planner has to reason about.
+    if target
+        .split_whitespace()
+        .any(|word| matches!(word.to_lowercase().as_str(), "in" | "on" | "with" | "from"))
+    {
+        return None;
+    }
+    let target = target
+        .strip_prefix("the ")
+        .or_else(|| target.strip_prefix("The "))
+        .unwrap_or(&target)
+        .trim();
+    let target = target
+        .strip_suffix(" app")
+        .or_else(|| target.strip_suffix(" App"))
+        .unwrap_or(target)
+        .trim();
+    let looks_like_link = !target.contains(' ')
+        && (target.starts_with("http://")
+            || target.starts_with("https://")
+            || target.rsplit_once('.').is_some_and(|(host, tld)| {
+                !host.is_empty() && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())
+            }));
+    if looks_like_link {
+        let url = if target.starts_with("http") {
+            target.to_string()
+        } else {
+            format!("https://{target}")
+        };
+        return Some(PlanStep {
+            action: StepAction::OpenUrl,
+            label: format!("Open {target}"),
+            app: String::new(),
+            url,
+            goal: String::new(),
+            check: StepCheck::PageLoaded,
+            item: None,
+        });
+    }
+    is_app(target).then(|| PlanStep {
+        action: StepAction::OpenApp,
+        label: format!("Open {target}"),
+        app: target.to_string(),
+        url: String::new(),
+        goal: String::new(),
+        check: StepCheck::Frontmost,
+        item: None,
+    })
+}
+
+/// A request made only of opening apps, opening links and web searches,
+/// planned on this Mac with no model: "open Notes", "look up looped
+/// transformers", "open Notes, then look up the weather in Paris". None for
+/// anything that has to operate an app, refers to the past, or asks for
+/// something Notch Do never does; those go to the planner.
+pub fn local_plan(request: &str, is_app: &dyn Fn(&str) -> bool) -> Option<Plan> {
+    if asks_for_something_never_done(request) || refers_to_past(request) {
+        return None;
+    }
+    let mut clauses = Vec::new();
+    let mut rest = request.trim().to_string();
+    // A clause ends at a comma, "and", "then" or "and then" only when an
+    // opening or search verb follows, so "look up salt and pepper" stays one.
+    'split: loop {
+        let lower = rest.to_lowercase();
+        for (at, _) in lower.match_indices([',', ' ']) {
+            let tail = lower[at..].trim_start_matches([',', ' ']);
+            let tail = tail
+                .strip_prefix("and then ")
+                .or_else(|| tail.strip_prefix("then "))
+                .or_else(|| tail.strip_prefix("and "))
+                .unwrap_or(tail);
+            let joined =
+                lower[at..].trim_start_matches([',', ' ']) != tail || lower[at..].starts_with(',');
+            let opens = OPEN_VERBS
+                .iter()
+                .chain(SEARCH_VERBS)
+                .any(|verb| tail.starts_with(&format!("{verb} ")));
+            if joined && opens && at > 0 {
+                clauses.push(rest[..at].to_string());
+                let skip = lower.len() - tail.len();
+                rest = rest[skip..].to_string();
+                continue 'split;
+            }
+        }
+        clauses.push(rest);
+        break;
+    }
+    let steps = clauses
+        .iter()
+        .map(|clause| local_step(clause, is_app))
+        .collect::<Option<Vec<_>>>()?;
+    (!steps.is_empty() && steps.len() <= MAX_STEPS).then_some(Plan { steps })
 }
 
 /// Whether a finished run must say it left something out.

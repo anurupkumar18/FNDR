@@ -25,7 +25,7 @@
     "web-lookup": "{\"steps\":[{\"action\":\"open_url\",\"app\":\"\",\"check\":\"page_loaded\",\"goal\":\"Look up looped transformers\",\"label\":\"Look Up Looped Transformers\",\"url\":\"https://www.google.com/search?q=looped%20transformers\"}]}"
   },
   "codex": "codex app-server on a ChatGPT sign-in",
-  "pass_floor": 0.86,
+  "pass_floor": 1.0,
   "prompt_version": "v9",
   "recorded_at": "2026-10-14T15:09:03.948742+00:00"
 }

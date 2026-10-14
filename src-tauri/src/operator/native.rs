@@ -61,6 +61,11 @@ fn workspace_open(url: &objc2_foundation::NSURL) -> bool {
     unsafe { objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(url) }
 }
 
+/// Whether an app of that name is installed, as `open_app` would find it.
+pub fn is_installed(name: &str) -> bool {
+    resolve_app(name, &app_roots()).is_some()
+}
+
 /// Launches or focuses an app. Returns the bundle path that was opened.
 pub fn open_app(name: &str) -> Result<PathBuf, String> {
     let path = resolve_app(name, &app_roots())

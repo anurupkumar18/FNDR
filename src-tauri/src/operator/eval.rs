@@ -15,7 +15,18 @@ use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Suite {
+    /// The apps the suite's Mac has, for `plan::route`'s local planning.
+    #[serde(default)]
+    pub installed_apps: Vec<String>,
     pub cases: Vec<Case>,
+}
+
+impl Suite {
+    pub fn is_installed(&self, app: &str) -> bool {
+        self.installed_apps
+            .iter()
+            .any(|installed| installed.eq_ignore_ascii_case(app.trim()))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,9 +102,11 @@ fn layout_name(layout: Option<Layout>) -> Option<String> {
 
 /// What FNDR decides about a case on the Mac, against its labels. Each
 /// mismatch is one sentence; none means the case passes.
-pub(crate) fn routing_mismatches(case: &Case) -> Vec<String> {
+pub(crate) fn routing_mismatches(suite: &Suite, case: &Case) -> Vec<String> {
     let mut wrong = Vec::new();
-    let decided = plan::route(&case.request, &case.saved_sets);
+    let decided = plan::route(&case.request, &case.saved_sets, &|app| {
+        suite.is_installed(app)
+    });
     let (route, snippets, layout) = match &decided {
         Route::SaveSet { name } => {
             if case.save_name.as_deref() != Some(name.as_str()) {
@@ -115,6 +128,11 @@ pub(crate) fn routing_mismatches(case: &Case) -> Vec<String> {
             ("saved_set", None, *layout)
         }
         Route::WorkSet { layout } => ("work_set", None, *layout),
+        Route::Local { plan } => {
+            let answer = serde_json::to_string(plan).expect("a plan serializes");
+            wrong.extend(plan_mismatches(case, &answer));
+            ("local", None, None)
+        }
         Route::Planner { memory_snippets } => ("planner", Some(*memory_snippets), None),
     };
     if route != case.route {
@@ -193,7 +211,7 @@ pub(crate) fn plan_mismatches(case: &Case, answer: &str) -> Vec<String> {
         return Vec::new();
     };
     let steps = match plan::parse_plan(answer) {
-        Ok(plan) => plan.steps,
+        Ok(plan) => plan::settled(plan, case.in_front.as_deref()).steps,
         Err(_) => Vec::new(),
     };
     let mut wrong = Vec::new();
@@ -250,7 +268,7 @@ mod tests {
         let mut failures = Vec::new();
         for case in &suite.cases {
             assert!(ids.insert(case.id.clone()), "duplicate id {}", case.id);
-            let wrong = routing_mismatches(case);
+            let wrong = routing_mismatches(&suite, case);
             if !wrong.is_empty() {
                 failures.push(format!("{}: {}", case.id, wrong.join("; ")));
             }
