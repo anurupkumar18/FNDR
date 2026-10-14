@@ -281,7 +281,7 @@ export default function MemoryJourneyInspector() {
                     ? queryRun?.result_ids.includes(imported.memory_id) === true
                         && queryRun.result_ids.indexOf(imported.memory_id) < 5
                     : check.kind === "grounded"
-                      ? queryRun?.citation_ids.includes(imported.memory_id) === true
+                      ? queryRun?.citation_ids.includes(imported.memory_id) === true && queryRun.refusal !== true
                       : queryRun?.refusal === true,
             };
             results.push(nextResult);
@@ -462,6 +462,18 @@ export default function MemoryJourneyInspector() {
                             {fixtureBatch.results.map((result) => (
                                 <li key={result.fixtureId}>
                                     {result.fixtureId}: {result.error ? `failed · ${result.error}` : `${result.checks.filter((check) => check.passed).length}/${result.checks.length} checks passed`}
+                                    {result.checks.length > 0 && (
+                                        <ul>
+                                            {result.checks.map((check) => (
+                                                <li key={check.kind}>
+                                                    {check.kind}: {check.passed ? "Pass" : "Review"}
+                                                    {check.path === "search" ? ` · target rank ${check.target_rank ?? "not returned"}` : ""}
+                                                    {check.kind === "grounded" ? ` · ${check.target_cited ? "target cited" : "target not cited"}${check.refusal ? " · refused" : ""}` : ""}
+                                                    {check.kind === "unsupported" ? ` · ${check.refusal ? "refused" : "answered"}` : ""}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
                                 </li>
                             ))}
                         </ul>
