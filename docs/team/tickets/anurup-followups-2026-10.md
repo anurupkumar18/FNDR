@@ -822,4 +822,3 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 **Done when.** Found rises on at least two personas with every precision floor of VS-95 still held, or the pass is dropped with the numbers recorded.
 
 **Evidence.** The score test output before and after.
-
