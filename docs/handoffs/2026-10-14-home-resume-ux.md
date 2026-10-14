@@ -12,9 +12,9 @@ The Home layout, action hierarchy and browser checks are detailed in [home-rebui
 
 | Check | Result and limit |
 | --- | --- |
-| Full frontend suite | 108 files and 844 tests passed before integration; 108 files and 847 tests passed on the combined tree. The native command was faked in frontend tests. |
+| Full frontend suite | 108 files and 844 tests passed before integration; 108 files and 847 tests passed on the first combined tree. `npm test` and typecheck passed again after the latest main merge. The native command was faked in frontend tests. |
 | Typecheck and native bundle build | Passed. The debug bundle was built with a distinct `com.fndr.app.qa-home-resume` identifier. |
-| Focused Rust tests | `cargo test --lib reopen` passed 71 tests before integration. `cargo test --lib workset::` passed 36 tests, one ignored, both before and after integration. The work-set test uses a real store and a fake Mac opener, proving a quarantined memory never reaches the opener. |
+| Focused Rust tests | After the latest main merge, `cargo test --lib reopen` passed 71 tests and `cargo test --lib workset::` passed 36 tests, one ignored. The work-set test uses a real store and a fake Mac opener, proving a quarantined memory never reaches the opener. |
 | Browser preview | Desktop light and dark plus 390 px dark were checked. Inline feedback remained beside Continue and 390 px had no horizontal overflow. |
 | Native QA, synthetic office-pm profile | The bundle identifier, sole process path and `FNDR_DATA_DIR` startup log were verified before computer use. Packaged `tauri://localhost` showed recent work and Continue on the first window. A Zoom source returned `app_missing` beside Continue; a Chrome source returned `opened` and Home said `Opened the latest source`. The destination page content was not checked. |
 | Native shutdown | Each isolated debug run exited with a `ggml-metal-device.m` assertion and code 134 on quit. The process stopped. This is open and should be diagnosed separately. |
