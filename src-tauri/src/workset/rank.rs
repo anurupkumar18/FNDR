@@ -197,7 +197,7 @@ pub(crate) fn eligible(record: &MemoryRecord, blocklist: &[String]) -> bool {
         ) != SafetyDecision::SkipStorage
     };
     !record.is_agent_note()
-        && crate::context_runtime::retrieve::memory_is_permitted(record, blocklist)
+        && crate::context_runtime::retrieve::memory_is_visible(record, blocklist)
         && gate(record.url.as_deref())
         && gate(record.reopen_url.as_deref())
         && !crate::privacy::Blocklist::is_context_blocked(

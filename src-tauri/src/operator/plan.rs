@@ -744,6 +744,7 @@ pub fn verify_reopen(outcome: &crate::memory::reopen::ReopenOutcome) -> Verdict 
         ),
         O::Blocked { .. } => verdict(false, "FNDR does not open that kind of link"),
         O::NoTarget => verdict(false, "FNDR has no place to reopen for this memory"),
+        O::Unavailable => verdict(false, "This source is unavailable to reopen right now"),
     }
 }
 
@@ -1460,6 +1461,7 @@ mod tests {
                 target: "javascript:x".into(),
             },
             O::NoTarget,
+            O::Unavailable,
         ] {
             let verdict = verify_reopen(&failed);
             assert!(!verdict.ok, "{failed:?}");

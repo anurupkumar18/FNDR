@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { completeTodo, openWorkSet, reopenMemory, type WorkItem, type WorkItemOutcome } from "@/shared/ipc/tauri";
+import { reopenOutcomeMessage } from "@/shared/reopenOutcome";
 import { asksBeforeOpening, layoutFor, OUTCOME_LABEL, outcomeStatus } from "./homeWorkSet";
 import "./WorkSetOpener.css";
 
@@ -14,7 +15,7 @@ interface WorkSetOpenerProps {
     label?: string;
     /** The set came from this task, so "Mark this task done" is offered after it opens. */
     taskId?: string;
-    /** The thread's latest source, reopened by "Continue where you left off". */
+    /** The latest source, available as a direct Continue action before opening a set. */
     continueMemoryId?: string;
     onTaskDone?: () => void;
     /**
@@ -45,7 +46,8 @@ const NOT_OPENED = "FNDR could not open this item.";
 export function WorkSetOpener({ name, load, label = "Open all", taskId, continueMemoryId, onTaskDone, arrange = false, children }: WorkSetOpenerProps) {
     const [phase, setPhase] = useState<Phase>({ kind: "idle" });
     const [taskState, setTaskState] = useState<"open" | "saving" | "done" | "error">("open");
-    const [continueState, setContinueState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
+    const [continueState, setContinueState] = useState<"idle" | "opening" | "done" | "failed">("idle");
+    const [continueMessage, setContinueMessage] = useState("");
     const stopRef = useRef(false);
     const mountedRef = useRef(true);
     const confirmRef = useRef<HTMLButtonElement>(null);
@@ -137,8 +139,12 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
         setContinueState("opening");
         try {
             const outcome = await reopenMemory(continueMemoryId);
-            setContinueState(["opened", "opened_moved", "app_only"].includes(outcome.kind) ? "opened" : "failed");
+            if (!mountedRef.current) return;
+            setContinueMessage(outcome.kind === "opened" ? "Opened the latest source" : reopenOutcomeMessage(outcome));
+            setContinueState(["opened", "opened_moved", "app_only"].includes(outcome.kind) ? "done" : "failed");
         } catch {
+            if (!mountedRef.current) return;
+            setContinueMessage("The latest source could not be opened. Try again.");
             setContinueState("failed");
         }
     }
@@ -149,11 +155,25 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
     return (
         <div className="work-set">
             <div className="work-set-row">
+                {continueMemoryId && (
+                    <button
+                        type="button"
+                        className="work-set-primary"
+                        aria-label={`Continue ${name} from latest source`}
+                        disabled={busy || phase.kind === "confirm" || continueState === "opening"}
+                        onClick={() => void continueWork()}
+                    >
+                        {continueState === "opening" ? "Opening…" : "Continue"}
+                    </button>
+                )}
+                {continueState !== "idle" && continueState !== "opening" && (
+                    <span className="work-set-note work-set-inline-result" role={continueState === "failed" ? "alert" : "status"}>{continueMessage}</span>
+                )}
                 <button
                     type="button"
-                    className="work-set-open"
+                    className={continueMemoryId ? "work-set-open" : "work-set-primary"}
                     aria-label={`${label} for ${name}`}
-                    disabled={busy || phase.kind === "confirm"}
+                    disabled={busy || phase.kind === "confirm" || continueState === "opening"}
                     onClick={() => void start()}
                 >
                     {label}
@@ -222,13 +242,6 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
                         )}
                         {phase.kind === "done" && taskState === "done" && <span className="work-set-note" role="status">Marked done</span>}
                         {phase.kind === "done" && taskState === "error" && <span className="work-set-note" role="alert">The task could not be marked done. Try again.</span>}
-                        {phase.kind === "done" && continueMemoryId && (
-                            <button type="button" disabled={continueState === "opening"} onClick={() => void continueWork()}>
-                                Continue where you left off
-                            </button>
-                        )}
-                        {continueState === "opened" && <span className="work-set-note" role="status">Opened the latest source</span>}
-                        {continueState === "failed" && <span className="work-set-note" role="alert">The latest source could not be opened.</span>}
                         {phase.kind === "done" && <button type="button" onClick={() => setPhase({ kind: "idle" })}>Close</button>}
                     </div>
                 </div>

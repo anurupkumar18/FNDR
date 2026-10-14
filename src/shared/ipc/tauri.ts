@@ -1040,7 +1040,8 @@ export type ReopenOutcome =
     | { kind: "app_missing"; bundle_id: string; app_name?: string | null }
     | { kind: "app_only"; app_name?: string | null }
     | { kind: "blocked"; target: string }
-    | { kind: "no_target" };
+    | { kind: "no_target" }
+    | { kind: "unavailable" };
 
 export async function reopenMemory(memoryId: string): Promise<ReopenOutcome> {
     return invoke<ReopenOutcome>("reopen_memory", {
