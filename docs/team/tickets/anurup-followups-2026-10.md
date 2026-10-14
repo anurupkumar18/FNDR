@@ -777,3 +777,48 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 **Done when.** The `website` workflow is green on `main`, the project URL returns HTTP 200, and the page's Download for Mac action falls back truthfully to GitHub Releases while no full release exists.
 
 **Evidence.** Attach the successful Pages workflow URL and the HTTP status check to the ticket.
+
+## VS-95 Join windows that share a name into one Resume thread
+- assignee: anurupkumar
+- labels: area::vault-search, type::feature, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: VS-69
+
+**Why.** On the owner's vault 54 of 71 Resume threads hold one or two memories, because a thread is one window title unless a memory has a project. Work sets, Home and meeting prep are built on those threads.
+
+**Result, 2026-10-13.** Built as the ADR 031 addendum: `resume/work_names.rs`, read by `build_resume_threads`, the thread digest and the signals evaluation. Same-project pairs found with labels hidden: 0.06 to 0.33, 0.05 to 0.69, 0.14 to 0.37; right 1.00, 0.98, 0.93. Full Rust suite and frontend suite pass.
+
+**Done when.** The persona score test passes with its floors and a named thread shows its shared words on Home.
+
+**Evidence.** The ADR 031 addendum table and the test output.
+
+## VS-96 See named threads in the running app and on a real week
+- assignee: anurupkumar
+- labels: area::vault-search, type::chore, prio::p1
+- milestone: W04-Prove
+- estimate: 3h
+- depends: VS-95
+
+**Why.** VS-95 was checked by tests only, and its rule was shaped on 86 synthetic entries.
+
+**Do.** Seed a persona profile, open Home and a work set in the native app, and confirm a named thread opens more than one place. Add a read-only count to the signals evaluation (threads, windows per thread, named threads) and run it on a copy of a vault with at least a week of daily capture. Record wrong groupings by their shared words, never by content.
+
+**Done when.** A native run is recorded, and the counts exist for one real week.
+
+**Evidence.** Screenshots of a seeded profile and the count output.
+
+## VS-97 Attach a window to a named thread from its on-screen text, with a guard
+- assignee: anurupkumar
+- labels: area::vault-search, type::spike, prio::p2
+- milestone: W05-Retro
+- estimate: 4h
+- depends: VS-96
+
+**Why.** Titles alone find a third to two thirds of a persona's work. A window whose text mentions a thread's name ("HIST 2100" on a rubric page) is the largest part of what is missed. A first try found 0.96 on one persona but was right only 0.43 of the time on another: an inbox mentions every project, and a product name is on every page.
+
+**Do.** Try the text pass with guards: skip a window whose text mentions two threads or more, and skip a name already ignored as a place. Keep the title rule's precision floor.
+
+**Done when.** Found rises on at least two personas with every precision floor of VS-95 still held, or the pass is dropped with the numbers recorded.
+
+**Evidence.** The score test output before and after.

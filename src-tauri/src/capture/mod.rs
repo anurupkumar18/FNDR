@@ -6520,7 +6520,7 @@ async fn maybe_create_tasks_from_memory(
     Ok(())
 }
 
-fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
+pub(crate) fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
     let app = app_name.trim().to_lowercase().replace(' ', "_");
     let title = window_title
         .trim()

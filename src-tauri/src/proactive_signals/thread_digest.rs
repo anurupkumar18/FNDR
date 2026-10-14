@@ -1,7 +1,8 @@
 //! What changed in a Resume Work thread since the person last viewed it.
 //! The last-seen markers live in the app state store.
 
-use crate::resume::{admits, thread_key, thread_title};
+use crate::resume::work_names::WorkThreads;
+use crate::resume::{admitted_with_threads, thread_title};
 use crate::storage::{MemoryRecord, StateStore, Store, Task};
 use crate::AppState;
 use parking_lot::Mutex;
@@ -117,11 +118,12 @@ pub fn compute_digest(
     since_ms: i64,
     first_view: bool,
     records: &[MemoryRecord],
+    threads: &WorkThreads,
     tasks: &[Task],
 ) -> ThreadDigest {
     let mut rows: Vec<&MemoryRecord> = records
         .iter()
-        .filter(|r| r.timestamp > since_ms && thread_key(r) == key)
+        .filter(|r| r.timestamp > since_ms && threads.key(r) == key)
         .collect();
     rows.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id)));
 
@@ -176,7 +178,12 @@ pub fn compute_digest(
         thread_key: key.to_string(),
         title: rows
             .first()
-            .map(|row| thread_title(row))
+            .map(|row| {
+                threads
+                    .title(row)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| thread_title(row))
+            })
             .unwrap_or_default(),
         since_ms,
         first_view,
@@ -228,22 +235,6 @@ pub fn thread_update_toast(digest: &ThreadDigest) -> (String, String) {
     )
 }
 
-async fn admitted_since(
-    store: &Store,
-    blocklist: &[String],
-    since_ms: i64,
-    now_ms: i64,
-) -> Result<Vec<MemoryRecord>, String> {
-    let records = store
-        .get_memories_in_range(since_ms + 1, now_ms)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(records
-        .into_iter()
-        .filter(|record| admits(record, blocklist))
-        .collect())
-}
-
 /// The digest for one thread from the stores: what `what_changed_since`
 /// returns.
 pub async fn digest_for(
@@ -254,9 +245,11 @@ pub async fn digest_for(
     now_ms: i64,
 ) -> Result<ThreadDigest, String> {
     let (since_ms, first_view) = since_for(last_seen(state_store, key)?, now_ms);
-    let records = admitted_since(store, blocklist, since_ms, now_ms).await?;
+    let (records, threads) = admitted_with_threads(store, blocklist, since_ms, now_ms).await?;
     let tasks = store.list_tasks().await.map_err(|e| e.to_string())?;
-    Ok(compute_digest(key, since_ms, first_view, &records, &tasks))
+    Ok(compute_digest(
+        key, since_ms, first_view, &records, &threads, &tasks,
+    ))
 }
 
 pub async fn what_changed_since(state: &AppState, key: &str) -> Result<ThreadDigest, String> {
@@ -286,7 +279,9 @@ pub async fn nudge_candidates(state: &AppState, now_ms: i64) -> Vec<ThreadDigest
         return Vec::new();
     };
     let blocklist = state.config.read().blocklist.clone();
-    let Ok(records) = admitted_since(&state.store, &blocklist, earliest, now_ms).await else {
+    let Ok((records, threads)) =
+        admitted_with_threads(&state.store, &blocklist, earliest, now_ms).await
+    else {
         return Vec::new();
     };
     let tasks = state.store.list_tasks().await.unwrap_or_default();
@@ -294,7 +289,7 @@ pub async fn nudge_candidates(state: &AppState, now_ms: i64) -> Vec<ThreadDigest
         .iter()
         .map(|(key, at)| {
             let (since_ms, _) = since_for(Some(*at), now_ms);
-            compute_digest(key, since_ms, false, &records, &tasks)
+            compute_digest(key, since_ms, false, &records, &threads, &tasks)
         })
         .filter(worth_a_nudge)
         .collect();
@@ -305,6 +300,7 @@ pub async fn nudge_candidates(state: &AppState, now_ms: i64) -> Vec<ThreadDigest
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resume::work_names::work_threads;
     use crate::storage::{Task, TaskType};
 
     const NOW: i64 = 1_800_000_000_000;
@@ -369,7 +365,14 @@ mod tests {
     #[test]
     fn the_digest_counts_only_newer_work_in_the_thread() {
         let (records, tasks) = fixture();
-        let digest = compute_digest("Parser", NOW - 24 * HOUR, false, &records, &tasks);
+        let digest = compute_digest(
+            "Parser",
+            NOW - 24 * HOUR,
+            false,
+            &records,
+            &work_threads(&records),
+            &tasks,
+        );
         assert_eq!(digest.new_memories, 3);
         assert_eq!(digest.page_count, 1, "a fragment is the same page");
         assert_eq!(digest.pages, vec!["Weekday aliases issue"]);
@@ -388,14 +391,28 @@ mod tests {
         let mut suggested = task("Read the aliases RFC", "code", 1);
         suggested.source_app = "Memory: Cursor".into();
         tasks.push(suggested);
-        let digest = compute_digest("Parser", NOW - 24 * HOUR, false, &records, &tasks);
+        let digest = compute_digest(
+            "Parser",
+            NOW - 24 * HOUR,
+            false,
+            &records,
+            &work_threads(&records),
+            &tasks,
+        );
         assert_eq!(digest.tasks, vec!["Add a test for weekday aliases"]);
     }
 
     #[test]
     fn nothing_new_is_an_empty_digest() {
         let (records, tasks) = fixture();
-        let digest = compute_digest("Parser", NOW, false, &records, &tasks);
+        let digest = compute_digest(
+            "Parser",
+            NOW,
+            false,
+            &records,
+            &work_threads(&records),
+            &tasks,
+        );
         assert_eq!(digest.new_memories, 0);
         assert!(digest.pages.is_empty() && digest.files.is_empty() && digest.tasks.is_empty());
         assert_eq!(digest.newest_memory_id, None);
@@ -412,9 +429,23 @@ mod tests {
     #[test]
     fn a_nudge_needs_a_seen_thread_with_real_changes() {
         let (records, tasks) = fixture();
-        let seen = compute_digest("Parser", NOW - 24 * HOUR, false, &records, &tasks);
+        let seen = compute_digest(
+            "Parser",
+            NOW - 24 * HOUR,
+            false,
+            &records,
+            &work_threads(&records),
+            &tasks,
+        );
         assert!(worth_a_nudge(&seen));
-        let first = compute_digest("Parser", NOW - 24 * HOUR, true, &records, &tasks);
+        let first = compute_digest(
+            "Parser",
+            NOW - 24 * HOUR,
+            true,
+            &records,
+            &work_threads(&records),
+            &tasks,
+        );
         assert!(
             !worth_a_nudge(&first),
             "a thread never viewed has nothing to compare"

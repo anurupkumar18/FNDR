@@ -295,6 +295,8 @@ export interface ResumeThread {
     /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
     key?: string;
     title: string;
+    /** The words shared across windows that made this one thread, as written in a window title. Empty or absent when nothing was inferred. */
+    grouped_by?: string[];
     app_name?: string;
     last_state: string;
     age_minutes: number;
