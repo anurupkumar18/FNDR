@@ -19,6 +19,7 @@ The landing card is compact enough to show recent work on the first desktop scre
 | Native success path | A second isolated run selected Continue on the synthetic Q3 metrics review thread. The real backend returned `opened`, and Home's accessibility tree showed `Opened the latest source` beside Continue. Google Chrome opened; the destination page's content was not checked. The debug app again exited with the same ggml Metal assertion on quit. |
 | Open-time visibility and UI feedback | A real-store Rust test with a fake Mac opener left a quarantined record out before calling the opener. Frontend tests cover the typed `unavailable` message and its alert placement beside Continue. Native refusal through the UI is not yet verified. |
 | Office PM retrieval gate | `make qa-retrieval-check PERSONA=office-pm` reseeded its synthetic profile and passed. Search, ask and retrieve Recall@5 were each 0.950, up from the 0.900 reference. The report still counts one of eight no-match queries as strong and four of 33 real queries as weak; those counts are reported, not gated. |
+| After integration with current main | `npm test` passed 108 files and 847 tests, `npm run typecheck` passed, and `cargo test --lib workset::` passed 36 tests with one ignored. The newer main added three frontend tests and an unrelated action-layer refactor. |
 
 Do not treat the browser fixture as proof of the native reopen path.
 

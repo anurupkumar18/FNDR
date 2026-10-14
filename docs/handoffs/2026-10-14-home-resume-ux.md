@@ -12,9 +12,9 @@ The Home layout, action hierarchy and browser checks are detailed in [home-rebui
 
 | Check | Result and limit |
 | --- | --- |
-| Full frontend suite | 108 files and 844 tests passed after the follow-up. The native command was faked in frontend tests. |
+| Full frontend suite | 108 files and 844 tests passed before integration; 108 files and 847 tests passed on the combined tree. The native command was faked in frontend tests. |
 | Typecheck and native bundle build | Passed. The debug bundle was built with a distinct `com.fndr.app.qa-home-resume` identifier. |
-| Focused Rust tests | `cargo test --lib reopen` passed 71 tests. `cargo test --lib workset::` passed 36 tests, one ignored. The work-set test uses a real store and a fake Mac opener, proving a quarantined memory never reaches the opener. |
+| Focused Rust tests | `cargo test --lib reopen` passed 71 tests before integration. `cargo test --lib workset::` passed 36 tests, one ignored, both before and after integration. The work-set test uses a real store and a fake Mac opener, proving a quarantined memory never reaches the opener. |
 | Browser preview | Desktop light and dark plus 390 px dark were checked. Inline feedback remained beside Continue and 390 px had no horizontal overflow. |
 | Native QA, synthetic office-pm profile | The bundle identifier, sole process path and `FNDR_DATA_DIR` startup log were verified before computer use. Packaged `tauri://localhost` showed recent work and Continue on the first window. A Zoom source returned `app_missing` beside Continue; a Chrome source returned `opened` and Home said `Opened the latest source`. The destination page content was not checked. |
 | Native shutdown | Each isolated debug run exited with a `ggml-metal-device.m` assertion and code 134 on quit. The process stopped. This is open and should be diagnosed separately. |
@@ -24,7 +24,7 @@ The first native attempt attached an older installed bundle using the default ow
 
 ## Next steps
 
-1. Rebase the isolated branch on the current `origin/main`, rerun relevant checks, commit by explicit paths, push to both remotes, and verify both branch tips. Update PR 52 with the native evidence and CI result.
+1. Publish the combined branch to both remotes and verify both branch tips. Update PR 52 with the native evidence and CI result. The branch contains the previously published PR history and current main through a merge commit, so the push needs no history rewrite.
 2. Diagnose the ggml Metal assertion on native shutdown in a separate narrow defect slice. Test an access-refusal result through native UI if a safe synthetic setup is available. Verify a real external destination and work-set arrangement separately.
 3. Keep improving other high-value product flows after this Home slice. The current design contract is [DESIGN_DIRECTION.md](../product/DESIGN_DIRECTION.md).
 
