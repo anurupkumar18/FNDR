@@ -1265,8 +1265,8 @@ pub(crate) fn field_supported_by_evidence(field: &str, evidence_norm: &str) -> b
     matched >= 1 && ratio >= 0.34
 }
 
-/// A project groups records across apps, so a partial topical overlap is not
-/// enough to treat a model-proposed name as the same piece of work.
+/// A project groups records across apps, so its words must occur together in
+/// one title or captured text segment, not across unrelated screen content.
 pub(crate) fn project_supported_by_evidence(
     project: &str,
     app_name: &str,
@@ -1277,13 +1277,18 @@ pub(crate) fn project_supported_by_evidence(
     if label.is_empty() || label == normalize_evidence_text(app_name) {
         return false;
     }
-    let source = normalize_evidence_text(&format!("{window_title} {clean_text}"));
-    let source_words: HashSet<&str> = source.split_whitespace().collect();
-    let mut terms = label
+    let terms = label
         .split_whitespace()
         .filter(|term| !matches!(*term, "a" | "an" | "and" | "for" | "of" | "the"))
-        .peekable();
-    terms.peek().is_some() && terms.all(|term| source_words.contains(term))
+        .collect::<Vec<_>>();
+    !terms.is_empty()
+        && std::iter::once(window_title)
+            .chain(clean_text.split(['\n', '.', '?', '!']))
+            .any(|segment| {
+                let source = normalize_evidence_text(segment);
+                let source_words: HashSet<&str> = source.split_whitespace().collect();
+                terms.iter().all(|term| source_words.contains(term))
+            })
 }
 
 fn strip_unsupported_values(
@@ -8040,6 +8045,72 @@ Activity patterns and insights dashboard
             "",
         );
         assert!(extraction.project.is_empty());
+    }
+
+    #[test]
+    fn project_validation_corpus_keeps_cross_app_work_separate() {
+        let cases = [
+            (
+                "Notion",
+                "Smart Reminders launch plan",
+                "Milestones and owners.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Slack",
+                "#launch",
+                "The Smart Reminders launch checklist is ready.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Keynote",
+                "Launch slides for Smart Reminders",
+                "The deck is ready.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Chrome",
+                "HIST 2100 essay rubric",
+                "The draft is due Friday.",
+                "HIST 2100 essay",
+                true,
+            ),
+            (
+                "Preview",
+                "Essay feedback",
+                "Feedback on the HIST 2100 essay.",
+                "HIST 2100 essay",
+                true,
+            ),
+            (
+                "Slack",
+                "Smart team launch",
+                "Reminders are due tomorrow.",
+                "Smart Reminders launch",
+                false,
+            ),
+            (
+                "Chrome",
+                "HIST 2100 planning",
+                "An unrelated essay is due Friday.",
+                "HIST 2100 essay",
+                false,
+            ),
+            (
+                "Notion",
+                "Notion",
+                "A generic meeting agenda.",
+                "Notion",
+                false,
+            ),
+        ];
+        for (app, title, text, proposed, expected) in cases {
+            let accepted = project_supported_by_evidence(proposed, app, title, text);
+            assert_eq!(accepted, expected, "{app}: {title}: {proposed}");
+        }
     }
 
     #[test]
