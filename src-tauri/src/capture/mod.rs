@@ -1283,7 +1283,12 @@ pub(crate) fn project_supported_by_evidence(
         .collect::<Vec<_>>();
     !terms.is_empty()
         && std::iter::once(window_title)
-            .chain(clean_text.split(['\n', '.', '?', '!']))
+            .chain(
+                clean_text
+                    .lines()
+                    .flat_map(|line| line.split(". "))
+                    .flat_map(|sentence| sentence.split(['?', '!'])),
+            )
             .any(|segment| {
                 let source = normalize_evidence_text(segment);
                 let source_words: HashSet<&str> = source.split_whitespace().collect();
@@ -8086,6 +8091,13 @@ Activity patterns and insights dashboard
                 true,
             ),
             (
+                "TextEdit",
+                "Release notes",
+                "Reviewed the FNDR 2.0 rollout notes.",
+                "FNDR 2.0 rollout",
+                true,
+            ),
+            (
                 "Slack",
                 "Smart team launch",
                 "Reminders are due tomorrow.",
@@ -8097,6 +8109,13 @@ Activity patterns and insights dashboard
                 "HIST 2100 planning",
                 "An unrelated essay is due Friday.",
                 "HIST 2100 essay",
+                false,
+            ),
+            (
+                "Notion",
+                "Team notes",
+                "Smart Reminders design. Launch plans for another app.",
+                "Smart Reminders launch",
                 false,
             ),
             (
