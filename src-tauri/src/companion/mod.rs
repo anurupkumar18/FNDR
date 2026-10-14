@@ -7,7 +7,7 @@
 //!     iOS only has to trust one cert per Mac.
 //!   - Pairing protocol issues opaque 48-char random access tokens, stored in
 //!     `StateStore` under key `companion_devices`. Tokens are revocable.
-//!   - `/v1/pair/complete`, `/v1/pair/start`, `/v1/status`,
+//!   - `/v1/pair/complete`, `/v1/status`,
 //!     `/v1/capture/control`, `/v1/memories/manual` are mounted in slice 1.
 //!   - `/v1/ask`, `/v1/memories/search`, `/v1/memories/:id`, `/v1/feedback`
 //!     cover slices 3-7.
@@ -255,20 +255,7 @@ pub async fn start(
         ))
         .with_state(app_state.clone());
 
-    // Pairing routes are NOT behind the auth middleware. They are still safe
-    // because the only "secret" they hand out is the access token, and the
-    // caller must already know the short pairing code (out-of-band — typed on
-    // the iPhone after scanning the QR shown on the Mac).
-    let pairing_router = Router::new()
-        .route(
-            "/v1/pair/start",
-            post(crate::companion::handlers::pairing::start),
-        )
-        .route(
-            "/v1/pair/complete",
-            post(crate::companion::handlers::pairing::complete),
-        )
-        .with_state(pairing_state.clone());
+    let pairing_router = pairing_router(pairing_state.clone());
 
     let root_router: Router = Router::new()
         .route("/", get(root_handler))
@@ -363,12 +350,44 @@ fn write_discovery(host: &str, port: u16, tls_enabled: bool, mac_name: &str) {
     }
 }
 
+/// The one route without the device token: completing a pairing with the
+/// code the Mac shows. A code is issued only on the Mac
+/// (`companion_start_pairing`), never over the network: until 2026-10-13 an
+/// open `/v1/pair/start` handed the code to anyone on the same Wi-Fi, who
+/// could trade it for a token that reads memories. Wrong codes are capped in
+/// `PairingService::complete`.
+fn pairing_router(state: Arc<PairingHttpState>) -> Router {
+    Router::new()
+        .route(
+            "/v1/pair/complete",
+            post(crate::companion::handlers::pairing::complete),
+        )
+        .with_state(state)
+}
+
+/// Whether to start the companion server when FNDR starts: only once a
+/// device is paired. The phone companion is parked until after Final, so
+/// on a Mac with no phone nothing listens on the local network.
+pub fn starts_at_launch(registry: &DeviceRegistry) -> bool {
+    registry
+        .list()
+        .iter()
+        .any(|device| device.revoked_at_ms.is_none())
+}
+
+/// `starts_at_launch` for the app's own registry. A registry that cannot be
+/// read starts nothing.
+pub fn should_start_at_launch(app_state: &AppState) -> bool {
+    DeviceRegistry::new(app_state.state_store.clone())
+        .map(|registry| starts_at_launch(&registry))
+        .unwrap_or(false)
+}
+
 async fn root_handler() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "service": "fndr_companion",
         "version": env!("CARGO_PKG_VERSION"),
         "endpoints": [
-            "/v1/pair/start",
             "/v1/pair/complete",
             "/v1/status",
             "/v1/capture/control",
@@ -411,4 +430,81 @@ fn detect_primary_lan_ipv4() -> Option<Ipv4Addr> {
 
 async fn health_handler() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({"ok": true}))
+}
+
+#[cfg(test)]
+mod launch_and_pairing_routes {
+    use super::*;
+    use crate::companion::dto::{DeviceType, MobileDevice};
+    use crate::storage::StateStore;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn registry(dir: &std::path::Path) -> Arc<DeviceRegistry> {
+        Arc::new(DeviceRegistry::new(Arc::new(StateStore::new(dir).unwrap())).unwrap())
+    }
+
+    fn device(id: &str) -> MobileDevice {
+        MobileDevice {
+            device_id: id.into(),
+            device_name: "Phone".into(),
+            device_type: DeviceType::Iphone,
+            access_token: format!("token-{id}"),
+            paired_at_ms: 1,
+            last_seen_at_ms: 1,
+            permissions: vec!["search".into()],
+            revoked_at_ms: None,
+            public_key: None,
+            app_version: None,
+        }
+    }
+
+    #[test]
+    fn no_one_on_the_network_can_ask_for_a_pairing_code() {
+        // The state store starts its own runtime, so it is made outside one.
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(PairingHttpState {
+            service: Arc::new(PairingService::new(registry(dir.path()))),
+            endpoint_hint: PairingEndpointHint {
+                host: "127.0.0.1".into(),
+                port: 1,
+                tls: true,
+                mac_name: "Mac".into(),
+                cert_fingerprint_sha256: None,
+            },
+        });
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let router = pairing_router(state);
+            let start = router
+                .clone()
+                .oneshot(Request::post("/v1/pair/start").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(start.status(), StatusCode::NOT_FOUND);
+            // Completing is still routed; a wrong body is refused, not missing.
+            let complete = router
+                .oneshot(
+                    Request::post("/v1/pair/complete")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(complete.status(), StatusCode::NOT_FOUND);
+        });
+    }
+
+    #[test]
+    fn the_server_starts_at_launch_only_with_a_paired_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let devices = registry(dir.path());
+        assert!(!starts_at_launch(&devices));
+        devices.insert(device("a")).unwrap();
+        assert!(starts_at_launch(&devices));
+        devices.revoke("a", 2).unwrap();
+        assert!(!starts_at_launch(&devices));
+    }
 }

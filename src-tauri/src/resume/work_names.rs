@@ -216,6 +216,77 @@ fn find(parent: &mut [usize], mut node: usize) -> usize {
     node
 }
 
+/// The title a set of names spells: phrases that overlap by a word joined
+/// into the longest phrase ("Senior Product" and "Product Designer" are
+/// "Senior Product Designer"), from phrases shared by at least half as many
+/// windows as the most widely shared one. The first name when none joins.
+fn spelled_title(
+    set: &[usize],
+    shared: &[(&str, &BTreeSet<usize>)],
+    as_written: &dyn Fn(&str) -> String,
+) -> String {
+    let lead = shared[set[0]];
+    let phrases: Vec<(Vec<&str>, String)> = set
+        .iter()
+        .map(|&index| shared[index])
+        .filter(|(name, held_by)| !name.starts_with('#') && held_by.len() * 2 >= lead.1.len())
+        .map(|(name, _)| (name.split(' ').collect(), as_written(name)))
+        .collect();
+    let mut best: Option<(Vec<&str>, Vec<String>)> = None;
+    for (start, (words, writing)) in phrases.iter().enumerate() {
+        let mut chain: Vec<&str> = words.clone();
+        let mut shown: Vec<String> = writing.split(' ').map(str::to_string).collect();
+        let mut used = BTreeSet::from([start]);
+        loop {
+            let last = chain[chain.len() - 1];
+            let next = phrases.iter().enumerate().find(|(at, (other, _))| {
+                !used.contains(at) && other[0] == last && !chain.contains(&other[1])
+            });
+            let Some((at, (other, other_writing))) = next else {
+                break;
+            };
+            used.insert(at);
+            chain.push(other[1]);
+            shown.push(
+                other_writing
+                    .split(' ')
+                    .nth(1)
+                    .unwrap_or(other[1])
+                    .to_string(),
+            );
+        }
+        loop {
+            let first = chain[0];
+            let previous = phrases.iter().enumerate().find(|(at, (other, _))| {
+                !used.contains(at) && other[1] == first && !chain.contains(&other[0])
+            });
+            let Some((at, (other, other_writing))) = previous else {
+                break;
+            };
+            used.insert(at);
+            chain.insert(0, other[0]);
+            shown.insert(
+                0,
+                other_writing
+                    .split(' ')
+                    .next()
+                    .unwrap_or(other[0])
+                    .to_string(),
+            );
+        }
+        let longer = best.as_ref().map_or(true, |(kept, _)| {
+            chain.len() > kept.len() || (chain.len() == kept.len() && chain < *kept)
+        });
+        if chain.len() > 2 && longer {
+            best = Some((chain, shown));
+        }
+    }
+    match best {
+        Some((_, shown)) => shown.join(" "),
+        None => as_written(lead.0),
+    }
+}
+
 /// Names the threads in `records`. Pure, and the same for any order of the
 /// same records.
 pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
@@ -248,7 +319,14 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
             }
         }
         for (name, as_written, leads) in candidate_names(record) {
-            written.entry(name.clone()).or_insert(as_written);
+            // Keep the spelling a title used with capitals over a slug's.
+            let capitalized = as_written.chars().any(char::is_uppercase);
+            match written.get(&name) {
+                Some(kept) if !capitalized || kept.chars().any(char::is_uppercase) => {}
+                _ => {
+                    written.insert(name.clone(), as_written);
+                }
+            }
             if leads {
                 group.leading.insert(name.clone());
             }
@@ -359,6 +437,7 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
     for (root, members) in members_of {
         let lead = shared[name_sets[&root][0]].0;
         let as_written = |name: &str| written.get(name).cloned().unwrap_or_default();
+        let spelled = spelled_title(&name_sets[&root], &shared, &as_written);
         let names: Vec<String> = name_sets[&root]
             .iter()
             .take(3)
@@ -378,7 +457,7 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
                 groups[*only].base.clone(),
                 groups[*only].base.clone(),
             ),
-            [] => (members.clone(), format!("work:{lead}"), as_written(lead)),
+            [] => (members.clone(), format!("work:{lead}"), spelled.clone()),
             _ => (
                 members
                     .iter()
@@ -386,7 +465,7 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
                     .filter(|&index| !groups[index].project)
                     .collect(),
                 format!("work:{lead}"),
-                as_written(lead),
+                spelled.clone(),
             ),
         };
         if joined.len() < 2 {
@@ -576,6 +655,50 @@ mod tests {
         backward.reverse();
         assert_eq!(forward, backward);
         assert_eq!(forward[0], "work:business review");
+    }
+
+    #[test]
+    fn a_thread_is_titled_by_the_longest_phrase_its_names_spell() {
+        let records = [
+            window(
+                "jd",
+                "Pages",
+                "Senior Product Designer job description",
+                None,
+            ),
+            window(
+                "onsite",
+                "Calendar",
+                "Onsite: Imani R. - Senior Product Designer",
+                None,
+            ),
+            window("card", "Numbers", "Scorecard: Imani R.", None),
+            window(
+                "offer",
+                "Mail",
+                "Offer for Imani R. - Senior Product Designer",
+                None,
+            ),
+        ];
+        let threads = work_threads(&records);
+        // "Imani R" is the most widely shared name, and stays the key, but
+        // "Senior Product Designer" says what the work is.
+        assert_eq!(threads.key(&records[0]), "work:imani r");
+        assert_eq!(threads.title(&records[0]), Some("Senior Product Designer"));
+    }
+
+    #[test]
+    fn a_name_is_shown_as_a_title_wrote_it_not_as_a_channel_slug() {
+        let records = [
+            window("chat", "Slack", "#smart-reminders-launch - Slack", None),
+            window("deck", "Keynote", "Smart Reminders Launch Review.key", None),
+        ];
+        let threads = work_threads(&records);
+        assert_eq!(threads.title(&records[0]), Some("Smart Reminders Launch"));
+        assert_eq!(
+            threads.names(&records[0]),
+            vec!["Reminders Launch", "Smart Reminders"]
+        );
     }
 
     fn reading(mut record: MemoryRecord, text: &str) -> MemoryRecord {

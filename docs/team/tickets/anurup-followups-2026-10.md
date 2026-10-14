@@ -803,7 +803,11 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 
 **Progress, 2026-10-13.** Done on a seeded store without the app: the work-set evaluation prints thread counts and, with `FNDR_WORKSET_LIST`, each thread. That run found and fixed three faults (ADR 031 addendum). Still open: the native app, and a copy of a real week.
 
+**Progress, later on 2026-10-13.** On a scratch copy of the owner's vault the evaluation counted 16 memories in the last 7 days, 9 threads and 1 named thread, so a real week cannot be judged until FNDR captures for one. That run showed a named thread with one window in view still saying "Grouped by"; the words now show only when the view holds two windows or more. The Home card renders in the browser preview (`ui-preview.html`, a named thread added to its fixtures). A debug build launched on a seeded profile with `FNDR_DATA_DIR`; the check stopped before Home loaded because the owner was on a video call, and the app was closed.
+
 **Do.** Seed a persona profile, open Home and a work set in the native app, and confirm a named thread opens more than one place. Add a read-only count to the signals evaluation (threads, windows per thread, named threads) and run it on a copy of a vault with at least a week of daily capture. Record wrong groupings by their shared words, never by content.
+
+**Result, native run, 2026-10-13.** A debug build ran on a seeded office profile with its project labels removed (`FNDR_DATA_DIR`, capture paused). Home showed named threads from the real backend, each with its shared words: "Smart Reminders" (Smart Reminders, Launch checklist, reminders launch), the hiring search titled "Imani R", and "Product team" (two standups and a lunch order, a weak grouping). Screenshot: `docs/evidence/W04/named-threads/native-home-seeded.png`. Two fixes followed: a title is the longest phrase its names spell ("Senior Product Designer"), and a name keeps the capitals a title gave it rather than a channel slug's. "Open all" was not pressed. The real-week count waits for a week of capture (the owner's vault held 16 memories in its last 7 days).
 
 **Done when.** A native run is recorded, and the counts exist for one real week.
 
