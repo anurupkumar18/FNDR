@@ -37,6 +37,8 @@ pub(crate) struct Case {
     pub in_front: Option<String>,
     #[serde(default)]
     pub saved_sets: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
     pub route: String,
     #[serde(default)]
     pub memory_snippets: Option<bool>,
@@ -48,6 +50,8 @@ pub(crate) struct Case {
     pub save_name: Option<String>,
     #[serde(default)]
     pub saved_set: Option<String>,
+    #[serde(default)]
+    pub skill: Option<String>,
     #[serde(default)]
     pub plan: Option<PlanExpectation>,
 }
@@ -104,9 +108,13 @@ fn layout_name(layout: Option<Layout>) -> Option<String> {
 /// mismatch is one sentence; none means the case passes.
 pub(crate) fn routing_mismatches(suite: &Suite, case: &Case) -> Vec<String> {
     let mut wrong = Vec::new();
-    let decided = plan::route(&case.request, &case.saved_sets, &|app| {
-        suite.is_installed(app)
-    });
+    let is_app = |app: &str| suite.is_installed(app);
+    let known = plan::Known {
+        saved_sets: &case.saved_sets,
+        skills: &case.skills,
+        is_app: &is_app,
+    };
+    let decided = plan::route(&case.request, &known);
     let (route, snippets, layout) = match &decided {
         Route::SaveSet { name } => {
             if case.save_name.as_deref() != Some(name.as_str()) {
@@ -128,6 +136,13 @@ pub(crate) fn routing_mismatches(suite: &Suite, case: &Case) -> Vec<String> {
             ("saved_set", None, *layout)
         }
         Route::WorkSet { layout } => ("work_set", None, *layout),
+        Route::Skill { index } => {
+            let name = case.skills.get(*index).cloned();
+            if case.skill != name {
+                wrong.push(format!("ran skill {name:?}, labeled {:?}", case.skill));
+            }
+            ("skill", None, None)
+        }
         Route::Local { plan } => {
             let answer = serde_json::to_string(plan).expect("a plan serializes");
             wrong.extend(plan_mismatches(case, &answer));

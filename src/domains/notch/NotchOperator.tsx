@@ -13,6 +13,8 @@ import {
     setNotchEscapeMonitor,
     voiceOutStatus,
     type ComputerUseEvent,
+    notchDoRateRun,
+    notchDoSaveSkill,
 } from "@/shared/ipc/tauri";
 import { openSystemSettings } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
@@ -616,6 +618,10 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry,
                 <p className="notch-operator-heard">{resultNote(state.steps)}</p>
             ) : null}
 
+            {state.phase === "finished" && state.runId && !state.workSet ? (
+                <RunFeedback key={state.runId} runId={state.runId} worked={state.result?.ok === true} />
+            ) : null}
+
             {state.phase === "running" && state.actions.length > 0 ? (
                 <ul className="notch-operator-log" aria-label="Actions">
                     {state.actions.map((action) => (
@@ -731,6 +737,76 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry,
                     onChange={(event) => setDraft(event.target.value)}
                 />
             </form>
+        </div>
+    );
+}
+
+/**
+ * After a run: did it work? A run that did not becomes a draft case for
+ * Notch Do's evaluation suite; one that did can be saved as a skill and run
+ * again by saying its name.
+ */
+function RunFeedback({ runId, worked }: { runId: string; worked: boolean }) {
+    const [rated, setRated] = useState<"worked" | "wrong" | null>(null);
+    const [name, setName] = useState("");
+    const [saved, setSaved] = useState<string | null>(null);
+    const [problem, setProblem] = useState<string | null>(null);
+
+    const rate = async (didWork: boolean) => {
+        setProblem(null);
+        try {
+            await notchDoRateRun(runId, didWork);
+            setRated(didWork ? "worked" : "wrong");
+        } catch (reason) {
+            setProblem(message(reason));
+        }
+    };
+
+    const save = async () => {
+        const wanted = name.trim();
+        if (!wanted) return;
+        setProblem(null);
+        try {
+            setSaved(await notchDoSaveSkill(runId, wanted));
+        } catch (reason) {
+            setProblem(message(reason));
+        }
+    };
+
+    return (
+        <div className="notch-operator-feedback" aria-label="Run feedback">
+            {rated === null ? (
+                <div className="notch-operator-approval-actions">
+                    <span>Did that work?</span>
+                    <button type="button" className="notch-operator-btn" onClick={() => void rate(true)}>
+                        Worked
+                    </button>
+                    <button type="button" className="notch-operator-btn" onClick={() => void rate(false)}>
+                        Didn&apos;t work
+                    </button>
+                </div>
+            ) : null}
+            {rated === "wrong" ? <p>Kept as a case for FNDR&apos;s Notch Do tests: the request and its plan, no screen text.</p> : null}
+            {rated === "worked" && worked && saved === null ? (
+                <form
+                    className="notch-operator-type"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        void save();
+                    }}
+                >
+                    <input
+                        className="notch-input"
+                        value={name}
+                        placeholder="Save as a skill, e.g. Monday setup"
+                        aria-label="Skill name"
+                        maxLength={60}
+                        onChange={(event) => setName(event.target.value)}
+                    />
+                </form>
+            ) : null}
+            {saved ? <p>Saved. Say &ldquo;{saved}&rdquo; to run it again.</p> : null}
+            {problem ? <p role="alert">{problem}</p> : null}
         </div>
     );
 }

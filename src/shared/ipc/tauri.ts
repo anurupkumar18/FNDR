@@ -2935,6 +2935,16 @@ export async function computerUsePlan(text: string): Promise<string> {
 }
 
 /** Starts a planned run (the plan card's countdown, "go", or a tap). */
+/** Rates a Notch Do run that ended; a run that did not work becomes a draft case for the evaluation suite. */
+export async function notchDoRateRun(runId: string, worked: boolean): Promise<void> {
+    return invoke("notch_do_rate_run", { runId, worked });
+}
+
+/** Saves a Notch Do run that worked as a skill, run again by saying its name. Returns the saved name. */
+export async function notchDoSaveSkill(runId: string, name: string): Promise<string> {
+    return invoke<string>("notch_do_save_skill", { runId, name });
+}
+
 export async function computerUseStart(runId: string): Promise<void> {
     return invoke("computer_use_start", { runId });
 }

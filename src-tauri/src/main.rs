@@ -827,6 +827,8 @@ fn main() {
             ipc::commands::install_component,
             ipc::commands::computer_use_permissions,
             ipc::commands::computer_use_start,
+            ipc::commands::notch_do_rate_run,
+            ipc::commands::notch_do_save_skill,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
             ipc::commands::resolve_work_set,
