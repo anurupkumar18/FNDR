@@ -956,6 +956,8 @@ struct RunContext {
     guards: Guards,
     /// The person's own words, to tell a link they asked for from one they did not.
     request: String,
+    /// Where the run's record is kept for rating and skills; none in tests.
+    runs: Option<Arc<crate::storage::StateStore>>,
 }
 
 /// A work set of more than this many reopens waits for Start (ADR 027).
@@ -1245,14 +1247,48 @@ async fn run(
 ) -> Result<(), RunError> {
     let saved = crate::workset::saved_sets(&state);
     let names: Vec<String> = saved.iter().map(|set| set.name.clone()).collect();
-    let (resolution, layout) = match plan::route(&transcript, &names, &native::is_installed) {
+    let skills = crate::operator::skills::list(&state.state_store).unwrap_or_else(|error| {
+        tracing::warn!(%error, "computer_use:skills_load_failed");
+        Vec::new()
+    });
+    let skill_names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
+    // Decided before any await: what it is routed against is not Send.
+    let route = {
+        let known = plan::Known {
+            saved_sets: &names,
+            skills: &skill_names,
+            is_app: &native::is_installed,
+        };
+        plan::route(&transcript, &known)
+    };
+    let (resolution, layout) = match route {
+        plan::Route::Skill { index } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            let plan = Plan {
+                steps: skills[index].steps.clone(),
+            };
+            // Only an operate step needs Codex; opening apps and links does not.
+            let session = if plan
+                .steps
+                .iter()
+                .any(|step| step.action == StepAction::Operate)
+            {
+                Some(operator_session(&codex_pid).await?)
+            } else {
+                None
+            };
+            return carry_out(session, ctx, plan, "skill", commands, Observed::default()).await;
+        }
         plan::Route::SaveSet { name } => return save_last_set(&state, &ctx, &name),
         plan::Route::Local { plan } => {
             (ctx.emit)(ComputerUseEvent::Planning {
                 run_id: ctx.run_id.clone(),
                 used_memories: 0,
             });
-            return carry_out(None, ctx, plan, commands, Observed::default()).await;
+            return carry_out(None, ctx, plan, "local", commands, Observed::default()).await;
         }
         plan::Route::Planner { memory_snippets } => {
             let snippets = if memory_snippets {
@@ -1493,13 +1529,9 @@ where
 
 /// Plans, waits for Start, then runs and checks every step. Everything after
 /// memory retrieval, so it runs without the app's state.
-async fn run_with_snippets(
-    ctx: RunContext,
-    transcript: String,
-    snippets: Vec<memory::MemorySnippet>,
-    mut commands: mpsc::UnboundedReceiver<RunCommand>,
-    codex_pid: Arc<Mutex<Option<u32>>>,
-) -> Result<(), RunError> {
+/// A Codex session with FNDR's computer-use tools attached, for planning and
+/// for `operate` steps. Its process id is kept so Stop can kill it.
+async fn operator_session(codex_pid: &Arc<Mutex<Option<u32>>>) -> Result<Session, RunError> {
     let codex = ready_executable().map_err(RunError::Failed)?;
     let backend = detect_backend().ok_or_else(|| RunError::Failed(NO_HELPER.to_string()))?;
     let user_servers = configured_mcp_server_names(&codex)
@@ -1509,16 +1541,25 @@ async fn run_with_snippets(
         .await
         .map_err(RunError::Failed)?;
     let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
+    let session = Session::open(&codex, &args).await?;
+    if let Ok(mut slot) = codex_pid.lock() {
+        *slot = session.server.pid();
+    }
+    Ok(session)
+}
 
+async fn run_with_snippets(
+    ctx: RunContext,
+    transcript: String,
+    snippets: Vec<memory::MemorySnippet>,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    codex_pid: Arc<Mutex<Option<u32>>>,
+) -> Result<(), RunError> {
     (ctx.emit)(ComputerUseEvent::Planning {
         run_id: ctx.run_id.clone(),
         used_memories: snippets.len(),
     });
-
-    let mut session = Session::open(&codex, &args).await?;
-    if let Ok(mut slot) = codex_pid.lock() {
-        *slot = session.server.pid();
-    }
+    let mut session = operator_session(&codex_pid).await?;
     let mut observed = Observed::default();
 
     let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
@@ -1557,7 +1598,7 @@ async fn run_with_snippets(
     let plan = plan::parse_plan(&plan_text)
         .map_err(|error| RunError::Failed(plan::explain_empty_plan(error, &ctx.request)))?;
     let plan = plan::settled(plan, in_front.as_deref());
-    carry_out(Some(session), ctx, plan, commands, observed).await
+    carry_out(Some(session), ctx, plan, "planner", commands, observed).await
 }
 
 /// Shows a plan, waits for it to start, and carries it out step by step.
@@ -1567,9 +1608,21 @@ async fn carry_out(
     mut session: Option<Session>,
     ctx: RunContext,
     plan: Plan,
+    planned_by: &str,
     mut commands: mpsc::UnboundedReceiver<RunCommand>,
     mut observed: Observed,
 ) -> Result<(), RunError> {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_plan(
+            store,
+            &ctx.run_id,
+            &ctx.request,
+            planned_by,
+            &plan.steps,
+        ) {
+            tracing::warn!(%error, "computer_use:run_record_failed");
+        }
+    }
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
@@ -1618,13 +1671,15 @@ async fn carry_out(
             checked: plan::checked_by_fndr(&plan.steps[index], &verdict),
         });
         if !verdict.ok {
+            let summary = format!(
+                "Stopped at \"{}\": {}",
+                plan.steps[index].label, verdict.detail
+            );
+            record_outcome(&ctx, false, &summary);
             (ctx.emit)(ComputerUseEvent::Finished {
                 run_id: ctx.run_id.clone(),
                 ok: false,
-                summary: format!(
-                    "Stopped at \"{}\": {}",
-                    plan.steps[index].label, verdict.detail
-                ),
+                summary,
             });
             if let Some(session) = session {
                 session.server.shutdown().await;
@@ -1633,23 +1688,34 @@ async fn carry_out(
         }
         done.push(plan.steps[index].label.clone());
     }
+    let summary = plan::with_left_out_note(
+        with_report(
+            format!("Done: {}.", done.join(", ")),
+            session
+                .as_ref()
+                .and_then(|session| session.last_report.as_deref()),
+        ),
+        &ctx.request,
+    );
+    record_outcome(&ctx, true, &summary);
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: plan::with_left_out_note(
-            with_report(
-                format!("Done: {}.", done.join(", ")),
-                session
-                    .as_ref()
-                    .and_then(|session| session.last_report.as_deref()),
-            ),
-            &ctx.request,
-        ),
+        summary,
     });
     if let Some(session) = session {
         session.server.shutdown().await;
     }
     Ok(())
+}
+
+/// Keeps how a run ended with its record (`operator::runs`).
+fn record_outcome(ctx: &RunContext, ok: bool, summary: &str) {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_outcome(store, &ctx.run_id, ok, summary) {
+            tracing::warn!(%error, "computer_use:run_outcome_failed");
+        }
+    }
 }
 
 fn kill_process_group(pid: u32) {
@@ -1814,6 +1880,7 @@ pub async fn computer_use_plan(
         ),
         guards,
         request: transcript.clone(),
+        runs: Some(state.inner().state_store.clone()),
     };
     let task_state = state.inner().clone();
     let task_app = app.clone();
@@ -1866,6 +1933,33 @@ pub async fn computer_use_plan(
         });
     }
     Ok(run_id)
+}
+
+/// The person's rating of a run that ended. A run rated as not working is
+/// kept as a draft case for the evaluation suite (`operator::runs`).
+#[tauri::command]
+pub async fn notch_do_rate_run(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    worked: bool,
+) -> Result<(), String> {
+    let rating = if worked {
+        crate::operator::runs::Rating::Worked
+    } else {
+        crate::operator::runs::Rating::DidNotWork
+    };
+    crate::operator::runs::rate(&state.inner().state_store, &run_id, rating).map(|_| ())
+}
+
+/// Saves a run that worked as a skill, run again by saying its name.
+#[tauri::command]
+pub async fn notch_do_save_skill(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    name: String,
+) -> Result<String, String> {
+    crate::operator::skills::save_from_run(&state.inner().state_store, &run_id, &name)
+        .map(|skill| skill.name)
 }
 
 /// Starts the planned run (the plan card's countdown, "go", or a tap).
@@ -2556,12 +2650,18 @@ mod tests {
         let mut answers = serde_json::Map::new();
         let (mut passed, mut scored) = (0usize, 0usize);
         for case in suite.cases.iter().filter(|case| {
-            case.plan.is_some()
-                && matches!(
-                    plan::route(&case.request, &case.saved_sets, &|app| suite
-                        .is_installed(app)),
+            case.plan.is_some() && {
+                let is_app = |app: &str| suite.is_installed(app);
+                let known = plan::Known {
+                    saved_sets: &case.saved_sets,
+                    skills: &case.skills,
+                    is_app: &is_app,
+                };
+                matches!(
+                    plan::route(&case.request, &known),
                     plan::Route::Planner { .. }
                 )
+            }
         }) {
             let mut observed = Observed::default();
             let planner = session.planner_thread.clone();
@@ -2878,6 +2978,7 @@ mod tests {
             journal: Journal::new(journal_dir.join("journal.jsonl")),
             guards: Guards::open(),
             request: transcript.clone(),
+            runs: None,
             emit: Arc::new(move |event| {
                 println!(
                     "[{:>5.1}s] {}",
@@ -3022,6 +3123,7 @@ mod tests {
             journal: Journal::new(dir.join("journal.jsonl")),
             guards,
             request: "pull up everything related to the assignment".to_string(),
+            runs: None,
             emit: Arc::new(move |event| {
                 if matches!(event, ComputerUseEvent::Planned { .. }) {
                     let _ = commands.send(RunCommand::Start);

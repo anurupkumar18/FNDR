@@ -30,6 +30,8 @@ const ipcMocks = vi.hoisted(() => ({
     computerUseStatus: vi.fn(),
     computerUsePlan: vi.fn(),
     computerUseStart: vi.fn(),
+    notchDoRateRun: vi.fn(),
+    notchDoSaveSkill: vi.fn(),
     computerUseRespond: vi.fn(),
     computerUseStop: vi.fn(),
     codexLoginStart: vi.fn(),
@@ -199,6 +201,8 @@ describe("NotchHud", () => {
         });
         ipcMocks.computerUsePlan.mockResolvedValue("r1");
         ipcMocks.computerUseStart.mockResolvedValue(undefined);
+        ipcMocks.notchDoRateRun.mockResolvedValue(undefined);
+        ipcMocks.notchDoSaveSkill.mockImplementation(async (_run: string, name: string) => name);
         ipcMocks.computerUseRespond.mockResolvedValue(undefined);
         ipcMocks.computerUseStop.mockResolvedValue(undefined);
         ipcMocks.codexLoginStart.mockResolvedValue({ loginId: "l1", authUrl: "https://auth.openai.com/x" });
@@ -523,6 +527,44 @@ describe("NotchHud", () => {
                 expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" }),
             );
             expect(ipcMocks.computerUsePlan).toHaveBeenCalledTimes(1);
+        });
+
+        it("asks whether a finished run worked, and saves one that did as a skill", async () => {
+            render(<NotchHud />);
+            await waitFor(() => expect(handlers.has("notch-hud://do")).toBe(true));
+            emit("notch-hud://do", "open Notes and open Slack");
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            emit("computer-use://event", {
+                kind: "planned",
+                runId: "r1",
+                autoStart: true,
+                steps: [
+                    { label: "Open Notes", action: "open_app", app: "Notes" },
+                    { label: "Open Slack", action: "open_app", app: "Slack" },
+                ],
+            });
+            emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done: Open Notes, Open Slack." });
+
+            fireEvent.click(await screen.findByRole("button", { name: "Worked" }));
+            await waitFor(() => expect(ipcMocks.notchDoRateRun).toHaveBeenCalledWith("r1", true));
+            const field = await screen.findByLabelText("Skill name");
+            fireEvent.change(field, { target: { value: "Monday setup" } });
+            fireEvent.submit(field.closest("form") as HTMLFormElement);
+            await waitFor(() => expect(ipcMocks.notchDoSaveSkill).toHaveBeenCalledWith("r1", "Monday setup"));
+            expect(await screen.findByText(/Say \u201cMonday setup\u201d to run it again/)).toBeInTheDocument();
+        });
+
+        it("keeps a run that did not work as a test case, with no skill offered", async () => {
+            render(<NotchHud />);
+            await waitFor(() => expect(handlers.has("notch-hud://do")).toBe(true));
+            emit("notch-hud://do", "open Notes");
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalled());
+            emit("computer-use://event", { kind: "planned", runId: "r1", autoStart: true, steps: [{ label: "Open Notes", action: "open_app", app: "Notes" }] });
+            emit("computer-use://event", { kind: "finished", runId: "r1", ok: true, summary: "Done: Open Notes." });
+            fireEvent.click(await screen.findByRole("button", { name: "Didn't work" }));
+            await waitFor(() => expect(ipcMocks.notchDoRateRun).toHaveBeenCalledWith("r1", false));
+            expect(await screen.findByText(/Kept as a case for FNDR's Notch Do tests/)).toBeInTheDocument();
+            expect(screen.queryByLabelText("Skill name")).toBeNull();
         });
 
         it("keeps Do hidden until Operate my Mac is on", async () => {

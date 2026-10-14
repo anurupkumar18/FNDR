@@ -1,5 +1,5 @@
 {
-  "about": "Labeled Notch Do requests. `route` is decided on the Mac before anything leaves it: save_set (\"save this as\"), saved_set (a set the person saved), work_set (a whole piece of work, resolved from memories, no model), local (only opening apps, links and web searches, planned on the Mac with no model) or planner (the cloud planner turn). A local plan is scored against `plan` on every test run. `memory_snippets` says whether up to five memory snippets go with the planner request. `left_out` says whether the finished run must say it left out something Notch Do never does. `plan` is what a correct planner answer holds; it is scored only on recorded planner answers. Synthetic requests; no real memory text.",
+  "about": "Labeled Notch Do requests. `route` is decided on the Mac before anything leaves it: save_set (\"save this as\"), skill (a saved skill run by its name), saved_set (a set the person saved), work_set (a whole piece of work, resolved from memories, no model), local (only opening apps, links and web searches, planned on the Mac with no model) or planner (the cloud planner turn). A local plan is scored against `plan` on every test run. `memory_snippets` says whether up to five memory snippets go with the planner request. `left_out` says whether the finished run must say it left out something Notch Do never does. `plan` is what a correct planner answer holds; it is scored only on recorded planner answers. Synthetic requests; no real memory text.",
   "cases": [
     {
       "id": "play-song",
@@ -501,6 +501,51 @@
       "route": "planner",
       "memory_snippets": false,
       "left_out": false
+    },
+    {
+      "id": "skill-by-name",
+      "request": "run my Monday setup",
+      "skills": [
+        "Monday setup"
+      ],
+      "route": "skill",
+      "skill": "Monday setup"
+    },
+    {
+      "id": "skill-bare-name",
+      "request": "Monday setup",
+      "skills": [
+        "Monday setup"
+      ],
+      "route": "skill",
+      "skill": "Monday setup"
+    },
+    {
+      "id": "skill-not-a-prefix",
+      "request": "run my Monday setup now",
+      "skills": [
+        "Monday setup"
+      ],
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
+    },
+    {
+      "id": "skill-does-not-shadow-open",
+      "request": "open Notes",
+      "skills": [
+        "Monday setup"
+      ],
+      "route": "local",
+      "plan": {
+        "steps": [
+          {
+            "action": "open_app",
+            "app": "Notes"
+          }
+        ],
+        "max_steps": 1
+      }
     }
   ],
   "installed_apps": [

@@ -118,6 +118,9 @@ pub enum Route {
     WorkSet {
         layout: Option<crate::operator::layout::Layout>,
     },
+    /// A saved skill, by its index in the saved skill names: its steps run
+    /// again with no planning.
+    Skill { index: usize },
     /// Only opening apps, opening links and web searches: planned here by
     /// `local_plan`, carried out with no Codex session.
     Local { plan: Plan },
@@ -126,19 +129,31 @@ pub enum Route {
     Planner { memory_snippets: bool },
 }
 
-/// `is_app` says whether a name is an app installed on this Mac.
-pub fn route(request: &str, saved_names: &[String], is_app: &dyn Fn(&str) -> bool) -> Route {
+/// What a request is routed against, all of it on this Mac.
+pub struct Known<'a> {
+    /// The names of the person's saved sets.
+    pub saved_sets: &'a [String],
+    /// The names of the person's saved skills.
+    pub skills: &'a [String],
+    /// Whether a name is an app installed on this Mac.
+    pub is_app: &'a dyn Fn(&str) -> bool,
+}
+
+pub fn route(request: &str, known: &Known) -> Route {
     if let Some(name) = save_set_name(request) {
         return Route::SaveSet { name };
     }
+    if let Some(index) = crate::operator::skills::skill_asked_for(request, known.skills) {
+        return Route::Skill { index };
+    }
     let layout = layout_asked_for(request);
-    if let Some(index) = named_set_asked_for(request, saved_names) {
+    if let Some(index) = named_set_asked_for(request, known.saved_sets) {
         return Route::SavedSet { index, layout };
     }
     if asks_for_work_set(request) {
         return Route::WorkSet { layout };
     }
-    if let Some(plan) = local_plan(request, is_app) {
+    if let Some(plan) = local_plan(request, known.is_app) {
         return Route::Local { plan };
     }
     Route::Planner {

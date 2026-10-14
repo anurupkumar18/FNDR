@@ -8,6 +8,7 @@ Updated 2026-10-14. Notch Do is FNDR's one action layer (decision log, 2026-10-1
 typed or spoken request
   -> plan::route                  decided on this Mac, before anything leaves it
        save_set                   "save this as <name>": the set opened last is saved
+       skill                      a saved skill, by its name: its steps run again, no planning
        saved_set                  a set the person saved, by name
        work_set                   a whole piece of work, resolved from memories (ADR 027)
        local                      opening apps, links and web searches, planned by plan::local_plan
@@ -36,6 +37,13 @@ typed or spoken request
 3. Privacy gates come first: Private Mode, the blocklist and the actions switch stop a run, even mid-action.
 4. One microphone owner (ADR 020). A request handed over from the command bar is planned without opening the microphone.
 5. Spoken approval is not accepted; a tap is.
+
+## Learning from runs
+
+Every run the executor carries out is kept with its request, how it was planned, its steps and how it ended (`operator::runs`, the newest 100, no screen text). The finished card asks "Did that work?".
+
+- **Didn't work:** the run is kept as a draft suite case. `cargo run --example notch_do_case_drafts -- --data-dir <profile>` prints the drafts; label the route and plan, check the request holds nothing private, and add it to the suite.
+- **Worked:** the card offers "Save as a skill". A skill keeps the plan's steps (`operator::skills`, up to 30, names unique ignoring case) and runs again when the person says its name ("Monday setup", "run my Monday setup"), through the same executor, policy, verification and journal. A skill that operates an app opens a Codex session; one that only opens apps and links does not.
 
 ## Measured
 
