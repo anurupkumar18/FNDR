@@ -237,7 +237,6 @@ const BROWSERS: &[&str] = &[
 const NEVER_LABELS: &[&str] = &[
     "send",
     "delete",
-    "remove",
     "trash",
     "erase",
     "buy",
@@ -256,8 +255,12 @@ const NEVER_LABELS: &[&str] = &[
     "transfer",
 ];
 
-/// Labels that submit or commit something on the person's behalf.
+/// Labels that submit or commit something on the person's behalf. "Remove"
+/// is here, not refused: removing a song from a queue or a filter from a
+/// table loses nothing, and the person sees the label before saying yes
+/// (owner decision, 2026-10-14).
 const CONFIRM_LABELS: &[&str] = &[
+    "remove",
     "submit",
     "sign in",
     "log in",

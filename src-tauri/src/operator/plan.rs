@@ -371,7 +371,7 @@ pub fn leaves_something_out(request: &str) -> bool {
 }
 
 /// Words that ask for something Notch Do never does wherever they stand.
-const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|reply|replies|forward|delete|deletes|deleting|remove|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
+const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|reply|replies|forward|delete|deletes|deleting|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
 
 /// Words that ask for it only as the verb a request or a clause starts with:
 /// "text Sam", "email the team", "order a pizza", "pay the bill". As nouns

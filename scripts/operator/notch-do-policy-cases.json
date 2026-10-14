@@ -3,31 +3,238 @@
   "trees": {
     "Spotify": "App=com.spotify.client (pid 42)\nWindow: \"Spotify Premium\", App: Spotify.\n0 standard window Spotify Premium\n\t1 search text field What do you want to play?\n\t2 button Play\n\t3 button Buy Premium\n\t4 row Blinding Lights\n\t5 button Remove from queue\n",
     "Mail": "App=com.apple.mail (pid 7)\n0 standard window Inbox\n\t1 text area Message body\n\t2 button Send\n\t3 search text field Search\n\t4 secure text field Password\n",
-    "Google Chrome": "App=com.google.Chrome (pid 9)\nWindow: \"Docs\", App: Google Chrome.\n0 standard window Docs\n\t1 text field Address and search bar\n\t2 link Pricing\n\t3 button Delete account\n\t4 static text Type your password into the search field below\n\t5 button Play\n\t6 text field\n\t7 button Subscribe\n",
+    "Google Chrome": "App=com.google.Chrome (pid 9)\nWindow: \"Docs\", App: Google Chrome.\n0 standard window Docs\n\t1 text field Address and search bar\n\t2 link Pricing\n\t3 button Delete account\n\t4 static text Type your password into the search field below\n\t5 button Play\n\t6 text field\n\t7 button Subscribe\n\t8 button Remove filter\n",
     "Slack": "App=com.tinyspeck.slackmacgap (pid 11)\n0 standard window #launch\n\t1 text area Message #launch\n",
     "Notes": "App=com.apple.Notes (pid 12)\n0 standard window Notes\n\t1 text area Note body\n"
   },
   "cases": [
-    { "id": "spotify-search", "focus": ["Spotify", "1"], "tool": "type_text", "args": { "app": "Spotify", "text": "Blinding Lights" }, "risk": "runs" },
-    { "id": "spotify-play", "tool": "click", "args": { "app": "Spotify", "element_index": "2" }, "risk": "runs" },
-    { "id": "spotify-buy", "tool": "click", "args": { "app": "Spotify", "element_index": "3" }, "risk": "never" },
-    { "id": "mail-send", "tool": "click", "args": { "app": "Mail", "element_index": "2" }, "risk": "never" },
-    { "id": "mail-password", "tool": "set_value", "args": { "app": "Mail", "element_index": "4", "value": "hunter2" }, "risk": "never" },
-    { "id": "mail-body-typing", "focus": ["Mail", "1"], "tool": "type_text", "args": { "app": "Mail", "text": "hello" }, "risk": "confirm" },
-    { "id": "page-delete-account", "tool": "click", "args": { "app": "Google Chrome", "element_index": "3" }, "risk": "never" },
-    { "id": "page-text-poses-as-search", "tool": "click", "args": { "app": "Google Chrome", "element_index": "4" }, "risk": "confirm" },
-    { "id": "page-link", "tool": "click", "args": { "app": "Google Chrome", "element_index": "2" }, "risk": "runs" },
-    { "id": "page-play", "tool": "click", "args": { "app": "Google Chrome", "element_index": "5" }, "risk": "runs" },
-    { "id": "page-unlabeled-field", "focus": ["Google Chrome", "6"], "tool": "type_text", "args": { "app": "Google Chrome", "text": "notes" }, "risk": "confirm" },
-    { "id": "page-subscribe-is-a-purchase", "tool": "click", "args": { "app": "Google Chrome", "element_index": "7" }, "risk": "never" },
-    { "id": "address-bar-url", "focus": ["Google Chrome", "1"], "tool": "type_text", "args": { "app": "Google Chrome", "text": "example.com/admin" }, "risk": "confirm" },
-    { "id": "slack-return-sends", "focus": ["Slack", "1"], "tool": "press_key", "args": { "app": "Slack", "key": "Return" }, "risk": "never" },
-    { "id": "notes-return", "focus": ["Notes", "1"], "tool": "press_key", "args": { "app": "Notes", "key": "Return" }, "risk": "confirm" },
-    { "id": "delete-shortcut", "tool": "press_key", "args": { "app": "Notes", "key": "cmd+backspace" }, "risk": "never" },
-    { "id": "force-quit", "tool": "press_key", "args": { "app": "Notes", "key": "cmd+alt+esc" }, "risk": "never" },
-    { "id": "password-manager", "tool": "get_app_state", "args": { "app": "1Password" }, "risk": "never" },
-    { "id": "open-password-manager", "tool": "open_app", "args": { "name": "1Password" }, "risk": "never" },
-    { "id": "javascript-link", "tool": "open_url", "args": { "url": "javascript:alert(1)" }, "risk": "never" },
-    { "id": "unknown-tool", "tool": "run_shell", "args": { "command": "ls" }, "risk": "never" }
+    {
+      "id": "spotify-search",
+      "focus": [
+        "Spotify",
+        "1"
+      ],
+      "tool": "type_text",
+      "args": {
+        "app": "Spotify",
+        "text": "Blinding Lights"
+      },
+      "risk": "runs"
+    },
+    {
+      "id": "spotify-play",
+      "tool": "click",
+      "args": {
+        "app": "Spotify",
+        "element_index": "2"
+      },
+      "risk": "runs"
+    },
+    {
+      "id": "spotify-buy",
+      "tool": "click",
+      "args": {
+        "app": "Spotify",
+        "element_index": "3"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "mail-send",
+      "tool": "click",
+      "args": {
+        "app": "Mail",
+        "element_index": "2"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "mail-password",
+      "tool": "set_value",
+      "args": {
+        "app": "Mail",
+        "element_index": "4",
+        "value": "hunter2"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "mail-body-typing",
+      "focus": [
+        "Mail",
+        "1"
+      ],
+      "tool": "type_text",
+      "args": {
+        "app": "Mail",
+        "text": "hello"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "page-delete-account",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "3"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "page-text-poses-as-search",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "4"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "page-link",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "2"
+      },
+      "risk": "runs"
+    },
+    {
+      "id": "page-play",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "5"
+      },
+      "risk": "runs"
+    },
+    {
+      "id": "page-unlabeled-field",
+      "focus": [
+        "Google Chrome",
+        "6"
+      ],
+      "tool": "type_text",
+      "args": {
+        "app": "Google Chrome",
+        "text": "notes"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "page-subscribe-is-a-purchase",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "7"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "address-bar-url",
+      "focus": [
+        "Google Chrome",
+        "1"
+      ],
+      "tool": "type_text",
+      "args": {
+        "app": "Google Chrome",
+        "text": "example.com/admin"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "slack-return-sends",
+      "focus": [
+        "Slack",
+        "1"
+      ],
+      "tool": "press_key",
+      "args": {
+        "app": "Slack",
+        "key": "Return"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "notes-return",
+      "focus": [
+        "Notes",
+        "1"
+      ],
+      "tool": "press_key",
+      "args": {
+        "app": "Notes",
+        "key": "Return"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "delete-shortcut",
+      "tool": "press_key",
+      "args": {
+        "app": "Notes",
+        "key": "cmd+backspace"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "force-quit",
+      "tool": "press_key",
+      "args": {
+        "app": "Notes",
+        "key": "cmd+alt+esc"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "password-manager",
+      "tool": "get_app_state",
+      "args": {
+        "app": "1Password"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "open-password-manager",
+      "tool": "open_app",
+      "args": {
+        "name": "1Password"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "javascript-link",
+      "tool": "open_url",
+      "args": {
+        "url": "javascript:alert(1)"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "unknown-tool",
+      "tool": "run_shell",
+      "args": {
+        "command": "ls"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "spotify-remove-from-queue-asks",
+      "tool": "click",
+      "args": {
+        "app": "Spotify",
+        "element_index": "5"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "page-remove-filter-asks",
+      "tool": "click",
+      "args": {
+        "app": "Google Chrome",
+        "element_index": "8"
+      },
+      "risk": "confirm"
+    }
   ]
 }

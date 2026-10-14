@@ -546,6 +546,14 @@
         ],
         "max_steps": 1
       }
+    },
+    {
+      "id": "remove-is-not-delete",
+      "request": "remove the filter in this spreadsheet",
+      "in_front": "Numbers",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
     }
   ],
   "installed_apps": [
@@ -557,6 +565,7 @@
     "Mail",
     "Keynote",
     "Slack",
-    "Calendar"
+    "Calendar",
+    "Numbers"
   ]
 }
