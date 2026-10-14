@@ -21,7 +21,7 @@ The initial native run, before fixing refusal classification, displayed 6/12 pas
 
 ## Source-grounded observations
 
-- The browser article's stored summary retained both labeled changes: faster search indexing and a background-worker memory-leak repair.
+- The browser article's stored summary retained faster search indexing and memory-leak repair, but did not retain the labeled background-worker qualifier.
 - The chat image's visible snippet was only `import process`. Its longer stored context mentioned a bug fix and a PR review after lunch, but omitted the labeled names Priya and Sam. Grounded Ask stopped at the verifier with `all hits below confidence threshold`; the target appeared among evidence citations but not in the returned cards.
 - The paper image's stored summary said top-five accuracy improved, but omitted the labeled twelve-percent amount and the comparison against either signal alone on a held-out set. Its paraphrase target ranked seventh. Grounded Ask reached composition with a partial-answer verifier outcome, then the model returned the exact not-found response.
 - All three imports recorded `vlm_route: fallback_ocr_only` and `extraction_failure_reason: system_pressure`. The stored image memory was built from the local LLM-on-OCR fallback, so this run does not measure the pixel-VLM path. The exact OCR text and private journey artifacts remain in the local lab profile only.
@@ -36,3 +36,19 @@ The initial native run, before fixing refusal classification, displayed 6/12 pas
 ## Next investigation
 
 Keep VS-72 through VS-74 open for source review and Search/Ask quality. Investigate the chat verifier threshold, the paper's snippet-only Ask context, and the paper paraphrase rank as separate leads. Do not treat the passing unsupported checks as proof that grounded questions work.
+
+## Accurate OCR trial for explicit image imports
+
+The manual image-import path was changed to Apple's existing accurate OCR profile. The continuous capture loop kept its fast profile. A focused native OCR fixture test confirmed that the accurate profile reads both short chat speaker names, the article's background-worker phrase, and the paper's twelve-percent amount and held-out comparison. The prior fast profile missed the names and the article's final word. The native app still used `fallback_ocr_only` under system pressure, so this trial did not test pixel-VLM extraction.
+
+The final native rerun used a newly seeded knowledge-worker profile with `capture.user_paused` persisted before the app launched. Engine Diagnostics reported 0 captured frames before and after the batch. All three synthetic imports completed, with 10/12 checks passed, 2 needing review, 0 not run, and 0 fixture errors.
+
+| Synthetic fixture | Exact Search | Paraphrase Search | Grounded Ask | Unsupported Ask | Total |
+| --- | --- | --- | --- | --- | --- |
+| `browser_article-04` | Pass, rank 1 | Pass, rank 1 | Pass | Pass, refused | 4/4 |
+| `chat_mock-01` | Pass, rank 1 | Pass, rank 2 | Review, verifier refused | Pass, refused | 3/4 |
+| `pdf_paper-04` | Pass, rank 1 | Pass, rank 2 | Review, answer refused | Pass, refused | 3/4 |
+
+The paper paraphrase target moved from rank 7 in the earlier native run to rank 2 here. The runs used separately reseeded profiles and local model output can vary, so this is observed improvement, not a controlled causal estimate. Source inspection still found a quality problem: the chat memory's longer context attributed the planned review to "the user" rather than the labeled speaker. The paper's stored summary omitted the twelve-percent amount even though accurate OCR recognized it. Grounded Ask therefore remains open for both cases. The import OCR change is limited to better source collection and does not claim to repair model extraction or answer composition.
+
+Verification for this trial: `CARGO_BUILD_JOBS=2 cargo test --test capture_fixtures manual_import_ocr_reads_gold_small_labels_and_amounts -- --nocapture` passed 1 test; `CARGO_BUILD_JOBS=2 python3 scripts/quality_lab.py fixtures` passed the capture fixture suite, including all 7 integration tests and the admission check. `rustfmt --edition 2021 --check` on the two changed Rust files and `git diff --check` passed. The native run above used the rebuilt debug binary and installed local models.

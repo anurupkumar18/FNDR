@@ -21,7 +21,7 @@ use crate::memory_embedding_document::{
     text_embedding_status, upsert_embedding_manifest, VisualSemanticSource,
 };
 use crate::models;
-use crate::ocr::OcrEngine;
+use crate::ocr::{OcrConfig, OcrEngine};
 use crate::storage::MemoryRecord;
 use crate::AppState;
 use chrono::Local;
@@ -159,7 +159,10 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
                 let dynamic =
                     image::load_from_memory(&file_bytes).map_err(|e| format!("decode image: {e}"))?;
                 let png_bytes = dynamic_image_to_png_bytes(&dynamic)?;
-                let engine = OcrEngine::new().map_err(|e| format!("OCR init: {e}"))?;
+                // Manual imports can spend more time reading small labels and
+                // numbers. The capture loop keeps its faster OCR profile.
+                let engine = OcrEngine::with_config(OcrConfig::high_quality())
+                    .map_err(|e| format!("OCR init: {e}"))?;
                 let recognized = engine
                     .recognize_with_metadata(&png_bytes)
                     .map_err(|e| format!("OCR: {e}"))?;
