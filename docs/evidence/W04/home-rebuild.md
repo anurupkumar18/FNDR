@@ -1,18 +1,33 @@
-# Home rebuild: one work-set engine for Home and Notch Do, checked in the browser preview only
+# Home rebuild: one work-set engine for Home and Notch Do
 
-Home now opens the places of a thread, a task due within 72 hours, a saved set or a routine through the same `resolve_work_set` and `open_work_set` that Notch Do uses (ADR 027). Nothing here has run in the packaged app or against real captures.
+Home opens the places of a thread, a task due within 72 hours, a saved set or a routine through the same `resolve_work_set` and `open_work_set` that Notch Do uses (ADR 027). The original W04 checks below used the browser preview, not real captures.
+
+## October 14 Home follow-up
+
+The landing card is compact enough to show recent work on the first desktop screen. Recent work now precedes deadlines, a routine offer and saved sets. Continue reopens a thread or task's latest source directly; Open all remains a separate action. FNDR shows the typed reopen outcome, including when there is no target. The arrangement option is at the end of Home. The scroll reveal component and its blur were removed because they hid actionable content.
+
+| Check | Result and limit |
+| --- | --- |
+| HomeHero, ResumeWork, WorkSetOpener and HomeDeadlines component tests | 43 passed. IPC was faked at the wrapper, so the test proves the actions and displayed results, not macOS reopening. |
+| Full frontend suite, run alone | 108 files and 843 tests passed. An earlier run overlapped typecheck and build and had two unrelated 5 second timeouts; both files then passed alone, followed by this clean full run. |
+| Typecheck and production frontend build | Passed. The build still reports its existing large main-chunk warning. |
+| Browser preview at 1280 by 720 in light and dark themes | The first recent-work card, Continue and its separate Open all action were visible on the first screen. A preview no-target reopen showed its explicit message. |
+| Browser preview at 390 by 844 | Speak retained its visible label, typed Search and Submit fit in the query field, actions wrapped, and document scroll width equaled viewport width. |
+| Native app attempt | The current debug binary started with `FNDR_DATA_DIR` pointed at the paused synthetic office-pm profile. Computer use then attached to an older bundled FNDR app instead of that process. The bundle used the default owner profile and briefly captured screen context before it was quit. Its window was covered by macOS authentication at first; no Home or reopen result from the current binary was verified. The owner vault was not edited or cleaned up. |
+
+Do not treat the browser fixture as proof of the native reopen path.
 
 ## What is on Home, top to bottom
 
 | Part | File | Data | Rule it keeps |
 | --- | --- | --- | --- |
-| Arrange side by side | `src/app/ResumeWork.tsx` | none, per visit | Off by default. On: a set opens in one `open_work_set` call with a layout by count (1 maximize, 2 left and right, 3 thirds, 4 or more 2x2), so Stop cannot fall between items; the result says when windows stayed put. |
-| Routine offer | `src/app/RoutineOfferCard.tsx` | `routineOffers`, `dismissRoutineOffer` | Shown only for an offer with `dueNow`; Start is a tap; Not now hides it for today. |
+| Pick up where you left off | `src/app/ResumeWork.tsx` | `resumeWork`, `resolveWorkSet(thread.title)` | Continue reopens the latest source directly. Open all, View latest source and Save as set are separate actions; the set must share memories with the thread's evidence. |
 | Due soon | `src/app/HomeDeadlines.tsx` | `getTodos`, `resolveWorkSet(task.title)` | Open, accepted tasks (suggestions left out) due within 72 hours or missed by under a day, at most 3. A set counts only when it holds the task's own memories (`pickSet`); otherwise the card says nothing is saved to reopen. |
-| Pick up where you left off | `src/app/ResumeWork.tsx` | `resumeWork`, `resolveWorkSet(thread.title)` | Open all, View latest source, Save as set per thread; the set must share memories with the thread's evidence. |
+| Routine offer | `src/app/RoutineOfferCard.tsx` | `routineOffers`, `dismissRoutineOffer` | Shown only for an offer with `dueNow`; Start is a tap; Not now hides it for today. |
 | What changed | `src/app/ThreadChanges.tsx` | `whatChangedSince(key)`, `markThreadSeen(key)` | One line ("3 new pages, 1 task since yesterday"), up to 5 names per kind when opened. Reading marks nothing; opening the list or Dismiss marks the thread seen once. |
 | Your sets | `src/app/HomeSets.tsx`, `src/app/SaveAsSet.tsx` | `listNamedSets`, `saveNamedSet`, `deleteNamedSet` | Delete takes a second tap; a refused name shows the backend's sentence. |
-| Open all | `src/app/WorkSetOpener.tsx` | `openWorkSet`, `completeTodo`, `reopenMemory` | Never on load. Up to 3 items open on the tap; more list every item and wait for "Open N items". Items open one call at a time so Stop works between them. Each row reads FNDR's typed outcome: Opened, Moved (opened from its new place), Needs permission (actions off, Private Mode, or a permission named in the detail), Not opened with the reason. After a task's set: Mark this task done. After any set with a source: Continue where you left off. |
+| Open all | `src/app/WorkSetOpener.tsx` | `openWorkSet`, `completeTodo`, `reopenMemory` | Never on load. Up to 3 items open on the tap; more list every item and wait for "Open N items". Items open one call at a time so Stop works between them. Each row reads FNDR's typed outcome: Opened, Moved (opened from its new place), Needs permission (actions off, Private Mode, or a permission named in the detail), Not opened with the reason. After a task's set: Mark this task done. Continue is available before Open all when a source exists. |
+| Open places side by side | `src/app/ResumeWork.tsx` | none, per visit | Off by default. On: a set opens in one `open_work_set` call with a layout by count (1 maximize, 2 left and right, 3 thirds, 4 or more 2x2), so Stop cannot fall between items; the result says when windows stayed put. |
 
 Pure rules live in `src/app/homeWorkSet.ts` with their tests.
 
@@ -30,7 +45,7 @@ The deadline card resolves each task's title with `resolve_work_set`, which alre
 | --- | --- | --- |
 | `npx vitest run src/app/homeWorkSet.test.ts WorkSetOpener ThreadChanges HomeDeadlines HomeSets ResumeWork HomeHero` | unit and component, IPC faked at `invoke` | pass |
 | `ipcDrift.test.ts` | repo test | `markThreadSeen`, `whatChangedSince` and the five named-set wrappers left the baseline |
-| Tab order, 1280 px light | real Chromium on the Vite preview | hero, arrange option, Start, Not now, Open all (deadline), Open Vault, Refresh, change line, Dismiss, Open all, View latest source, Save as set, View source, second thread, Open, Delete: the visual order |
+| Tab order, 1280 px light | real Chromium on the Vite preview at the original W04 check | historical order before the October 14 follow-up |
 | Focus ring | same | 2 px accent outline on every Home control (`after-keyboard-focus.jpg`) |
 | Contrast of secondary text on cards | same, computed colors | 4.12:1 in light before, now about 7.3:1 light and 7.2:1 dark |
 | States | same, `?home=empty|error|loading` | each renders its own copy (`after-empty.jpg`, `after-error-dark.jpg`, `after-loading.jpg`) |

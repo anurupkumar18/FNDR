@@ -133,19 +133,20 @@ describe("Resume Work on Home", () => {
         expect(calls("reopen_memory")).toHaveLength(0);
     });
 
-    it("opens a thread's work set through the shared resolver and continues at its latest source", async () => {
+    it("continues a thread directly and opens its whole set only on a separate tap", async () => {
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Continue Parser from latest source" }));
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" }));
+        expect(calls("resolve_work_set")).toHaveLength(0);
         fireEvent.click(await screen.findByRole("button", { name: "Open all for Parser" }));
         expect(await screen.findByText("Opened 2 of 2")).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledWith("resolve_work_set", { query: "Parser" });
         expect(screen.queryByRole("button", { name: "Mark this task done" })).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole("button", { name: "Continue where you left off" }));
-        await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" }));
     });
 
     it("passes a layout when Arrange side by side is on", async () => {
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
-        fireEvent.click(screen.getByRole("checkbox", { name: "Arrange side by side when a set opens" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Open places side by side" }));
         fireEvent.click(await screen.findByRole("button", { name: "Open all for Parser" }));
         await screen.findByText(/Opened 2 of 2/);
         expect(invoke).toHaveBeenCalledWith("open_work_set", { memoryIds: ["earlier", "latest"], layout: "left_right_split" });
@@ -162,6 +163,15 @@ describe("Resume Work on Home", () => {
         expect(await screen.findByRole("heading", { name: "Due soon" })).toBeInTheDocument();
         expect(await screen.findByText(/No saved sets yet/)).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Your sets" })).toBeInTheDocument();
+    });
+
+    it("puts recent work before the secondary Home sections", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        const recent = await screen.findByRole("heading", { name: "Pick up where you left off" });
+        const due = screen.getByRole("heading", { name: "Due soon" });
+        const sets = screen.getByRole("heading", { name: "Your sets" });
+        expect(recent.compareDocumentPosition(due) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(due.compareDocumentPosition(sets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("shows only three threads without presenting uncited suggestions", async () => {

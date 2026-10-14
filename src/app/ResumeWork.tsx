@@ -2,7 +2,6 @@ import { useEffect, useId, useState } from "react";
 import { resolveWorkSet, resumeWork, type ResumeThread } from "@/shared/ipc/tauri";
 import { useHomeSections } from "@/shared/home/homeSections";
 import { pickSet } from "./homeWorkSet";
-import { HomeReveal } from "./HomeReveal";
 import { HomeDeadlines } from "./HomeDeadlines";
 import { HomeSets } from "./HomeSets";
 import { RoutineOfferCard } from "./RoutineOfferCard";
@@ -68,86 +67,72 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
 
     return (
         <div className="home-work">
-            <HomeReveal>
-                <div className="home-work-options">
-                    <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
-                    <label htmlFor={arrangeId}>Arrange side by side when a set opens</label>
-                </div>
-            </HomeReveal>
-            {shown.routine && (
-                <HomeReveal>
-                    <RoutineOfferCard arrange={arrange} />
-                </HomeReveal>
-            )}
-            {shown.deadlines && (
-                <HomeReveal>
-                    <HomeDeadlines arrange={arrange} />
-                </HomeReveal>
-            )}
             {shown.threads && (
-                <HomeReveal>
-            <section className="resume-work" aria-labelledby="resume-work-title" aria-busy={status === "loading"}>
-                <div className="resume-work-header">
-                    <div>
-                        <h2 id="resume-work-title">Pick up where you left off</h2>
-                        <p>Recent work · last 24 hours</p>
+                <section className="resume-work" aria-labelledby="resume-work-title" aria-busy={status === "loading"}>
+                    <div className="resume-work-header">
+                        <div>
+                            <h2 id="resume-work-title">Pick up where you left off</h2>
+                            <p>Recent work · last 24 hours</p>
+                        </div>
+                        <div className="resume-work-actions">
+                            <button type="button" onClick={onOpenVault}>Open Vault</button>
+                            <button type="button" disabled={status === "loading"} onClick={() => setRefresh((value) => value + 1)}>
+                                {status === "error" ? "Retry" : "Refresh"}
+                            </button>
+                        </div>
                     </div>
-                    <div className="resume-work-actions">
-                        <button type="button" onClick={onOpenVault}>Open Vault</button>
-                        <button type="button" disabled={status === "loading"} onClick={() => setRefresh((value) => value + 1)}>
-                            {status === "error" ? "Retry" : "Refresh"}
-                        </button>
-                    </div>
-                </div>
-                {status === "loading" && <p role="status">Loading recent work…</p>}
-                {status === "error" && <p role="alert">Recent work couldn’t be loaded. Try again, or search above.</p>}
-                {status === "ready" && threads.length === 0 && (
-                    <p className="resume-work-empty">No recent work yet. Saved work will appear here; search above or open the Vault to find older memories.</p>
-                )}
-                {status === "ready" && threads.length > 0 && (
-                    <ul className="resume-work-list">
-                        {threads.map((thread) => {
-                            const latestSource = thread.evidence[thread.evidence.length - 1];
-                            const suggestion = thread.suggested_next_steps.find((step) => thread.evidence.includes(step.source_memory_id));
-                            const title = thread.title || "Recent work";
-                            const load = threadSet(thread);
-                            return (
-                                <li key={`${thread.title}:${thread.evidence[0] ?? ""}`}>
-                                    <div className="resume-work-thread-heading">
-                                        <h3>{title}</h3>
-                                        <span>{thread.app_name && thread.app_name !== thread.title ? `${thread.app_name} · ` : ""}{activityAge(thread.age_minutes)}</span>
-                                    </div>
-                                    {thread.last_state && <p>{thread.last_state.replace(/\bin_progress\b/g, "in progress")}</p>}
-                                    {thread.grouped_by && thread.grouped_by.length > 0 && (
-                                        <p className="resume-work-grouped">Grouped by the words its windows share: {thread.grouped_by.join(", ")}</p>
-                                    )}
-                                    {thread.key && <ThreadChanges threadKey={thread.key} title={title} />}
-                                    <WorkSetOpener name={title} load={load} continueMemoryId={latestSource} arrange={arrange}>
-                                        {latestSource && (
-                                            <button type="button" aria-label={`View latest source for ${thread.title}`} onClick={() => onOpenMemory(latestSource)}>View latest source</button>
-                                        )}
-                                        <SaveAsSet name={title} load={load} onSaved={() => setSetsVersion((value) => value + 1)} />
-                                    </WorkSetOpener>
-                                    {suggestion && (
-                                        <div className="resume-work-next">
-                                            <span>Suggested next step</span>
-                                            <p>{suggestion.title}</p>
-                                            <button type="button" aria-label={`View source for suggested step: ${suggestion.title}`} onClick={() => onOpenMemory(suggestion.source_memory_id)}>View source</button>
+                    {status === "loading" && <p role="status">Loading recent work…</p>}
+                    {status === "error" && <p role="alert">Recent work couldn’t be loaded. Try again, or search above.</p>}
+                    {status === "ready" && threads.length === 0 && (
+                        <p className="resume-work-empty">No recent work yet. Saved work will appear here; search above or open the Vault to find older memories.</p>
+                    )}
+                    {status === "ready" && threads.length > 0 && (
+                        <ul className="resume-work-list">
+                            {threads.map((thread) => {
+                                const latestSource = thread.evidence[thread.evidence.length - 1];
+                                const suggestion = thread.suggested_next_steps.find((step) => thread.evidence.includes(step.source_memory_id));
+                                const title = thread.title || "Recent work";
+                                const load = threadSet(thread);
+                                return (
+                                    <li key={`${thread.title}:${thread.evidence[0] ?? ""}`}>
+                                        <div className="resume-work-thread-heading">
+                                            <h3>{title}</h3>
+                                            <span>{thread.app_name && thread.app_name !== thread.title ? `${thread.app_name} · ` : ""}{activityAge(thread.age_minutes)}</span>
                                         </div>
-                                    )}
-                                </li>
-                            );
-                        })}
-                    </ul>
-                )}
-            </section>
-                </HomeReveal>
+                                        {thread.last_state && <p>{thread.last_state.replace(/\bin_progress\b/g, "in progress")}</p>}
+                                        {thread.grouped_by && thread.grouped_by.length > 0 && (
+                                            <p className="resume-work-grouped">Grouped by the words its windows share: {thread.grouped_by.join(", ")}</p>
+                                        )}
+                                        {thread.key && <ThreadChanges threadKey={thread.key} title={title} />}
+                                        <WorkSetOpener name={title} load={load} continueMemoryId={latestSource} arrange={arrange}>
+                                            {latestSource && (
+                                                <button type="button" aria-label={`View latest source for ${thread.title}`} onClick={() => onOpenMemory(latestSource)}>View latest source</button>
+                                            )}
+                                            <SaveAsSet name={title} load={load} onSaved={() => setSetsVersion((value) => value + 1)} />
+                                        </WorkSetOpener>
+                                        {suggestion && (
+                                            <div className="resume-work-next">
+                                                <span>Suggested next step</span>
+                                                <p>{suggestion.title}</p>
+                                                <button type="button" aria-label={`View source for suggested step: ${suggestion.title}`} onClick={() => onOpenMemory(suggestion.source_memory_id)}>View source</button>
+                                            </div>
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
             )}
+            {shown.deadlines && <HomeDeadlines arrange={arrange} />}
+            {shown.routine && <RoutineOfferCard arrange={arrange} />}
             {shown.sets && (
-                <HomeReveal>
-                    <HomeSets refreshKey={setsVersion} arrange={arrange} />
-                </HomeReveal>
+                <HomeSets refreshKey={setsVersion} arrange={arrange} />
             )}
+            <div className="home-work-options">
+                <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
+                <label htmlFor={arrangeId}>Open places side by side</label>
+            </div>
         </div>
     );
 }

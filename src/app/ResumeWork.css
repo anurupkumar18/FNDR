@@ -2,9 +2,9 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 16px;
     width: 100%;
-    margin-top: 20px;
+    margin-top: 24px;
     color: var(--text-primary);
     text-align: left;
     font-family: var(--film-font-ui);
@@ -18,12 +18,12 @@
     align-items: center;
     gap: 8px;
     align-self: flex-end;
-    padding: 6px 12px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: 999px;
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 14px;
 }
 .home-work-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .home-work-options input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -55,23 +55,23 @@
 
 .home-work h2 { margin: 0; font-size: 19px; line-height: 1.35; }
 .home-work h3 { margin: 0; font-size: 16px; line-height: 1.4; }
-.home-work h4 { margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--home-quiet); }
+.home-work h4 { margin: 8px 0 2px; font-size: 14px; font-weight: 600; color: var(--home-quiet); }
 .home-work p { margin: 8px 0; font-size: 14px; line-height: 1.5; }
 .home-quiet { color: var(--home-quiet); }
 .resume-work-header p,
 .resume-work-thread-heading span,
 .resume-work-grouped,
-.resume-work-next > span { color: var(--home-quiet); font-size: 12px; }
+.resume-work-next > span { color: var(--home-quiet); font-size: 14px; }
 .resume-work-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .home-work button {
-    min-height: 36px;
-    padding: 6px 10px;
+    min-height: 40px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-elevated);
     color: var(--text-primary);
     font: inherit;
-    font-size: 12px;
+    font-size: 14px;
     cursor: pointer;
 }
 .home-work button:hover:not(:disabled) { background: var(--surface-hover); }
@@ -87,7 +87,7 @@
 .resume-work-list > li:last-child,
 .home-deadline-list > li:last-child,
 .home-set-list > li:last-child { padding-bottom: 0; }
-.home-set-list > li > .home-quiet { margin: 2px 0 0; font-size: 12px; }
+.home-set-list > li > .home-quiet { margin: 2px 0 0; font-size: 14px; }
 .resume-work-next { margin-top: 14px; padding-left: 12px; border-left: 2px solid var(--border); }
 .resume-work-next p { margin-top: 4px; }
 .resume-work-empty { color: var(--home-quiet); }
@@ -95,25 +95,25 @@
 .thread-changes { margin: 6px 0 0; }
 .thread-changes-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .home-work .thread-changes-toggle {
-    min-height: 32px;
+    min-height: 40px;
     padding: 4px 10px;
     border-color: transparent;
     background: color-mix(in srgb, var(--accent) 10%, transparent);
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
 }
 .home-work .thread-changes-toggle::after { content: " ▸"; color: var(--home-quiet); }
 .home-work .thread-changes-toggle[aria-expanded="true"]::after { content: " ▾"; }
-.home-work .thread-changes-dismiss { min-height: 32px; border-color: transparent; background: transparent; color: var(--home-quiet); }
+.home-work .thread-changes-dismiss { min-height: 40px; border-color: transparent; background: transparent; color: var(--home-quiet); }
 .thread-changes-list { padding: 2px 0 0 10px; }
-.thread-changes-list ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
-.thread-changes-list p { margin: 2px 0; font-size: 12px; color: var(--home-quiet); }
+.thread-changes-list ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+.thread-changes-list p { margin: 2px 0; font-size: 14px; color: var(--home-quiet); }
 
 .save-set { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .save-set-form { flex-basis: 100%; }
-.save-set-form label { font-size: 12px; color: var(--home-quiet); }
+.save-set-form label { font-size: 14px; color: var(--home-quiet); }
 .save-set-form input {
-    min-height: 36px;
+    min-height: 40px;
     min-width: 0;
     flex: 1 1 180px;
     padding: 6px 10px;
@@ -122,10 +122,10 @@
     background: var(--surface);
     color: var(--text-primary);
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
 }
 .save-set-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.save-set .home-quiet { font-size: 12px; }
+.save-set .home-quiet { font-size: 14px; }
 
 @media (max-width: 480px) {
     .home-routine,
@@ -133,34 +133,4 @@
     .resume-work,
     .home-sets { padding: 16px; border-radius: 16px; }
     .home-work-options { align-self: stretch; }
-}
-
-/* Sections wait blurred below the fold and sharpen as they scroll into view. */
-.home-reveal {
-    transition:
-        opacity 640ms ease,
-        filter 640ms ease,
-        transform 760ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.home-reveal:empty {
-    display: none;
-}
-
-.home-reveal:not(.is-revealed) {
-    opacity: 0.5;
-    filter: blur(14px) saturate(0.85);
-    transform: translateY(28px);
-    pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .home-reveal,
-    .home-reveal:not(.is-revealed) {
-        transition: none;
-        opacity: 1;
-        filter: none;
-        transform: none;
-        pointer-events: auto;
-    }
 }
