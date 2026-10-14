@@ -1,5 +1,7 @@
 # Autonomous quality loop checkpoint, 2026-10-13
 
+Current work-identity and remote state is in [the later checkpoint](2026-10-13-work-identity-quality-loop.md). The remote tips and next product decision below are historical.
+
 ## Current state
 
 - GitHub `gh/main` and GitLab `origin/main` both resolve to `a04ba0b` after PRs 41, 42 and 43. Work was done in the isolated Codex worktree, not the shared checkout.
