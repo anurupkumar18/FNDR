@@ -2,7 +2,7 @@
  * HomeHero — cinematic home screen hero with mouse parallax, hero search pill,
  * and voice input.
  *
- * Design spec: docs/superpowers/specs/2026-05-18-hero-parallax-design.md
+ * Current Home contract: docs/product/DESIGN_DIRECTION.md
  *
  * Wires into the existing search flow via `onHeroSearch(query)` callback —
  * no duplicate state. Voice input uses the shared native voice session.
@@ -19,11 +19,7 @@ import { useReducedMotionSafe } from "@/shared/motion/useReducedMotionSafe";
 import { VoiceButton } from "@/shared/voice/VoiceButton";
 import { VoiceStatus } from "@/shared/voice/VoiceStatus";
 import { useVoice } from "@/shared/voice/useVoice";
-import { Liquid } from "liquid-gooey";
 import "./HomeHero.css";
-
-/** Submit button width (44) plus its gap (14) — how far Speak moves to make room. */
-const ACTION_SLOT_PX = 58;
 
 // ─── Greeting helpers ─────────────────────────────────────────────────────────
 
@@ -43,13 +39,6 @@ const SUBTITLE: Record<Daypart, string> = {
     Afternoon: "Let's pick up where you left off.",
     Evening: "Let's revisit your day.",
     Night: "Let's dive into your memories.",
-};
-
-const PLACEHOLDER: Record<Daypart, string> = {
-    Morning: "What did you work on this morning?",
-    Afternoon: "What shall we uncover this afternoon?",
-    Evening: "What happened today?",
-    Night: "What shall we uncover tonight?",
 };
 
 /**
@@ -104,7 +93,6 @@ export function HomeHero({
     // Search state (local, hands off via onHeroSearch).
     const [draft, setDraft] = useState("");
     const hasDraft = draft.trim().length > 0;
-    const actionTransition = reduced ? { duration: 0 } : "smooth";
     const inputRef = useRef<HTMLInputElement>(null);
 
     // Hero visibility — pause parallax when offscreen.
@@ -223,7 +211,7 @@ export function HomeHero({
                         ref={inputRef}
                         type="text"
                         className="home-hero__search-input"
-                        placeholder={PLACEHOLDER[part]}
+                        placeholder="Search memories"
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => {
@@ -241,56 +229,35 @@ export function HomeHero({
                         spellCheck={false}
                     />
 
-                    {/* Speak and Submit share one liquid surface: with an empty field
-                        Speak holds the trailing slot and Submit waits inside it; typing
-                        slides Speak over and Submit swells out of it. */}
-                    <Liquid
-                        className="home-hero__actions"
-                        blur={4}
-                        fill="var(--surface)"
-                        shadow="inset 0 0 0 1px var(--border-strong)"
-                    >
-                    <Liquid.Item
-                        className="home-hero__action home-hero__action--voice"
-                        x={hasDraft ? 0 : ACTION_SLOT_PX}
-                        transition={actionTransition}
-                    >
-                    <VoiceButton
-                        mode={voice.mode}
-                        state={voice.state}
-                        isActive={voice.isActive}
-                        onStart={voice.start}
-                        onStop={voice.stop}
-                        className={`home-hero__voice-btn${voice.isActive ? " is-recording" : ""}`}
-                    />
-                    </Liquid.Item>
-
-                    <Liquid.Item
-                        className="home-hero__action"
-                        x={hasDraft ? 0 : -ACTION_SLOT_PX / 2}
-                        scale={hasDraft ? 1 : 0.4}
-                        transition={actionTransition}
-                    >
-                    <button
-                        type="button"
-                        className="home-hero__search-submit"
-                        onClick={() => handleSubmit()}
-                        aria-label="Submit search"
-                        disabled={!draft.trim()}
-                    >
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            aria-hidden="true"
-                        >
-                            <path d="M5 12h14M13 6l6 6-6 6" />
-                        </svg>
-                    </button>
-                    </Liquid.Item>
-                    </Liquid>
+                    <div className="home-hero__actions">
+                        <VoiceButton
+                            mode={voice.mode}
+                            state={voice.state}
+                            isActive={voice.isActive}
+                            onStart={voice.start}
+                            onStop={voice.stop}
+                            className={`home-hero__voice-btn${voice.isActive ? " is-recording" : ""}`}
+                        />
+                        {hasDraft && (
+                            <button
+                                type="button"
+                                className="home-hero__search-submit"
+                                onClick={() => handleSubmit()}
+                                aria-label="Submit search"
+                            >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="M5 12h14M13 6l6 6-6 6" />
+                                </svg>
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Voice status */}

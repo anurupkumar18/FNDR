@@ -40,6 +40,31 @@ describe("Open all", () => {
         expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeEnabled();
     });
 
+    it("continues from the latest source without opening the whole set", async () => {
+        routeOpens({});
+        const load = vi.fn();
+        render(<WorkSetOpener name="Parser" load={load} continueMemoryId="latest" />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Continue Parser from latest source" }));
+        expect(await screen.findByText("Opened the latest source")).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" });
+        expect(load).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeEnabled();
+    });
+
+    it("does not start a second open while continuing a source", async () => {
+        let finish!: (result: { kind: "opened" }) => void;
+        vi.mocked(invoke).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        const load = vi.fn();
+        render(<WorkSetOpener name="Parser" load={load} continueMemoryId="latest" />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Continue Parser from latest source" }));
+        expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeDisabled();
+        expect(load).not.toHaveBeenCalled();
+        await act(async () => finish({ kind: "opened" }));
+        expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeEnabled();
+    });
+
     it("opens three items on the first tap, one at a time, and shows each outcome", async () => {
         routeOpens({
             b: { memoryId: "b", label: "Notes.pdf", kind: "file", ok: true, detail: "Opened from its new place: Notes.pdf", outcome: { kind: "opened_moved", new_path: "/x/Notes.pdf" } },
@@ -138,7 +163,7 @@ describe("Open all", () => {
         expect(invoke).toHaveBeenCalledWith("complete_todo", { taskId: "task-1" });
         expect(onTaskDone).toHaveBeenCalledOnce();
 
-        fireEvent.click(screen.getByRole("button", { name: "Continue where you left off" }));
+        fireEvent.click(screen.getByRole("button", { name: "Continue Lab 4 from latest source" }));
         expect(await screen.findByText("Opened the latest source")).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" });
     });
@@ -149,6 +174,6 @@ describe("Open all", () => {
         fireEvent.click(screen.getByRole("button", { name: "Open all for Parser" }));
         await screen.findByText("Opened 1 of 1");
         expect(screen.queryByRole("button", { name: "Mark this task done" })).not.toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Continue where you left off" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /Continue .* from latest source/ })).not.toBeInTheDocument();
     });
 });

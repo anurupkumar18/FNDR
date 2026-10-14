@@ -68,11 +68,12 @@ describe("Deadline cards on Home", () => {
     it("opens the task's set and offers to mark the task done", async () => {
         route([task({})]);
         render(<HomeDeadlines nowMs={now} />);
+        expect(await screen.findByRole("button", { name: "Continue Lab 4 from latest source" })).toBeInTheDocument();
         fireEvent.click(await screen.findByRole("button", { name: "Open all for Lab 4" }));
         expect(await screen.findByText("Opened 3 of 3")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Mark this task done" }));
         await waitFor(() => expect(invoke).toHaveBeenCalledWith("complete_todo", { taskId: "lab4" }));
-        expect(screen.getByRole("button", { name: "Continue where you left off" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Continue Lab 4 from latest source" })).toBeInTheDocument();
     });
 
     it("never offers a set that shares nothing with the task", async () => {
