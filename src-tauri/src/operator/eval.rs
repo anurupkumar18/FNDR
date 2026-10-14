@@ -3,8 +3,9 @@
 //! on the Mac (`plan::route`, the left-out note) and, for a recorded planner
 //! answer, against what a correct plan holds.
 //!
-//! `cargo test --lib operator::eval` scores the routing of every case and
-//! every recorded plan under `scripts/operator/recordings/`. A planner answer
+//! `cargo test --lib operator::eval` scores the routing of every case, every
+//! policy case in `scripts/operator/notch-do-policy-cases.json`, and every
+//! recorded plan under `scripts/operator/recordings/`. A planner answer
 //! is recorded by the ignored live test in `ipc::commands::computer_use`.
 
 use crate::operator::layout::Layout;
@@ -285,6 +286,52 @@ mod tests {
         assert!(plan_mismatches(refusal, r#"{"steps":[]}"#).is_empty());
         let sent = r#"{"steps":[{"action":"operate","label":"Text Sam","app":"Messages","url":"","goal":"text Sam","check":"none"}]}"#;
         assert!(!plan_mismatches(refusal, sent).is_empty());
+    }
+
+    /// Every policy case in `scripts/operator/notch-do-policy-cases.json`:
+    /// what FNDR decides for one computer-use call, given what it read of
+    /// the app and the element last clicked.
+    #[test]
+    fn every_policy_case_is_decided_as_labeled() {
+        use crate::operator::policy::{classify, Observed, Risk};
+        let path = repo_path("scripts/operator/notch-do-policy-cases.json");
+        let suite: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("policy cases")).expect("parses");
+        let cases = suite["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 20, "{} policy cases", cases.len());
+        let mut failures = Vec::new();
+        for case in cases {
+            let mut observed = Observed::default();
+            for (app, tree) in suite["trees"].as_object().expect("trees") {
+                observed.observe_tree(app, tree.as_str().unwrap_or_default());
+            }
+            if let Some(focus) = case["focus"].as_array() {
+                let at = |i: usize| focus[i].as_str().unwrap_or_default();
+                observed.note_target(at(0), at(1));
+            }
+            let decided = classify(
+                case["tool"].as_str().unwrap_or_default(),
+                &case["args"],
+                &observed,
+            );
+            let got = match decided.risk {
+                Risk::Runs => "runs",
+                Risk::Confirm => "confirm",
+                Risk::Never => "never",
+            };
+            if Some(got) != case["risk"].as_str() {
+                failures.push(format!(
+                    "{}: {got} ({}), labeled {}",
+                    case["id"], decided.reason, case["risk"]
+                ));
+            }
+        }
+        println!(
+            "policy: {} of {} calls as labeled",
+            cases.len() - failures.len(),
+            cases.len()
+        );
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
     /// Every recorded planner run under `scripts/operator/recordings/`,
