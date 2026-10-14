@@ -807,6 +807,8 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 
 **Do.** Seed a persona profile, open Home and a work set in the native app, and confirm a named thread opens more than one place. Add a read-only count to the signals evaluation (threads, windows per thread, named threads) and run it on a copy of a vault with at least a week of daily capture. Record wrong groupings by their shared words, never by content.
 
+**Result, native run, 2026-10-13.** A debug build ran on a seeded office profile with its project labels removed (`FNDR_DATA_DIR`, capture paused). Home showed named threads from the real backend, each with its shared words: "Smart Reminders" (Smart Reminders, Launch checklist, reminders launch), the hiring search titled "Imani R", and "Product team" (two standups and a lunch order, a weak grouping). Screenshot: `docs/evidence/W04/named-threads/native-home-seeded.png`. Two fixes followed: a title is the longest phrase its names spell ("Senior Product Designer"), and a name keeps the capitals a title gave it rather than a channel slug's. "Open all" was not pressed. The real-week count waits for a week of capture (the owner's vault held 16 memories in its last 7 days).
+
 **Done when.** A native run is recorded, and the counts exist for one real week.
 
 **Evidence.** Screenshots of a seeded profile and the count output.
