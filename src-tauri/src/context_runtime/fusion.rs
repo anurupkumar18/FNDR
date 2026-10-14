@@ -22,6 +22,48 @@ pub const TITLE_MATCH_BONUS: f32 = 0.15;
 const TITLE_MATCH_SHARE: f32 = 0.8;
 const TITLE_MATCH_MIN_WORDS: usize = 2;
 
+/// Added in proportion to the query's literals a memory holds exactly.
+/// Smaller than the title lift: it settles near ties and cannot carry a weak
+/// match past a strong one.
+pub const LITERAL_MATCH_BONUS: f32 = 0.08;
+
+/// The query's literals: a token with a digit and punctuation inside it
+/// ("1.8%", "$1.24M", "LL-1482", "10.4.2") or with an underscore
+/// ("labels_idempotency_key_key"). The keyword index splits these into
+/// pieces that many memories share, so they are matched whole here.
+fn literals_of(query: &str) -> Vec<String> {
+    let mut literals: Vec<String> = Vec::new();
+    for token in query.split_whitespace() {
+        let token = token
+            .trim_matches(|ch: char| matches!(ch, '"' | '\'' | ',' | ';' | '(' | ')' | '?' | '!'))
+            .trim_end_matches('.')
+            .to_lowercase();
+        let has_digit = token.chars().any(|ch| ch.is_ascii_digit());
+        let has_mark = token.chars().any(|ch| !ch.is_alphanumeric());
+        let literal = (has_digit && has_mark) || token.contains('_');
+        if literal && token.chars().count() >= 3 && !literals.contains(&token) {
+            literals.push(token);
+        }
+    }
+    literals
+}
+
+/// How many of `literals` occur in `text` as whole tokens.
+fn literals_held(literals: &[String], text: &str) -> usize {
+    let text = text.to_lowercase();
+    literals
+        .iter()
+        .filter(|literal| {
+            text.match_indices(literal.as_str()).any(|(at, _)| {
+                let before = text[..at].chars().next_back();
+                let after = text[at + literal.len()..].chars().next();
+                !before.is_some_and(char::is_alphanumeric)
+                    && !after.is_some_and(char::is_alphanumeric)
+            })
+        })
+        .count()
+}
+
 fn words_of(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -47,6 +89,7 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
     let started = Instant::now();
     let mut agg: HashMap<String, Agg> = HashMap::new();
     let query_words = words_of(&plan.raw);
+    let literals = literals_of(&plan.raw);
 
     for route_hits in &hits {
         let weight = weight_for(weights, route_hits.route);
@@ -70,6 +113,22 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 }
             }
             entry.coverage = entry.coverage.max(coverage_from_hit(hit));
+            if let Some(result) = hit
+                .signals
+                .search_result
+                .as_ref()
+                .filter(|_| !literals.is_empty())
+            {
+                let text = format!(
+                    "{} {} {} {}",
+                    result.window_title,
+                    result.snippet,
+                    result.clean_text,
+                    result.url.as_deref().unwrap_or_default()
+                );
+                let share = literals_held(&literals, &text) as f32 / literals.len() as f32;
+                entry.literal_share = entry.literal_share.max(share);
+            }
             entry.title_match |= hit
                 .signals
                 .search_result
@@ -77,8 +136,11 @@ pub fn fuse(plan: &QueryPlan, hits: Vec<RouteHits>, weights: &FusionWeights) -> 
                 .is_some_and(|result| is_title_query(&query_words, &result.window_title));
         }
     }
-    for entry in agg.values_mut().filter(|entry| entry.title_match) {
-        entry.score += TITLE_MATCH_BONUS;
+    for entry in agg.values_mut() {
+        if entry.title_match {
+            entry.score += TITLE_MATCH_BONUS;
+        }
+        entry.score += LITERAL_MATCH_BONUS * entry.literal_share;
     }
 
     let anchor_terms = plan_anchor_terms(plan);
@@ -136,6 +198,8 @@ struct Agg {
     coverage: f32,
     /// The query's words are this memory's window title.
     title_match: bool,
+    /// Share of the query's literals this memory holds exactly.
+    literal_share: f32,
     graph_path: Option<Vec<PathStep>>,
     contributing_routes: Vec<Route>,
     embedding_reason_labels: Vec<String>,
@@ -149,6 +213,7 @@ impl Default for Agg {
             timestamp: i64::MIN,
             coverage: 0.0,
             title_match: false,
+            literal_share: 0.0,
             graph_path: None,
             contributing_routes: Vec::new(),
             embedding_reason_labels: Vec::new(),
@@ -608,6 +673,61 @@ mod tests {
             raw: query.to_string(),
             ..dummy_plan()
         }
+    }
+
+    fn reading(id: &str, score: f32, text: &str) -> RouteHit {
+        let mut read = hit(id, score, RouteBranch::Semantic);
+        read.signals.search_result = Some(crate::storage::SearchResult {
+            id: id.to_string(),
+            clean_text: text.to_string(),
+            ..Default::default()
+        });
+        read
+    }
+
+    #[test]
+    fn a_literal_the_query_spells_out_breaks_a_near_tie() {
+        // "1.8%" splits into 1 and 8 for the keyword index, so a thread
+        // that says 18% scored as high as the one that says 1.8%.
+        let fused = fuse(
+            &plan_for("LL-1482 spam placement 1.8%"),
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![
+                    reading(
+                        "earlier",
+                        0.62,
+                        "LL-1482: 18% of reminder emails landing in spam",
+                    ),
+                    reading("closed", 0.58, "LL-1482 closed: spam placement 1.8%"),
+                ],
+                elapsed_ms: 1,
+            }],
+            &FusionWeights::default(),
+        );
+        assert_eq!(fused[0].memory_id, "closed");
+    }
+
+    #[test]
+    fn plain_words_and_far_apart_scores_are_left_alone() {
+        let fused = fuse(
+            &plan_for("spam placement 1.8%"),
+            vec![RouteHits {
+                route: Route::Vector,
+                hits: vec![
+                    reading("strong", 0.95, "Spam placement fell after the DKIM fix"),
+                    reading("literal", 0.30, "A table with 1.8% in it"),
+                ],
+                elapsed_ms: 1,
+            }],
+            &FusionWeights::default(),
+        );
+        assert_eq!(fused[0].memory_id, "strong");
+        assert!(literals_of("spam placement weekly").is_empty());
+        assert_eq!(
+            literals_of("UniqueViolation labels_idempotency_key_key on $1.24M v2"),
+            vec!["labels_idempotency_key_key", "$1.24m"]
+        );
     }
 
     #[test]
