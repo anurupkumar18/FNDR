@@ -166,6 +166,9 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
                         {continueState === "opening" ? "Opening…" : "Continue"}
                     </button>
                 )}
+                {continueState !== "idle" && continueState !== "opening" && (
+                    <span className="work-set-note work-set-inline-result" role={continueState === "failed" ? "alert" : "status"}>{continueMessage}</span>
+                )}
                 <button
                     type="button"
                     className={continueMemoryId ? "work-set-open" : "work-set-primary"}
@@ -177,9 +180,6 @@ export function WorkSetOpener({ name, load, label = "Open all", taskId, continue
                 </button>
                 {children}
             </div>
-            {continueState !== "idle" && continueState !== "opening" && (
-                <p className="work-set-note" role={continueState === "failed" ? "alert" : "status"}>{continueMessage}</p>
-            )}
             {phase.kind === "finding" && <p className="work-set-note" role="status">Finding what to reopen…</p>}
             {phase.kind === "none" && <p className="work-set-note" role="status">{phase.why}</p>}
             {phase.kind === "confirm" && (

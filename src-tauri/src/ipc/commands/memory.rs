@@ -82,14 +82,14 @@ pub async fn reopen_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
 ) -> Result<ReopenOutcome, String> {
-    let record = state
-        .inner()
-        .store
-        .get_memory_by_id(&memory_id)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
-        .ok_or_else(|| format!("Memory not found: {}", memory_id))?;
-    reopen_record(&record).await
+    // Use the work-set opener for a single source too. It checks the current
+    // blocklist, visibility, Private Mode and action switch at open time.
+    let outcomes = crate::workset::open_ids(state.inner(), &[memory_id]).await;
+    Ok(outcomes
+        .into_iter()
+        .next()
+        .and_then(|item| item.outcome)
+        .unwrap_or(ReopenOutcome::Unavailable))
 }
 
 /// Opens what one memory points at: the shared core of `reopen_memory` and

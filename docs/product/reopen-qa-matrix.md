@@ -246,6 +246,8 @@ Live Accessibility probe (2026-10-08):
 
 ## Attribution cheat sheet
 
+The R38 and R41 rows above record their 2026-09-28 state. On 2026-10-14, Home gained a direct Continue action through `reopen_memory`. The command now uses the same open-time access checks as work sets: current blocklist, quality and deletion visibility, Private Mode, and the actions switch. A refused or vanished id returns the typed `unavailable` outcome without opening a target. Its UI line appears beside Continue, where the native window can show it without another scroll. The rebuilt isolated native app reached the real `app_missing` outcome for a Zoom source and displayed that result beside Continue. Access refusal is covered by a real-store test with a fake Mac opener; it has not been exercised through native UI.
+
 | Symptom | Code path |
 |---|---|
 | Browser memory is app only, no http URL | `capture/macos.rs` `read_frontmost_app_info` + `normalize_browser_document_url`; `build_reopen_target` |

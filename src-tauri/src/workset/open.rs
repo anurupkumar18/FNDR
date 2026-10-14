@@ -177,6 +177,13 @@ mod tests {
         let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
             .await
             .unwrap();
+        let mut quarantined = page(
+            "quarantined",
+            "Google Chrome",
+            "Unsafe evidence",
+            "https://docs.example/unsafe",
+        );
+        quarantined.storage_outcome = "quarantine_low_grounding".into();
         let records = vec![
             page(
                 "canvas",
@@ -191,6 +198,7 @@ mod tests {
                 "https://docs.google.com/d/1",
             ),
             page("chat", "Slack", "Lab group", "https://slack.example/c"),
+            quarantined,
             page("gone", "Google Chrome", "Old page", "https://old.example"),
         ];
         store.add_batch_preserving_ids(&records).await.unwrap();
@@ -198,7 +206,7 @@ mod tests {
 
         let opened: Arc<Mutex<Vec<String>>> = Arc::default();
         let seen = opened.clone();
-        let ids: Vec<String> = ["doc", "canvas", "chat", "gone", "doc"]
+        let ids: Vec<String> = ["doc", "canvas", "chat", "quarantined", "gone", "doc"]
             .iter()
             .map(|id| id.to_string())
             .collect();
@@ -230,12 +238,13 @@ mod tests {
             .iter()
             .map(|o| (o.memory_id.as_str(), o.ok, o.detail.as_str()))
             .collect();
-        assert_eq!(summary.len(), 4, "a repeated id opens once");
+        assert_eq!(summary.len(), 5, "a repeated id opens once");
         assert_eq!(summary[0].0, "doc");
         assert!(!summary[0].1, "a blocked outcome is a failed step");
         assert_eq!(summary[1], ("canvas", true, "Opened"));
         assert_eq!(summary[2], ("chat", false, LEFT_OUT));
-        assert_eq!(summary[3], ("gone", false, GONE));
+        assert_eq!(summary[3], ("quarantined", false, LEFT_OUT));
+        assert_eq!(summary[4], ("gone", false, GONE));
         assert_eq!(outcomes[1].label, "Assignment 3");
         assert_eq!(outcomes[1].kind, Some(ItemKind::Url));
     }

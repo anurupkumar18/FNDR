@@ -46,7 +46,9 @@ describe("Open all", () => {
         render(<WorkSetOpener name="Parser" load={load} continueMemoryId="latest" />);
 
         fireEvent.click(screen.getByRole("button", { name: "Continue Parser from latest source" }));
-        expect(await screen.findByText("Opened the latest source")).toBeInTheDocument();
+        const result = await screen.findByText("Opened the latest source");
+        expect(result).toBeInTheDocument();
+        expect(result.closest(".work-set-row")).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" });
         expect(load).not.toHaveBeenCalled();
         expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeEnabled();
@@ -63,6 +65,18 @@ describe("Open all", () => {
         expect(load).not.toHaveBeenCalled();
         await act(async () => finish({ kind: "opened" }));
         expect(screen.getByRole("button", { name: "Open all for Parser" })).toBeEnabled();
+    });
+
+    it("keeps a refused continuation visible beside the action", async () => {
+        vi.mocked(invoke).mockResolvedValue({ kind: "unavailable" });
+        const load = vi.fn();
+        render(<WorkSetOpener name="Parser" load={load} continueMemoryId="latest" />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Continue Parser from latest source" }));
+        const result = await screen.findByRole("alert");
+        expect(result).toHaveTextContent("This source is unavailable to reopen right now.");
+        expect(result.closest(".work-set-row")).toBeInTheDocument();
+        expect(load).not.toHaveBeenCalled();
     });
 
     it("opens three items on the first tap, one at a time, and shows each outcome", async () => {

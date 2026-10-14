@@ -636,6 +636,8 @@ pub enum ReopenOutcome {
         target: String,
     },
     NoTarget,
+    /// No source was opened because the id, its eligibility, or its store was unavailable.
+    Unavailable,
 }
 
 /// External-drive root (`/Volumes/<name>`) when `path` lives on one.
@@ -1471,6 +1473,7 @@ mod tests {
                 },
             ),
             (r#"{"kind":"no_target"}"#, ReopenOutcome::NoTarget),
+            (r#"{"kind":"unavailable"}"#, ReopenOutcome::Unavailable),
         ];
         for (json, value) in cases {
             assert_eq!(serde_json::to_string(value).expect("ser"), *json, "{json}");

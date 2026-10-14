@@ -2,28 +2,32 @@
 
 ## Current state
 
-- The Home implementation commit `07f08eb` is based on `a897107`. The isolated `codex/home-resume-ux` branch is on both GitLab and GitHub, and [draft PR 52](https://github.com/anurupkumar18/FNDR/pull/52) is open. GitLab's HTTPS API certificate has expired, so no GitLab merge request was created.
-- The shared `/Users/anurupkumar/FNDR` checkout remains on an older `main` with other sessions' uncommitted edits. This lane did not edit, stash, reset or switch it.
-- The broad product-quality goal remains active. This Home slice is implemented and browser-reviewed; native Home and real reopen behavior are still unverified.
+- `codex/home-resume-ux` is the isolated branch for the Home slice and [draft PR 52](https://github.com/anurupkumar18/FNDR/pull/52). The shared `/Users/anurupkumar/FNDR` checkout has other sessions' uncommitted work and was not edited, stashed, reset or switched by this lane.
+- The broad product-quality goal remains active. Home's recent-work and direct Continue path are implemented. The follow-up closes an open-time visibility gap and puts the result beside Continue in the native window.
+- GitLab's HTTPS API certificate expired, so no GitLab merge request was created. Branch pushes through `origin` reached both GitLab and GitHub; verify both tips again after the follow-up push.
 
 ## Delivered and checked
 
-Home now shows recent work on the first desktop screen, puts Continue before Open all, reports a typed reopen result, and keeps the actions from running together. The scroll blur component and unused liquid search action were deleted. The current Home contract is in [DESIGN_DIRECTION.md](../product/DESIGN_DIRECTION.md), and detailed checks are in [home-rebuild.md](../evidence/W04/home-rebuild.md).
+The Home layout, action hierarchy and browser checks are detailed in [home-rebuild.md](../evidence/W04/home-rebuild.md). Continue now goes through the existing work-set opener for one memory, so the current blocklist, quality and deletion visibility, Private Mode, and the actions switch are checked before opening. A refused or vanished source returns a typed `unavailable` result. The line sits beside Continue and wraps on narrow screens.
 
 | Check | Result and limit |
 | --- | --- |
-| `npm run typecheck`, `npm run build`, `git diff --check` | Passed. The production build still reports its existing large main-chunk warning. |
-| `npm test` on published commit `07f08eb` | 108 files and 843 tests passed. Home's 43 focused tests passed with fake IPC. |
-| Browser preview at desktop and 390 px widths | Recent work and Continue appeared on the first desktop screen in light and dark themes. At 390 px, Speak and Submit fit and the page had no horizontal overflow. The preview's no-target outcome was visible. This is presentation evidence, not native reopening. |
-| Native attempt | The current debug binary launched with `FNDR_DATA_DIR` set to the paused synthetic office-pm profile. Computer use instead selected an older installed bundle. That bundle used the default owner profile and briefly captured screen context. It was quit, and no FNDR process remained. Its macOS authentication overlay blocked a useful Home check. No owner vault cleanup was attempted. |
+| Full frontend suite | 108 files and 844 tests passed after the follow-up. The native command was faked in frontend tests. |
+| Typecheck and native bundle build | Passed. The debug bundle was built with a distinct `com.fndr.app.qa-home-resume` identifier. |
+| Focused Rust tests | `cargo test --lib reopen` passed 71 tests. `cargo test --lib workset::` passed 36 tests, one ignored. The work-set test uses a real store and a fake Mac opener, proving a quarantined memory never reaches the opener. |
+| Browser preview | Desktop light and dark plus 390 px dark were checked. Inline feedback remained beside Continue and 390 px had no horizontal overflow. |
+| Native QA, synthetic office-pm profile | The bundle identifier, sole process path and `FNDR_DATA_DIR` startup log were verified before computer use. Packaged `tauri://localhost` showed recent work and Continue on the first window. A Zoom source returned `app_missing` beside Continue; a Chrome source returned `opened` and Home said `Opened the latest source`. The destination page content was not checked. |
+| Native shutdown | Each isolated debug run exited with a `ggml-metal-device.m` assertion and code 134 on quit. The process stopped. This is open and should be diagnosed separately. |
+| Office PM retrieval gate | `make qa-retrieval-check PERSONA=office-pm` passed after reseeding the synthetic profile. Recall@5 was 0.950 for search, ask and retrieve. One of eight no-match queries still read strong; four of 33 real queries read weak. Those are reported counts, not gate failures. |
 
-## Ordered next steps
+The first native attempt attached an older installed bundle using the default owner profile and briefly captured screen context. It was quit without editing or cleaning the owner vault. The isolated runs above used only the paused synthetic profile.
 
-1. Resolve native process identity before computer use. Launch only a current build against the paused synthetic profile, verify the selected window's executable path and profile, and confirm there is exactly one FNDR process. Do not select the older installed bundle or use the default owner profile.
-2. After normal macOS authentication, inspect Home with synthetic recent work and exercise Continue on a supported source. Record the native layout and the actual typed reopen outcome. A browser fixture or mocked IPC result does not satisfy this check. The operator may need to unlock the app; do not bypass authentication.
-3. Review the unexpected owner-profile captures through the normal Vault UI if desired. Do not rewrite or delete owner data without FNDR closed, a backup and the owner's go-ahead.
-4. Update the evidence note and draft PR with the native result. Review CI, then make the PR ready when that result is satisfactory. Retry a GitLab merge request only after its HTTPS certificate is fixed.
+## Next steps
+
+1. Rebase the isolated branch on the current `origin/main`, rerun relevant checks, commit by explicit paths, push to both remotes, and verify both branch tips. Update PR 52 with the native evidence and CI result.
+2. Diagnose the ggml Metal assertion on native shutdown in a separate narrow defect slice. Test an access-refusal result through native UI if a safe synthetic setup is available. Verify a real external destination and work-set arrangement separately.
+3. Keep improving other high-value product flows after this Home slice. The current design contract is [DESIGN_DIRECTION.md](../product/DESIGN_DIRECTION.md).
 
 ## Process correction
 
-An app lookup by bundle ID attached the old bundle despite a separate current binary running. Next time, verify the executable path and profile before interacting with a native window. An initial parallel test, typecheck and build run produced two unrelated five-second test timeouts; the same tests and the full suite passed when run without competing checks.
+Select a distinct QA bundle and verify its executable path and profile log before computer use. An app lookup by the production bundle ID can attach an older installed app. Rust builds share a cache on this machine and must run one at a time.
