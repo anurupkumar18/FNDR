@@ -5,7 +5,9 @@
 //! share is a name; windows that go by the same names are one thread.
 //!
 //! Nothing here reads a model's output. Names come from window titles only,
-//! so every grouping can be shown to the person as the words it rests on.
+//! so every grouping can be shown to the person as the words it rests on. A
+//! window with no name in its title joins a thread only when its on-screen
+//! text uses two of that thread's names and no other thread's.
 
 use super::thread_key;
 use crate::storage::MemoryRecord;
@@ -188,7 +190,17 @@ struct Group {
     /// Set when the memories carry an explicit project, which outranks a name.
     project: bool,
     names: BTreeSet<String>,
+    /// The words on screen in these windows, lowercased and single-spaced,
+    /// with a space at each end, so a name is found as whole words.
+    text: String,
 }
+
+/// As much on-screen text per group of windows as is searched for names.
+const MAX_TEXT_CHARS: usize = 40_000;
+
+/// A window with no name of its own joins a thread when its text uses this
+/// many of the thread's names and no name of any other thread.
+const NAMES_IN_TEXT_TO_JOIN: usize = 2;
 
 fn find(parent: &mut [usize], mut node: usize) -> usize {
     while parent[node] != node {
@@ -213,7 +225,21 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
             place: place(record),
             project: !record.project.trim().is_empty(),
             names: BTreeSet::new(),
+            text: String::from(" "),
         });
+        if group.text.len() < MAX_TEXT_CHARS {
+            let screen = if record.clean_text.trim().is_empty() {
+                &record.text
+            } else {
+                &record.clean_text
+            };
+            for run in screen.split(|ch: char| !ch.is_alphanumeric()) {
+                if !run.is_empty() {
+                    group.text.push_str(&run.to_lowercase());
+                    group.text.push(' ');
+                }
+            }
+        }
         for (name, as_written) in candidate_names(record) {
             written.entry(name.clone()).or_insert(as_written);
             group.names.insert(name);
@@ -314,6 +340,8 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
     }
 
     let mut threads = WorkThreads::default();
+    // Each thread that formed, with every name it goes by.
+    let mut formed: Vec<(Named, Vec<&str>)> = Vec::new();
     for (root, members) in members_of {
         let lead = shared[name_sets[&root][0]].0;
         let as_written = |name: &str| written.get(name).cloned().unwrap_or_default();
@@ -350,15 +378,41 @@ pub(crate) fn work_threads(records: &[MemoryRecord]) -> WorkThreads {
         if joined.len() < 2 {
             continue;
         }
+        let named = Named { key, title, names };
         for index in joined {
-            threads.by_base.insert(
-                groups[index].base.clone(),
-                Named {
-                    key: key.clone(),
-                    title: title.clone(),
-                    names: names.clone(),
-                },
-            );
+            threads
+                .by_base
+                .insert(groups[index].base.clone(), named.clone());
+        }
+        let every_name = name_sets[&root]
+            .iter()
+            .map(|&index| shared[index].0)
+            .collect();
+        formed.push((named, every_name));
+    }
+
+    // A window whose title names nothing can still say what it is about: a
+    // chat channel, a rubric page. It joins a thread when its text uses two
+    // of that thread's names and none of any other thread's. An inbox that
+    // mentions everything joins nothing.
+    for group in &groups {
+        if group.project || threads.by_base.contains_key(&group.base) {
+            continue;
+        }
+        let mut mentioned = formed.iter().filter_map(|(named, every_name)| {
+            let used = every_name
+                .iter()
+                .filter(|name| {
+                    let phrase = name.strip_prefix('#').unwrap_or(name);
+                    group.text.contains(&format!(" {phrase} "))
+                })
+                .count();
+            (used > 0).then_some((named, used))
+        });
+        if let (Some((named, used)), None) = (mentioned.next(), mentioned.next()) {
+            if used >= NAMES_IN_TEXT_TO_JOIN {
+                threads.by_base.insert(group.base.clone(), named.clone());
+            }
         }
     }
     threads
@@ -510,6 +564,71 @@ mod tests {
         assert_eq!(forward[0], "work:business review");
     }
 
+    fn reading(mut record: MemoryRecord, text: &str) -> MemoryRecord {
+        record.clean_text = text.into();
+        record
+    }
+
+    fn two_threads() -> Vec<MemoryRecord> {
+        vec![
+            window("deck", "Keynote", "Smart Reminders Launch Review.key", None),
+            window(
+                "list",
+                "Notion",
+                "Launch Review checklist - Smart Reminders",
+                None,
+            ),
+            window(
+                "role",
+                "Pages",
+                "Senior Product Designer job description",
+                None,
+            ),
+            window("card", "Numbers", "Senior Product Designer scorecard", None),
+        ]
+    }
+
+    #[test]
+    fn a_window_whose_text_uses_two_names_of_one_thread_joins_it() {
+        let mut records = two_threads();
+        records.push(reading(
+            window("chat", "Slack", "#general - Slack", None),
+            "Is the launch review moved? Smart Reminders ships Tuesday.",
+        ));
+        let threads = work_threads(&records);
+        assert_eq!(threads.key(&records[4]), threads.key(&records[0]));
+        // Two names shared by the same windows: the first by spelling leads.
+        assert_eq!(threads.title(&records[4]), Some("Launch Review"));
+    }
+
+    #[test]
+    fn text_that_mentions_two_threads_or_one_name_once_joins_neither() {
+        let mut records = two_threads();
+        records.push(reading(
+            window("inbox", "Mail", "Inbox", None),
+            "Smart Reminders launch review at 3. Senior Product Designer onsite at 4.",
+        ));
+        records.push(reading(
+            window("note", "Notes", "Groceries", None),
+            "Ask about Smart Reminders pricing.",
+        ));
+        let threads = work_threads(&records);
+        assert_eq!(threads.key(&records[4]), thread_key(&records[4]));
+        assert_eq!(threads.key(&records[5]), thread_key(&records[5]));
+    }
+
+    #[test]
+    fn text_never_moves_a_window_that_has_its_own_project() {
+        let mut records = two_threads();
+        let mut filed = reading(
+            window("budget", "Numbers", "Budget", None),
+            "Smart Reminders launch review costs.",
+        );
+        filed.project = "Finance".into();
+        records.push(filed);
+        assert_eq!(work_threads(&records).key(&records[4]), "Finance");
+    }
+
     /// The three persona corpora file every entry under a project. With that
     /// label hidden, how many same-project pairs does the grouping find
     /// (recall), and how many of the pairs it makes are right (precision)?
@@ -526,11 +645,14 @@ mod tests {
         let records: Vec<MemoryRecord> = entries
             .iter()
             .map(|entry| {
-                window(
-                    &text(entry, "id"),
-                    &text(entry, "app_name"),
-                    &text(entry, "window_title"),
-                    entry["url"].as_str(),
+                reading(
+                    window(
+                        &text(entry, "id"),
+                        &text(entry, "app_name"),
+                        &text(entry, "window_title"),
+                        entry["url"].as_str(),
+                    ),
+                    &text(entry, "ocr_text"),
                 )
             })
             .collect();
@@ -556,12 +678,13 @@ mod tests {
 
     #[test]
     fn naming_finds_far_more_of_a_personas_work_and_is_seldom_wrong() {
-        // (persona, precision floor, recall floor). Measured 2026-10-13:
-        // 1.00 and 0.33, 0.98 and 0.69, 0.93 and 0.37.
+        // (persona, precision floor, recall floor). Measured 2026-10-13 from
+        // titles alone: 1.00 and 0.33, 0.98 and 0.69, 0.93 and 0.37. With the
+        // text pass: 1.00 and 0.42, 0.98 and 0.84, 0.94 and 0.46.
         for (persona, precision_floor, recall_floor) in [
-            ("knowledge-worker", 0.95, 0.30),
-            ("office-pm", 0.95, 0.65),
-            ("software-engineer", 0.90, 0.35),
+            ("knowledge-worker", 0.95, 0.40),
+            ("office-pm", 0.95, 0.80),
+            ("software-engineer", 0.90, 0.44),
         ] {
             let (_, recall_before) = score(persona, false);
             let (precision, recall) = score(persona, true);

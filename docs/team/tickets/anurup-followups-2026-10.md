@@ -819,6 +819,8 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 
 **Do.** Try the text pass with guards: skip a window whose text mentions two threads or more, and skip a name already ignored as a place. Keep the title rule's precision floor.
 
+**Result, 2026-10-13.** Built with one guard that covers both: a window joins only when its text uses two names of one thread and no name of any other. Found went from 0.33, 0.69 and 0.37 to 0.42, 0.84 and 0.46; right is 1.00, 0.98 and 0.94. The floors in the score test were raised to 0.40, 0.80 and 0.44.
+
 **Done when.** Found rises on at least two personas with every precision floor of VS-95 still held, or the pass is dropped with the numbers recorded.
 
 **Evidence.** The score test output before and after.
