@@ -101,6 +101,34 @@ pub async fn dismiss_omnibar(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The event that hands a typed request to Notch Do; the notch opens in Do
+/// and plans it as if it had been typed there.
+pub const NOTCH_HUD_DO_EVENT: &str = "notch-hud://do";
+
+/// Hand a typed request to Notch Do, the one action layer: hide the omnibar,
+/// show the notch, and let it plan and run the request with its own card,
+/// policy, Stop and journal. Refused while "Operate my Mac" is off.
+#[tauri::command]
+pub async fn omnibar_do(
+    app: AppHandle,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    text: String,
+) -> Result<(), String> {
+    let request = text.trim().to_string();
+    if request.is_empty() {
+        return Err("Type what FNDR should do.".to_string());
+    }
+    if !state.inner().config.read().operator.enabled {
+        return Err("Turn on \"Operate my Mac\" in Settings for FNDR to do this.".to_string());
+    }
+    if let Some(omnibar) = app.get_webview_window(OMNIBAR_LABEL) {
+        let _ = omnibar.hide();
+    }
+    super::notch::show_notch_hud(&app);
+    app.emit_to(super::notch::NOTCH_HUD_LABEL, NOTCH_HUD_DO_EVENT, request)
+        .map_err(|e| e.to_string())
+}
+
 /// Open a memory from the omnibar: hide the omnibar, focus the main window,
 /// and tell it to open the vault on the given memory.
 #[tauri::command]

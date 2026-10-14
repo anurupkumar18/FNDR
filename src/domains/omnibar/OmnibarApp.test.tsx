@@ -11,6 +11,7 @@ const ipcMocks = vi.hoisted(() => ({
     fndrAnswer: vi.fn(),
     getClipboardHistory: vi.fn(),
     omnibarOpenMemory: vi.fn(),
+    omnibarDo: vi.fn(),
     pasteClipboardEntry: vi.fn(),
     searchMemoryCards: vi.fn(),
 }));
@@ -61,6 +62,40 @@ describe("OmnibarApp", () => {
         ipcMocks.pasteClipboardEntry.mockResolvedValue(undefined);
         ipcMocks.dismissOmnibar.mockResolvedValue(undefined);
         ipcMocks.omnibarOpenMemory.mockResolvedValue(undefined);
+        ipcMocks.omnibarDo.mockResolvedValue(undefined);
+    });
+
+    it("hands a request to do something to Notch Do from a first row, and searches the rest", async () => {
+        ipcMocks.searchMemoryCards.mockResolvedValue([memoryCard("m1", "Notes from Monday")]);
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+
+        fireEvent.change(box, { target: { value: "open Notes" } });
+        expect(await screen.findByRole("option", { name: /Do it: open Notes/ })).toHaveAttribute("aria-selected", "true");
+        await screen.findByText("Notes from Monday");
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.omnibarDo).toHaveBeenCalledWith("open Notes"));
+        expect(ipcMocks.omnibarOpenMemory).not.toHaveBeenCalled();
+
+        // Down past the action opens the memory instead.
+        fireEvent.change(box, { target: { value: "open Notes" } });
+        await screen.findByText("Notes from Monday");
+        fireEvent.keyDown(box, { key: "ArrowDown" });
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.omnibarOpenMemory).toHaveBeenCalledWith("m1"));
+    });
+
+    it("offers no action for a search, and says why Notch Do refused one", async () => {
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        fireEvent.change(box, { target: { value: "pandas import error" } });
+        await waitFor(() => expect(ipcMocks.searchMemoryCards).toHaveBeenCalled());
+        expect(screen.queryByRole("option", { name: /Do it/ })).toBeNull();
+
+        ipcMocks.omnibarDo.mockRejectedValue('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+        fireEvent.change(box, { target: { value: "look up the weather" } });
+        fireEvent.click(await screen.findByRole("option", { name: /Do it: look up the weather/ }));
+        expect(await screen.findByText('Turn on "Operate my Mac" in Settings for FNDR to do this.')).toBeInTheDocument();
     });
 
     afterEach(() => cleanup());

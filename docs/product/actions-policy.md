@@ -1,5 +1,7 @@
 # Command bar actions policy
 
+**Updated 2026-10-14.** The registry this page assumes was never connected to a screen and was removed; Notch Do carries out actions, under its per-call policy (`operator/policy.rs`). The levels below still hold. The tools that Notch Do does not have yet (reveal file, timer, capture controls, paste, reminders, Shortcuts) are the backlog of step types; see [command surface](command-surface.md).
+
 Date: 2026-09-30
 Decision: [ADR 022](../decisions/022-command-bar-actions-policy.md)
 Ticket: PD-06 (#263). GS-01 (#201) builds the command-surface contract on this list.

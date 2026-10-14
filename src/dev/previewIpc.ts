@@ -1539,7 +1539,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     latest_pack_tokens_used: 0,
                 };
             case "list_recent_context_packs":
-            case "list_agent_audit_runs":
                 return [];
             case "fndr_subscribe":
             case "fndr_unsubscribe":

@@ -17,6 +17,7 @@ const ipcMocks = vi.hoisted(() => ({
     NOTCH_HUD_HOVER_EVENT: "notch-hud://hover",
     NOTCH_HUD_GEOMETRY_EVENT: "notch-hud://geometry",
     NOTCH_HUD_SUMMON_EVENT: "notch-hud://summon",
+    NOTCH_HUD_DO_EVENT: "notch-hud://do",
     getNotchHudGeometry: vi.fn(),
     setNotchHudHitRect: vi.fn(),
     setNotchHudKeyboard: vi.fn(),
@@ -503,6 +504,25 @@ describe("NotchHud", () => {
             emit("notch-hud://summon", false);
             await waitFor(() => expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(false));
             await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_cancel", { sessionId: "v1" }));
+        });
+
+        it("plans a request typed in the command bar at once, without listening first", async () => {
+            render(<NotchHud />);
+            await waitFor(() => expect(handlers.has("notch-hud://do")).toBe(true));
+            emit("notch-hud://do", "open Notes");
+            await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalledWith("open Notes"));
+            expect(coreMocks.invoke).not.toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" });
+            expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(true);
+            // Opening again later listens as usual and does not plan the old request twice.
+            // During a run Alt+N first stops it, then closes the panel.
+            emit("notch-hud://summon", false);
+            emit("notch-hud://summon", false);
+            await waitFor(() => expect(ipcMocks.setNotchHudKeyboard).toHaveBeenCalledWith(false));
+            emit("notch-hud://summon", true);
+            await waitFor(() =>
+                expect(coreMocks.invoke).toHaveBeenCalledWith("voice_start", { surface: "notch_do", mode: "toggle" }),
+            );
+            expect(ipcMocks.computerUsePlan).toHaveBeenCalledTimes(1);
         });
 
         it("keeps Do hidden until Operate my Mac is on", async () => {

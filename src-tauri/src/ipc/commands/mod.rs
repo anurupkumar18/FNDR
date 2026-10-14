@@ -82,8 +82,6 @@ pub use computer_use::*;
 pub use setup_center::*;
 pub use work_set::*;
 
-mod agent;
-pub use agent::*;
 
 mod peer;
 pub use peer::*;

@@ -43,6 +43,8 @@ interface NotchOperatorProps {
     /** Filled with the one interrupt (Esc, Alt+N): true when it stopped a run or cut speech. */
     interruptRef?: MutableRefObject<(() => boolean) | null>;
     registry?: SpeechRegistry;
+    /** A request typed in the command bar: planned once, at once, with no listening first. */
+    request?: { id: number; text: string } | null;
 }
 
 /** A run is planning, waiting on its card or chooser, or acting. */
@@ -67,7 +69,7 @@ const QUIET_PHASES = ["listening", "heard", "silence", "mic_denied", "voice_unav
  * It talks while it works through the speech registry (`notchSpeech.ts`);
  * every spoken line is also the caption on screen.
  */
-export function NotchOperator({ active, interruptRef, registry = speechRegistry }: NotchOperatorProps) {
+export function NotchOperator({ active, interruptRef, registry = speechRegistry, request = null }: NotchOperatorProps) {
     const [state, dispatch] = useReducer(doRunReducer, initialDoState);
     const [draft, setDraft] = useState("");
     const [caption, setCaption] = useState("");
@@ -296,8 +298,15 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
         [voiceOut],
     );
 
-    // Opening the notch starts listening; closing it ends any run, the microphone and the voice call.
+    // Opening the notch starts listening, unless it opened for a typed request,
+    // which is planned at once; closing it ends any run, the microphone and the voice call.
+    const takenRequest = useRef<number | null>(null);
     useEffect(() => {
+        if (active && request && request.id !== takenRequest.current) {
+            takenRequest.current = request.id;
+            if (!runInProgress(stateRef.current)) void plan(request.text);
+            return;
+        }
         if (active) {
             if (!runInProgress(stateRef.current)) dispatch({ type: "listening" });
             return;
@@ -309,7 +318,8 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
         void spotRef.current?.cancel();
         void realtimeRef.current?.close();
         if (runInProgress(stateRef.current)) void stopRun();
-    }, [active, stopRun, voiceOut]);
+        // A new request, not a new callback, is what reruns this.
+    }, [active, request?.id, stopRun, voiceOut]);
 
     // Quitting closes the voice call too.
     useEffect(() => {

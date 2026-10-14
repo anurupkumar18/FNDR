@@ -83,15 +83,14 @@ memory records / graph / search
   -> context_runtime::ContextPack
   -> agent::AgentContextPack
   -> Ask / Plan / Act / Learn response
-  -> policy / persisted audit / feedback / skill and eval drafts
+  -> policy / persisted audit / feedback
 ```
 
 - `agent/context.rs`: typed context pack and the deterministic Ask, Plan, Act, Learn runner.
-- `agent/policy.rs`, `agent/risk_policy.rs`: mode-based permission and risk policy.
+- `agent/policy.rs`: mode-based permission policy. `agent/risk_policy.rs`: the gate for MCP writes (assistant notes, decisions, retrieval feedback).
 - `agent/audit.rs`: append-only JSONL audit and retrieval feedback ledger.
-- `agent/skills.rs`, `agent/evals.rs`: draft shapes a person reviews before anything is activated.
 - `agent/prompts.rs`: the MCP prompt registry.
-- `ipc/commands/agent.rs`: the same functions as Tauri commands. **No page calls them today**; they are reachable only over MCP.
+- These are reachable only over MCP. Actions on the Mac belong to Notch Do (`operator/`): the command-bar stack that had its own tool registry, policy, approvals and skill and eval drafts was removed on 2026-10-14 because no screen called it.
 
 ### Modes
 
