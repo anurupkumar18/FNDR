@@ -281,6 +281,7 @@ def prepare(suite: str, reset: bool) -> None:
     env = os.environ.copy()
     env["FNDR_DEMO_DIR"] = str(profile)
     env["FNDR_DEMO_CORPUS"] = str(corpus)
+    env["FNDR_DEMO_PAUSE_CAPTURE"] = "1"
     command = [str(ROOT / "scripts" / "demo" / "seed-demo-profile.sh")]
     if reset:
         command.append("--reset")
@@ -303,6 +304,7 @@ def prepare(suite: str, reset: bool) -> None:
     print(f"Quality Lab profile ready: {profile}")
     print("This corpus exercises native Vault/Home/Search/Ask presentation and retrieval.")
     print("Its pre-seeded records do not claim to have passed live capture or extraction.")
+    print("Screen capture starts paused when this profile first opens in the native app.")
 
 
 def validate_profile(suite: str) -> Path:
