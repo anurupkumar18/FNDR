@@ -772,7 +772,6 @@ fn main() {
             ipc::commands::run_idle_wiki_knowledge_compile,
             ipc::commands::get_graph_for_project,
             ipc::commands::get_full_graph,
-            ipc::commands::search_graph,
             ipc::commands::get_node_detail,
             ipc::commands::find_graph_path,
             ipc::commands::get_god_nodes,

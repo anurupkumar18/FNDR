@@ -5,7 +5,6 @@ import {
     getGodNodes,
     getGraphForProject,
     getNodeDetail,
-    searchGraph,
     type InsightGraphSubgraph,
 } from "@/shared/ipc/tauri";
 import { graphCache } from "./graph/graphCache";
@@ -67,11 +66,6 @@ export function useGraph() {
 
     const fetchGodNodes = useCallback(async (k: number) => getGodNodes(k), []);
 
-    const runSemanticSearch = useCallback(
-        async (queryEmbedding: number[], k: number) => searchGraph(queryEmbedding, k),
-        [],
-    );
-
     return {
         subgraph,
         loading,
@@ -81,6 +75,5 @@ export function useGraph() {
         fetchNodeDetail,
         fetchPath,
         fetchGodNodes,
-        runSemanticSearch,
     };
 }

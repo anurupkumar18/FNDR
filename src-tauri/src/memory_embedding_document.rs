@@ -5,7 +5,7 @@
 //! making their source text, roles, and provenance inspectable from one place.
 
 use crate::config::{ChunkingConfig, DEFAULT_IMAGE_EMBEDDING_DIM, DEFAULT_TEXT_EMBEDDING_DIM};
-use crate::graph::schema::{GraphNode, GraphNodeType};
+use crate::graph::schema::GraphNode;
 use crate::inference::model_config::{embedding_v4_contract, embedding_v5_contract};
 use crate::memory_compaction::{
     best_embedding_text, best_snippet_embedding_text, best_support_embedding_texts_with_config,
@@ -22,7 +22,6 @@ pub const EMBEDDING_MANIFEST_KEY: &str = "embedding_manifest";
 
 const PRIMARY_TEXT_MAX_CHARS: usize = 2_000;
 const CHUNK_SOURCE_MAX_CHARS: usize = 8_000;
-const GRAPH_NODE_TEXT_MAX_CHARS: usize = 1_200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -460,38 +459,6 @@ pub fn flag_embedding_text_mismatch(
     upsert_embedding_manifest(raw_evidence, &manifest)
 }
 
-pub fn compose_graph_node_embedding_text(
-    node: &GraphNode,
-    source_memory: Option<&MemoryRecord>,
-) -> String {
-    let mut segments = Vec::new();
-    segments.push(format!(
-        "node_type: {}",
-        graph_node_type_label(node.node_type)
-    ));
-    segments.push(format!("label: {}", node.label.trim()));
-
-    if let Some(memory) = source_memory {
-        push_segment(&mut segments, "project", &memory.project);
-        push_segment(&mut segments, "topic", &memory.topic);
-        push_segment(&mut segments, "activity", &memory.activity_type);
-        push_segment(&mut segments, "context", &memory.memory_context);
-        push_segment(
-            &mut segments,
-            "what_happened",
-            &memory.insight_what_happened,
-        );
-        push_segment(&mut segments, "why_mattered", &memory.insight_why_mattered);
-        push_joined(&mut segments, "entities", &memory.entities);
-        push_joined(&mut segments, "files", &memory.files_touched);
-        push_joined(&mut segments, "decisions", &memory.decisions);
-        push_joined(&mut segments, "errors", &memory.errors);
-        push_joined(&mut segments, "todos", &memory.todos);
-    }
-
-    trim_chars(&segments.join("\n"), GRAPH_NODE_TEXT_MAX_CHARS)
-}
-
 pub fn annotate_graph_node_embedding(
     node: &mut GraphNode,
     status: EmbeddingStatus,
@@ -686,29 +653,6 @@ fn status_label(status: EmbeddingStatus) -> &'static str {
     }
 }
 
-fn push_segment(out: &mut Vec<String>, label: &str, value: &str) {
-    let trimmed = normalize_document_text(value);
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
-        return;
-    }
-    out.push(format!("{label}: {trimmed}"));
-}
-
-fn push_joined(out: &mut Vec<String>, label: &str, values: &[String]) {
-    let joined = values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .take(8)
-        .collect::<Vec<_>>()
-        .join(", ");
-    push_segment(out, label, &joined);
-}
-
-fn graph_node_type_label(node_type: GraphNodeType) -> &'static str {
-    node_type.to_str()
-}
-
 fn normalize_document_text(raw: &str) -> String {
     raw.chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })
@@ -778,28 +722,6 @@ mod tests {
             .source_hashes
             .iter()
             .any(|hash| hash.role == EmbeddingRole::Primary));
-    }
-
-    #[test]
-    fn graph_node_text_is_structured_and_not_raw_ocr() {
-        let record = rich_record();
-        let node = GraphNode {
-            id: Uuid::new_v4(),
-            node_type: GraphNodeType::Decision,
-            label: "Keep BGE explicit".to_string(),
-            confidence: 0.8,
-            source_memory_ids: vec![record.id.clone()],
-            embedding: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            stale: false,
-            metadata: serde_json::json!({}),
-        };
-        let text = compose_graph_node_embedding_text(&node, Some(&record));
-        assert!(text.contains("node_type: Decision"));
-        assert!(text.contains("Keep BGE explicit"));
-        assert!(text.contains("Memory search"));
-        assert!(!text.contains("RAW_OCR_BLOB"));
     }
 
     #[test]

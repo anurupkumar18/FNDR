@@ -1310,10 +1310,6 @@ export async function getGraphForProject(projectLabel: string): Promise<InsightG
     return invoke<InsightGraphSubgraph>("get_graph_for_project", { projectLabel });
 }
 
-export async function searchGraph(queryEmbedding: number[], k = 8): Promise<InsightGraphNode[]> {
-    return invoke<InsightGraphNode[]>("search_graph", { queryEmbedding, k });
-}
-
 export async function getNodeDetail(id: string): Promise<InsightGraphNode | null> {
     return invoke<InsightGraphNode | null>("get_node_detail", { id });
 }
