@@ -357,7 +357,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         insight_what_happened: composed.insight_what_happened.clone(),
         insight_why_mattered: composed.insight_why_mattered.clone(),
         insight_card_confidence: insight.confidence,
-        errors: extraction_issues.clone(),
         ..Default::default()
     };
     crate::memory_insight::derive_insight_for_record(&mut embedding_seed);
@@ -539,7 +538,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         insight_context_thread: embedding_seed.insight_context_thread.clone(),
         insight_spans_json: embedding_seed.insight_spans_json.clone(),
         insight_card_confidence: insight.confidence,
-        errors: extraction_issues.clone(),
         ..Default::default()
     };
 
@@ -565,8 +563,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         record.insight_card_confidence = record.evidence_confidence;
         record.quality_gate_reason =
             "visual_metadata_fallback=clip_vector_without_pixel_vlm_semantics".to_string();
-    } else if !extraction_issues.is_empty() {
-        record.outcome = "vision_semantic_extraction_failed".to_string();
     }
 
     state

@@ -9,7 +9,9 @@ use crate::inference::extraction_evidence::{
     has_source_evidence, render_source_statements, source_evidence_sets_from_raw,
 };
 use crate::storage::{MemoryRecord, Store};
-use crate::tasks::extract_from_memory::{extract_task_candidates, TaskCandidate};
+use crate::tasks::extract_from_memory::{
+    extract_task_candidates, is_internal_extraction_issue, TaskCandidate,
+};
 use pack::{pack_within_budget, PackItem, PackResult};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -133,7 +135,11 @@ const MAX_STATE_CHARS: usize = 160;
 fn thread_state(record: &MemoryRecord, title: &str) -> String {
     let first_sentence = crate::summariser::sentences::first_sentence(&record.memory_context);
     let topic = record.topic.trim();
-    let outcome = record.outcome.trim().replace('_', " ");
+    let outcome = if is_internal_extraction_issue(&record.outcome) {
+        String::new()
+    } else {
+        record.outcome.trim().replace('_', " ")
+    };
     let topic_line = format!("{topic} {outcome}");
     let repeats = |line: &str| {
         let line = line.trim().trim_end_matches('.').to_lowercase();
@@ -236,7 +242,12 @@ fn build_thread(
             .iter()
             .filter(|_| !source_backed)
             .chain(record.decisions.iter())
-            .chain(record.errors.iter())
+            .chain(
+                record
+                    .errors
+                    .iter()
+                    .filter(|error| !is_internal_extraction_issue(error)),
+            )
             .chain(std::iter::once(&record.memory_context))
         {
             if text.trim().is_empty() {
@@ -448,6 +459,27 @@ mod tests {
             thread.last_state,
             "Answered questions on meiosis and chromosome counts."
         );
+    }
+
+    #[test]
+    fn legacy_import_diagnostics_do_not_surface_in_resume() {
+        let mut imported = record("imported-image", "", 1_800_000_000_000);
+        imported.app_name = "Meta glasses import".into();
+        imported.source_type = "meta_glasses_import".into();
+        imported.window_title = "release-notes.png".into();
+        imported.next_steps.clear();
+        imported.errors = vec!["vision_semantic_extraction_failed".into()];
+        imported.outcome = "vision_semantic_extraction_failed".into();
+        imported.memory_context = "Imported an image of the release notes.".into();
+
+        let thread = build_thread(vec![imported], &Default::default(), 1_800_000_060_000, 800);
+        assert!(thread.suggested_next_steps.is_empty());
+        assert!(!thread
+            .last_state
+            .contains("vision_semantic_extraction_failed"));
+        assert!(!serde_json::to_string(&thread.pack)
+            .unwrap()
+            .contains("vision_semantic_extraction_failed"));
     }
 
     #[test]
