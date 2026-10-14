@@ -48,6 +48,22 @@ Read from the owner's vault, counts only. These decide what is worth building ne
 
 Left for others: the 2B model loads at every launch with nothing to do; unloading needs an owned model design and belongs to LM-09 (Kunj). Most remaining search misses are paraphrases; the embedding migration (VS-49 with Minh's EM-09) is the lever, not ranking code. `~/.fndr/companion.json` was rewritten by the test app and names a dead port; nothing reads it but the parked iPhone tooling.
 
+## 2026-10-14: agents and tools
+
+Owner decisions in the decision log (2026-10-14): Notch Do is the one action layer; simple requests are planned on the Mac; Notch Do learns from runs.
+
+| Commit | What |
+| --- | --- |
+| `76878d1`, `0c87c2e` | Notch Do suite: `scripts/operator/notch-do-cases.json` (now 43 cases) and `notch-do-policy-cases.json` (21), scored by `operator::eval` through `plan::route` |
+| `e9736cd` | First live planner recording, 20 of 23; rescored offline on every test run |
+| `a897107` | `plan::local_plan`: opening apps and links and web searches run with no Codex session; `plan::settled` drops the redundant open step (recording now 23 of 23, floor 1.0) |
+| `2999b88`, `5af9304` | The command-bar stack nothing called is removed; the command bar hands action requests to Notch Do (`omnibar_do`). `2999b88` alone did not compile; `5af9304` two minutes later completes it |
+| `790caee` | `operator::runs` and `operator::skills`: ratings, draft cases from wrong runs, skills replayed by name |
+
+Not verified in the running app: the command bar's "Do it" row, a local run, rating a run and running a skill by voice. Each changes something on the Mac (opens an app), so it needs the owner at the screen.
+
+Open, flagged for a decision: "Remove from queue" in Spotify is refused because "remove" is a never-do word; skills have no list, rename or delete screen; the October tool list (paste, reminders, Shortcuts, timers, reveal file) is the backlog of Notch Do step types; `decision/` (Laya) has no callers and the paused documentation pass deletes it.
+
 ## Process notes
 
 - Worked: a contract test that ties the release image to the tested image; proving the workflow by hand before any tag.
