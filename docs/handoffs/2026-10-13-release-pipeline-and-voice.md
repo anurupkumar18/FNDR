@@ -35,7 +35,7 @@ Read from the owner's vault, counts only. These decide what is worth building ne
 - **The insight graph adds nothing to search.** Every one of its 659 nodes has one source memory. VS-69 was built without the graph, measured, and dropped: no change in Recall@5 or MRR@10 on three personas (`docs/team/tickets/proposed/cloud-proposals.md`).
 - **The synthetic gate is at its ceiling.** Recall@5 is 1.000, 0.950 and 1.000, so it can catch a regression and cannot show an improvement.
 
-Next product decision, for the owner: define a piece of work for a knowledge worker (a document and what was open with it, a course, a recurring meeting) and assign it at capture with evidence, then rebuild Resume threads on it. Until the vault has weeks of real days, measure it on the persona corpora extended with cross-app work.
+**Decided and built the same day (ADR 031 and its addendum).** The Codex session kept `project` as the stored work identity and made capture keep only labels the screen supports. This session joined windows that share a name into one Resume thread at read time (`resume/work_names.rs`, VS-95). Next are VS-96 (see it in the running app and on a real week) and VS-97 (attach by on-screen text, with a guard), both in `docs/team/tickets/anurup-followups-2026-10.md`.
 
 ## Process notes
 

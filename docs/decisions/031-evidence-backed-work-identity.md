@@ -29,3 +29,27 @@ The synthetic personas already use `project` for a course assignment, hiring wor
 ## Consequences
 
 Some unsupported high-confidence project labels will disappear from new captures. Existing records are not rewritten. Coverage must be improved with supported anchors and measured separately from this precision gate. Resume and work sets keep their current behavior until the later source-backed assignment slice is verified.
+
+## Addendum, 2026-10-13: a shared name joins Resume threads when they are read
+
+Decided the same day by the owner's other session, after the owner said to design and build the work-identity change. It replaces one clause of decision 3 and leaves the rest standing.
+
+**What changes.** Decision 3 said title similarity never merges Resume threads. Windows that share a name now are one thread: a phrase of two neighbouring words, or an identifier ("Q4", "a4", "3500"), written the same way in the window titles of two or more windows. Time proximity still merges nothing, and nothing is merged on resemblance.
+
+**What does not change.** Nothing is written to `project` or anywhere else (decisions 1 and 2): the grouping is computed each time threads are read, in `resume/work_names.rs`, so it covers every past memory and can be changed without a migration. An explicit `project` outranks a name: one project among the windows that share a name takes them, and two projects are never joined. No model output is read.
+
+**The rule.** From each title, drop the part that names the app, the site name a page title ends with, file extensions and version numbers. A shared phrase that sits in most windows of one app or site and nowhere else names the place (a Slack workspace, "Pull Request") and is ignored. Names that sit on mostly the same windows are one set, and each window joins the set of names it shares most widely. A set with fewer than two windows names nothing. Threads are named over the last 14 days whatever window a surface shows, so Home, work sets, `what_changed_since` and the seen markers use one key (`work:<name>`).
+
+**Evidence (decision 4's measurement).** The three persona corpora file each entry under a project. With that label hidden, the share of same-project pairs the grouping finds, and the share of the pairs it makes that are right:
+
+| Persona | Found before | Found now | Right |
+|---|---:|---:|---:|
+| knowledge-worker | 0.06 | 0.33 | 1.00 |
+| office-pm | 0.05 | 0.69 | 0.98 |
+| software-engineer | 0.14 | 0.37 | 0.93 |
+
+`resume::work_names::tests::naming_finds_far_more_of_a_personas_work_and_is_seldom_wrong` holds floors under these numbers.
+
+**Options weighed.** Chaining any two windows that share a rare word reached 0.88 found on one persona but was right only 0.3 to 0.6 of the time, because one stray word joins two large threads. A cap on how common a name may be dropped the largest real project of the week. Attaching a window when its on-screen text mentions a thread's name found 0.96 on one persona and fell to 0.43 right on another, so it waits for a guard. Showing links without joining (the Vault's `sessionLinks`) leaves a work set at one place.
+
+**Limits.** 86 synthetic entries, and the rule was shaped on them. The owner's vault is too small to judge it (162 memories). A product or repository name used across several pieces of work can still join them: the wrong pairs on the software-engineer persona are of that kind. The thread card shows the shared words ("Grouped by the words its windows share") so a wrong grouping can be seen for what it rests on. Not yet seen in the running app.
