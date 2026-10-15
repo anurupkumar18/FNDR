@@ -31,7 +31,7 @@ pub enum Decision {
 const MCP_WRITE_TOOLS: [&str; 3] = [
     "fndr.remember",
     "fndr_remember_decision",
-    "agent.rate_result",
+    "fndr.rate_result",
 ];
 
 pub fn mcp_write_tools() -> &'static [&'static str] {
@@ -71,7 +71,7 @@ mod tests {
         assert_eq!(decide_mcp_write(false, true), Decision::Run);
         assert_eq!(
             mcp_write_tools(),
-            ["fndr.remember", "fndr_remember_decision", "agent.rate_result"]
+            ["fndr.remember", "fndr_remember_decision", "fndr.rate_result"]
         );
     }
 

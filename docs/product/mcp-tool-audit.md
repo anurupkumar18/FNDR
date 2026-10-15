@@ -138,7 +138,7 @@ callers.
    test checks; `turn_workflow_into_skill`, which pointed at a removed skill
    path, is gone. 37 tools. Left: the graph pair, `memory.project_context`
    with `memory.project_wiki`, `memory.recent_changes`, and step 4.
-4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency.
+4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency. Done, 2026-10-15.
 
 Steps 1 and 2 are implemented as separate migrations. Steps 3 and 4 remain
 follow-up work so they can be reviewed independently rather than landing as one

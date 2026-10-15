@@ -1785,7 +1785,7 @@ fn tools_list_result() -> Value {
                 }
             },
             {
-                "name": "agent.rate_result",
+                "name": "fndr.rate_result",
                 "description": "Log retrieval feedback for a run/memory without mutating ranking automatically.",
                 "inputSchema": {
                     "type": "object",
@@ -2324,11 +2324,11 @@ async fn call_tool(
                 serde_json::from_value(params.arguments).unwrap_or_default();
             run_agent_explain_retrieval(app_state, args).await
         }
-        "agent.rate_result" => {
+        "fndr.rate_result" => {
             let args: RateResultRequest =
                 serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
                     code: -32602,
-                    message: format!("Invalid agent.rate_result args: {err}"),
+                    message: format!("Invalid fndr.rate_result args: {err}"),
                 })?;
             run_agent_rate_result(app_state, args).await
         }
@@ -6036,7 +6036,7 @@ mod tests {
 
             let denied: Value = client.post(&status.endpoint)
                 .bearer_auth(&read_token)
-                .json(&call("tools/call", json!({"name":"agent.rate_result","arguments":{}})))
+                .json(&call("tools/call", json!({"name":"fndr.rate_result","arguments":{}})))
                 .send().await.unwrap().json().await.unwrap();
             assert!(denied.to_string().contains("outside this token's tool grant"));
             let action: Value = client.post(&status.endpoint)
@@ -6363,7 +6363,7 @@ mod tests {
         let response = runtime
             .block_on(call_tool(
                 Some(json!({
-                    "name": "agent.rate_result",
+                    "name": "fndr.rate_result",
                     "arguments": {"run_id": "run-test", "rating": "useful"}
                 })),
                 app_state,
