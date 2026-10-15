@@ -25,6 +25,10 @@ struct ScriptCacheEntry {
 }
 
 static BROWSER_SEMANTIC_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+static FINDER_FOLDER_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+/// Set once the person refuses FNDR control of Finder; it is not asked again
+/// this session.
+static FINDER_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, Default)]
 pub struct BrowserSemanticContent {
@@ -301,6 +305,109 @@ fn from_hex(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+/// The file or folder a memory reopens to: the window's document, or, for a
+/// Finder window, which shows Accessibility no document, its folder.
+pub(super) fn document_path_for(context: &FrontmostAppContext) -> Option<String> {
+    context.document_path.clone().or_else(|| {
+        context
+            .bundle_id
+            .as_deref()
+            .filter(|bundle| bundle.eq_ignore_ascii_case("com.apple.finder"))
+            .and_then(|_| finder_front_folder(&context.window_title))
+    })
+}
+
+const FINDER_FOLDER_TTL: Duration = Duration::from_secs(30);
+/// macOS holds the script while it asks the person; capture does not wait.
+const FINDER_SCRIPT_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// The folder the front Finder window shows, asked of Finder through
+/// AppleScript (owner decision 2026-10-15). macOS asks the person once to let
+/// FNDR control Finder; a refusal ends the asking for the session. Windows
+/// with no folder (Recents, a search) give None.
+fn finder_front_folder(window_title: &str) -> Option<String> {
+    // Tests never drive the person's Finder or raise the permission prompt.
+    if cfg!(test) || FINDER_REFUSED.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let key = format!("finder:{window_title}");
+    if let Some(cached) = cache_get(&FINDER_FOLDER_CACHE, &key, FINDER_FOLDER_TTL) {
+        return (!cached.is_empty()).then_some(cached);
+    }
+    let script = r#"tell application "Finder" to if (count of Finder windows) > 0 then POSIX path of (target of front Finder window as alias)"#;
+    let mut child = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < FINDER_SCRIPT_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let output = child.wait_with_output().ok()?;
+    let folder = finder_folder_from_script(
+        status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    match folder {
+        FinderFolder::Refused => {
+            FINDER_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+        FinderFolder::Shown(path) => {
+            cache_put(&FINDER_FOLDER_CACHE, &key, Some(path.clone()));
+            Some(path)
+        }
+        FinderFolder::None => {
+            cache_put(&FINDER_FOLDER_CACHE, &key, Some(String::new()));
+            None
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum FinderFolder {
+    Shown(String),
+    None,
+    /// macOS: not authorized to send Apple events (-1743).
+    Refused,
+}
+
+fn finder_folder_from_script(ok: bool, stdout: &str, stderr: &str) -> FinderFolder {
+    if !ok {
+        return if stderr.contains("-1743") {
+            FinderFolder::Refused
+        } else {
+            FinderFolder::None
+        };
+    }
+    let path = stdout.trim();
+    if path.starts_with('/') {
+        // A folder's POSIX path ends with a slash; the root stays "/".
+        let trimmed = path.trim_end_matches('/');
+        FinderFolder::Shown(if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed.to_string()
+        })
+    } else {
+        FinderFolder::None
     }
 }
 
@@ -721,6 +828,35 @@ mod tests {
         ] {
             assert_eq!(native_document_path_from_ax_url(input), None, "{input:?}");
         }
+    }
+
+    #[test]
+    fn a_finder_window_reads_as_its_folder_and_a_refusal_is_told_apart() {
+        assert_eq!(
+            finder_folder_from_script(true, "/Users/qa/Courses/PA2/\n", ""),
+            FinderFolder::Shown("/Users/qa/Courses/PA2".to_string())
+        );
+        assert_eq!(
+            finder_folder_from_script(true, "/\n", ""),
+            FinderFolder::Shown("/".to_string())
+        );
+        assert_eq!(finder_folder_from_script(true, "", ""), FinderFolder::None);
+        assert_eq!(
+            finder_folder_from_script(
+                false,
+                "",
+                "execution error: Can’t make «class cfol» into type alias. (-1700)"
+            ),
+            FinderFolder::None
+        );
+        assert_eq!(
+            finder_folder_from_script(
+                false,
+                "",
+                "execution error: Not authorized to send Apple events to Finder. (-1743)"
+            ),
+            FinderFolder::Refused
+        );
     }
 
     #[test]
