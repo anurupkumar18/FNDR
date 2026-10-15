@@ -79,7 +79,7 @@ Seen in a debug build on a disposable profile (2026-10-14): "open Notes" typed i
 Open:
 - In the one native try, the notch came back in Ask with the finished card gone before "Worked" was tapped, so the rating was lost. Not reproduced and not explained; the likeliest cause is a reload of the notch page, which reads the remembered mode. Settings now offers the rating as well, so the loop no longer depends on that card.
 - The seed for a native check needs `--pause-capture`; without it the disposable profile captures the screen. `seed_demo` writes the pause only with that flag.
-- A paste replaces the clipboard and does not restore it.
+- A paste puts copied plain text back afterwards; an image on the clipboard is replaced.
 - Two browser lists: `operator::plan` (names said in requests, and the substring check in `verify`) and `operator::policy::BROWSERS` (policy decisions). They agree today; one list would be better.
 - `computer_use.rs` holds a test that keeps a `MutexGuard` across an await (clippy `await_holding_lock`); it predates this work.
 

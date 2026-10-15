@@ -1233,7 +1233,16 @@ async fn attempt_step(
             }
             let (target, pasting) = (app.clone(), text.clone());
             let pasted = tokio::task::spawn_blocking(move || {
-                crate::accessibility::paste_into_app(&target, &pasting)
+                // What the person had copied goes back once the field has
+                // been read, by when the app has taken the paste.
+                let previous = (!copied)
+                    .then(crate::capture::clipboard::restorable_text)
+                    .flatten();
+                let pasted = crate::accessibility::paste_into_app(&target, &pasting);
+                if let Some(previous) = previous {
+                    crate::capture::clipboard::put_back(&previous);
+                }
+                pasted
             })
             .await
             .map_err(|error| RunError::Failed(format!("The paste did not finish: {error}")))?;
