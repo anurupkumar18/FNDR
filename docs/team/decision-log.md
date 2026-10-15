@@ -56,6 +56,7 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-15 | The command bar (Alt+Space) is registered again as a way into Notch Do and memory search; Auto-Fill stays off. | Keep it off and reach Notch Do only from the notch | Owner (delegated) | AG-07, `src-tauri/src/main.rs` |
 | 2026-10-14 | Skills are listed and managed in Settings > AI, next to the newest runs, which can be rated there after the notch has closed. | In the notch; not yet | Owner, in the second 2026-10-14 Q&A | `src/domains/notch/NotchDoSettings.tsx` |
 | 2026-10-14 | Notch Do's next step type is paste into the focused app: the exact text shown before one tap, checked by reading the field, never retried. | Reminders; run a Shortcut; reveal a file | Owner, in the second 2026-10-14 Q&A | `operator::plan::StepAction::Paste`, `scripts/operator/notch-do-policy-cases.json` |
+| 2026-10-15 | Use owned worker threads for local model/context lifetimes and a drain/join boundary for native Quit. Replace the current model leaks and unsafe cross-thread context wrappers without changing prompts or model selection. Implementation and the F9 native gates remain open. | A self-referential mutex owner; free leaked pointers at exit; a separate process killed on Quit; force process exit | Owner delegated autonomous architecture decisions in the active quality goal; decided under `AGENTS.md` | [ADR 032](../decisions/032-owned-model-lifetimes.md) |
 
 ## Earlier accepted ADRs (background, before this log)
 

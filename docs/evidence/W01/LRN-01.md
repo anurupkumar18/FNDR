@@ -154,6 +154,19 @@ Caveats: the lab's parseability check does not validate the schema, and both out
 | F9 | A process that has loaded the text model can abort at exit: the model is `Box::leak`ed, and ggml's Metal teardown asserts `[rsets->data count] == 0`. The app's exit handler does no model teardown. On 2026-10-14, a distinct `FNDR Home QA.app` using the paused synthetic office-pm profile exited with this assertion and code 134 on three quits after Home and Continue checks. The process stopped each time. This proves the native shutdown failure in that debug bundle; release-bundle behavior remains unverified. | Reproduced in test binaries and the isolated native debug app; model ownership fix open | `inference/mod.rs:831`, `inference/mod.rs:982`, `main.rs:943`, `docs/evidence/W04/home-rebuild.md` |
 | F10 | **MEASURED and fixed on branch `fix/extraction-token-budget`.** The 400 token extraction cap sat below the live model's natural answer (316 to 573 tokens). A cut-off answer has no closing brace, `extract_json_object` returns `None`, and `extract_structured_memory` returns `None` through the `?` without trying the repair pass. Six of eight synthetic captures were discarded this way, each costing a full 400 token generation while capture waits. Fix: `EXTRACTION_MAX_OUTPUT_TOKENS` 640 with a 4,096 token window | Measured on the real code path; the fix is verified on eight synthetic captures, not yet on real captures | `inference/mod.rs:1348`, `inference/mod.rs:428`, `model_config.rs` |
 
+## F9 ownership comparison, October 15, 2026
+
+A disposable example compiled against `0de1d31` compared the real Qwen3-VL-2B Q4_K_M model through the synthetic Quality Lab Office PM profile. Both cases used FNDR's shared backend, an owned Tokio runtime, default model parameters, a 4096-token context, batch 512 and micro-batch 256. Neither generated text or read captures.
+
+| Case | Drop sequence | Process result |
+| --- | --- | --- |
+| Direct ownership | Drop the context, owned model, backend handle, then Tokio runtime | Exit 0 after the completion marker |
+| FNDR engine | Drop `InferenceEngine`, then Tokio runtime; its model remains in `Box::leak` | Completion marker, then exit 134 at `ggml-metal-device.m:612`, `GGML_ASSERT([rsets->data count] == 0)` |
+
+This reproduces F9 without decoding and supports owned model/context teardown. An owned Tokio runtime alone did not fix it. The native QA app also reproduced the assertion on two October 15 quits. The vision runtime was not exercised by this comparison and remains a separate real-model gate.
+
+Another release-lane Cargo process was present, so these runs establish exit behavior, not performance or memory measurements. The temporary example and its linked executables were deleted after the comparison; no prototype or dependency was added to production. Raw local logs are `/tmp/fndr-f9-owned.log` and `/tmp/fndr-f9-engine.log`. The implementation decision and remaining checks are in [ADR 032](../../decisions/032-owned-model-lifetimes.md).
+
 ## Reproduce
 
 Scripts are in `docs/superpowers/plans/assets/2026-09-21/ws2/lab-stage1/` (`tokcount.sh`, `gguf_breakdown.py`, `sampling_lab.py`, and `sysmsg.txt`, a verbatim copy of the extraction system prompt). The benchmark commands are quoted in the checkpoint sections above. Install: `brew install llama.cpp`.
