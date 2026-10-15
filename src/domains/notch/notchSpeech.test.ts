@@ -140,11 +140,10 @@ describe("installNotchVoices", () => {
 
 describe("provider status", () => {
     it("names who is speaking", () => {
-        expect(providerLine("codex_realtime", "preferred")).toBe("Speaking with your ChatGPT plan");
-        expect(providerLine("system_enhanced", "ChatGPT voice: not signed in with ChatGPT")).toBe(
-            "On-device voice (ChatGPT voice: not signed in with ChatGPT)",
-        );
-        expect(providerLine("webview_basic", "preferred")).toBe("On-device voice");
+        expect(providerLine("codex_realtime")).toBe("Speaking with your ChatGPT plan");
+        expect(providerLine("local_neural")).toBe("FNDR's natural voice");
+        expect(providerLine("system_enhanced")).toBe("Mac voice");
+        expect(providerLine("webview_basic")).toBe("Basic system voice");
     });
 
     it("warns as the plan nears its limit and says when FNDR has moved to the Mac voice", () => {

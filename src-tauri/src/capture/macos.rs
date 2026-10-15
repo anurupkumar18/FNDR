@@ -214,7 +214,7 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
         let document_url = native_window
             .as_ref()
             .and_then(|window| window.document_url.as_deref());
-        let browser = is_browser_app(&app_name);
+        let browser = crate::browsers::is_browser(&app_name);
         let browser_url = browser
             .then(|| normalize_browser_document_url(document_url))
             .flatten();
@@ -312,10 +312,6 @@ pub(super) fn preferred_reopen_file_path<'a>(
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .or_else(|| files_touched.first().map(String::as_str))
-}
-
-pub fn is_browser_app(app_name: &str) -> bool {
-    super::admission::is_browser_app(app_name)
 }
 
 pub fn get_browser_semantic_content(app_name: &str) -> Option<BrowserSemanticContent> {
@@ -662,14 +658,6 @@ mod tests {
             get_frontmost_app_info().bundle_id,
             "frontmost_bundle_id must agree with get_frontmost_app_info absent a real app switch"
         );
-    }
-
-    #[test]
-    fn privacy_sensitive_browser_detection_includes_unsupported_firefox() {
-        assert!(is_browser_app("Firefox"));
-        assert!(is_browser_app("Opera"));
-        assert!(is_browser_app("Google Chrome"));
-        assert!(!is_browser_app("Finder"));
     }
 
     #[test]

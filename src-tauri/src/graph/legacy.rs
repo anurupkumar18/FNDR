@@ -510,7 +510,7 @@ fn host_from_url(url: &str) -> String {
 
 fn classify_memory_type(app_name: &str, url: Option<&str>, summary_source: &str) -> &'static str {
     let app = app_name.to_lowercase();
-    if url.is_some() || is_browser_app(&app) {
+    if url.is_some() || crate::browsers::is_browser(&app) {
         return "web";
     }
 
@@ -519,15 +519,6 @@ fn classify_memory_type(app_name: &str, url: Option<&str>, summary_source: &str)
     }
 
     "general"
-}
-
-fn is_browser_app(app_name: &str) -> bool {
-    app_name.contains("safari")
-        || app_name.contains("chrome")
-        || app_name.contains("arc")
-        || app_name.contains("brave")
-        || app_name.contains("edge")
-        || app_name.contains("firefox")
 }
 
 fn related_urls_for_task_from_snapshot(
