@@ -77,8 +77,10 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry,
     const [caption, setCaption] = useState("");
     const [providerStatus, setProviderStatus] = useState(() => {
         const id = registry.activeProvider();
-        return id ? providerLine(id, "") : "";
+        return id ? providerLine(id) : "";
     });
+    /** Why the voices before this one were passed over, for the tooltip. */
+    const [providerWhy, setProviderWhy] = useState("");
     const [usage, setUsage] = useState<string | null>(null);
     const stateRef = useRef(state);
     stateRef.current = state;
@@ -280,7 +282,11 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry,
 
     // Who is speaking, and how much of the plan is used.
     useEffect(
-        () => registry.onProviderChange((id, reason) => setProviderStatus(providerLine(id, reason))),
+        () =>
+            registry.onProviderChange((id, reason) => {
+                setProviderStatus(providerLine(id));
+                setProviderWhy(reason === "preferred" ? "" : reason);
+            }),
         [registry],
     );
     useEffect(() => {
@@ -715,7 +721,9 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry,
             </div>
 
             {providerStatus || usage ? (
-                <p className="notch-operator-provider">{[providerStatus, usage].filter(Boolean).join(" · ")}</p>
+                <p className="notch-operator-provider" title={providerWhy || undefined}>
+                    {[providerStatus, usage].filter(Boolean).join(" · ")}
+                </p>
             ) : null}
 
             <form

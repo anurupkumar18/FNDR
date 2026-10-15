@@ -64,6 +64,29 @@ Not verified in the running app: the command bar's "Do it" row, a local run, rat
 
 Open, flagged for a decision: "Remove from queue" in Spotify is refused because "remove" is a never-do word; skills have no list, rename or delete screen; the October tool list (paste, reminders, Shortcuts, timers, reveal file) is the backlog of Notch Do step types; `decision/` (Laya) has no callers and the paused documentation pass deletes it.
 
+## 2026-10-15: skills, paste and the command bar
+
+| Commit | What |
+| --- | --- |
+| `f4fe51c` | Alt+Space is registered again (off since the Alpha demo, so the command bar's "Do it" row could not be reached); a finished run says "Done" once |
+| `b56e4e9` | The 10k-row storage benchmark runs on demand: every `cargo test` was rewriting `docs/evidence/W04/storage-indexes.md` from an older template |
+| `2d3cbbd` | Settings > AI > Notch Do (skills: run, delete; the newest 20 runs: rate, save as a skill); "Run skill: …" in the command bar; `notch_do_request` replaces `omnibar_do`; `RunRecord::repeatable` fixes skills saved from work sets; the `paste` step |
+| `ee44d77` | Suite cases carry synthetic memory snippets for the live planner run (23 of 24, `recordings/2026-10-15-live.json`); a paste with no text pastes what was copied; links and searches in a named browser run on the Mac; "reply" is a never-do word only as a verb; the voice line names the voice |
+| `b541ac9`, `3eecbb7` | CI builds Rust against OpenSSL 3 (root, headers and a fresh cache key): the macOS image carries OpenSSL 4 since 2026-10-13 and llama.cpp's bundled HTTP client does not compile against it. Green at `04bcdd2`. Codex's PR #55 fixes the same thing by cleaning `llama-cpp-sys-2` on every run and now conflicts; one of the two should go |
+| `301e9b9` | A paste puts back the plain text the person had copied |
+| `04bcdd2` | `crate::browsers`: one browser check for capture, text cleanup, the graph, the planner and the policy; Dia pages keep their link |
+| `a5a3828` | FNDR remembers the app the person was in when the notch or command bar took the keyboard; "this page" and "paste it here" use it |
+| `b0138fc`, `9ec89e0`, `172ace1` | Spoken approvals read "okay to paste"; a browser named after non-ASCII words is found; a skill runs from the command bar by its whole name or after "run", never from a bare prefix |
+
+Seen in a debug build on a disposable profile (2026-10-14): "open Notes" typed in the command bar, handed to the notch, planned on the Mac, Notes in front, checked, "Did that work?" shown. Seen in the browser preview: the Settings section (rate, save, run refused while Operate is off, delete). Not seen in the app: rating, saving and running a skill, the command bar's skill row, a paste.
+
+Open:
+- In the one native try, the notch came back in Ask with the finished card gone before "Worked" was tapped, so the rating was lost. Not reproduced and not explained; the likeliest cause is a reload of the notch page, which reads the remembered mode. Settings now offers the rating as well, so the loop no longer depends on that card.
+- The seed for a native check needs `--pause-capture`; without it the disposable profile captures the screen. `seed_demo` writes the pause only with that flag.
+- A paste puts copied plain text back afterwards; an image on the clipboard is replaced.
+- Reopen targets: Dia memories should now keep their page URL (`crate::browsers`), not yet seen on a capture. Finder memories still carry no folder path, so a work set opens Finder rather than the folder.
+- `computer_use.rs` holds a test that keeps a `MutexGuard` across an await (clippy `await_holding_lock`); it predates this work.
+
 ## Process notes
 
 - Worked: a contract test that ties the release image to the tested image; proving the workflow by hand before any tag.

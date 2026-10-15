@@ -912,10 +912,21 @@ fn plan_request_text(
     text
 }
 
-/// The app the person is looking at, for the planner. Never an app FNDR may
-/// not read, and never FNDR itself.
-fn app_in_front(seen: &plan::Observation, guards: &Guards) -> Option<String> {
-    let app = seen.frontmost_app.trim();
+/// The app the person is looking at, for the planner and for a paste that
+/// names no app. While FNDR's own notch or command bar is in front, it is the
+/// app they were in when it opened (`looked_at`). Never an app FNDR may not
+/// read, and never FNDR itself.
+fn app_in_front(
+    seen: &plan::Observation,
+    guards: &Guards,
+    looked_at: Option<&str>,
+) -> Option<String> {
+    let front = seen.frontmost_app.trim();
+    let app = if crate::privacy::Blocklist::is_internal_app(front, Some(&seen.frontmost_bundle)) {
+        looked_at.unwrap_or_default().trim()
+    } else {
+        front
+    };
     (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
 }
 
@@ -1048,6 +1059,23 @@ fn asks_no_more(declined_in_this_step: bool) -> bool {
     declined_in_this_step
 }
 
+/// What the approval card shows of copied text: all of a short one, the
+/// start and the length of a long one.
+fn paste_preview(text: &str) -> String {
+    const SHOWN: usize = 280;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= SHOWN {
+        format!("\u{201c}{flat}\u{201d}")
+    } else {
+        let start: String = flat.chars().take(SHOWN).collect();
+        format!(
+            "\u{201c}{}\u{2026}\u{201d} ({count} characters)",
+            start.trim_end()
+        )
+    }
+}
+
 /// Whether a failed step gets its second attempt. Asking again after the
 /// person declined would put the same question to them twice, and a second
 /// paste would put the text in twice.
@@ -1080,7 +1108,7 @@ async fn attempt_step(
             detail,
         });
     };
-    if step.action != StepAction::OpenUrl && (ctx.guards.off_limits)(&step.app) {
+    if !step.app.is_empty() && (ctx.guards.off_limits)(&step.app) {
         native_entry(
             "open_app",
             json!({ "name": step.app }),
@@ -1137,7 +1165,7 @@ async fn attempt_step(
                     });
                 }
             }
-            if let Err(error) = native::open_url(&step.url) {
+            if let Err(error) = native::open_url_in(&step.url, &step.app) {
                 native_entry("open_url", args, "failed", Some(error.clone()));
                 return Ok(plan::Verdict {
                     ok: false,
@@ -1166,7 +1194,11 @@ async fn attempt_step(
         }),
         StepAction::Paste => {
             let app = if step.app.is_empty() {
-                app_in_front(&native::observe(None).await, &ctx.guards)
+                app_in_front(
+                    &native::observe(None).await,
+                    &ctx.guards,
+                    native::app_looked_at().as_deref(),
+                )
             } else {
                 Some(step.app.clone())
             };
@@ -1176,7 +1208,17 @@ async fn attempt_step(
                     detail: "No app is in front to paste into".to_string(),
                 });
             };
-            let args = json!({ "app": app, "text": step.text });
+            // Empty text pastes what an earlier step copied.
+            let copied = step.text.is_empty();
+            let text = if copied {
+                match crate::capture::clipboard::copied_text() {
+                    Ok(text) => text,
+                    Err(detail) => return Ok(plan::Verdict { ok: false, detail }),
+                }
+            } else {
+                step.text.clone()
+            };
+            let args = json!({ "app": app, "text": text });
             if (ctx.guards.off_limits)(&app)
                 || classify("paste", &args, observed).risk == Risk::Never
             {
@@ -1186,7 +1228,11 @@ async fn attempt_step(
                     detail: format!("FNDR does not paste into {app}"),
                 });
             }
-            let summary = format!("Paste \u{201c}{}\u{201d} into {app}", step.text.trim());
+            let summary = if copied {
+                format!("Paste what was copied into {app}: {}", paste_preview(&text))
+            } else {
+                format!("Paste \u{201c}{}\u{201d} into {app}", text.trim())
+            };
             let approved = ask_person(ctx, commands, "paste", summary).await?;
             native_entry(
                 "paste",
@@ -1200,14 +1246,23 @@ async fn attempt_step(
                     detail: plan::ACTION_DECLINED.to_string(),
                 });
             }
-            let (target, text) = (app.clone(), step.text.clone());
+            let (target, pasting) = (app.clone(), text.clone());
             let pasted = tokio::task::spawn_blocking(move || {
-                crate::accessibility::paste_into_app(&target, &text)
+                // What the person had copied goes back once the field has
+                // been read, by when the app has taken the paste.
+                let previous = (!copied)
+                    .then(crate::capture::clipboard::restorable_text)
+                    .flatten();
+                let pasted = crate::accessibility::paste_into_app(&target, &pasting);
+                if let Some(previous) = previous {
+                    crate::capture::clipboard::put_back(&previous);
+                }
+                pasted
             })
             .await
             .map_err(|error| RunError::Failed(format!("The paste did not finish: {error}")))?;
             let verdict = match pasted {
-                Ok(field) => plan::verify_paste(&app, &step.text, field.as_deref()),
+                Ok(field) => plan::verify_paste(&app, &text, field.as_deref()),
                 Err(error) => plan::Verdict {
                     ok: false,
                     detail: error,
@@ -1624,7 +1679,11 @@ async fn run_with_snippets(
     let mut session = operator_session(&codex_pid).await?;
     let mut observed = Observed::default();
 
-    let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
+    let in_front = app_in_front(
+        &native::observe(None).await,
+        &ctx.guards,
+        native::app_looked_at().as_deref(),
+    );
     let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
@@ -2405,19 +2464,32 @@ mod tests {
     }
 
     #[test]
-    fn the_planner_learns_the_app_in_front_unless_it_is_off_limits() {
+    fn the_planner_learns_the_app_the_person_is_in_even_behind_fndr_unless_it_is_off_limits() {
         let seen = |app: &str| plan::Observation {
             frontmost_app: app.to_string(),
             ..Default::default()
         };
         let mut guards = Guards::open();
         assert_eq!(
-            app_in_front(&seen("Google Chrome"), &guards).as_deref(),
+            app_in_front(&seen("Google Chrome"), &guards, Some("Notes")).as_deref(),
             Some("Google Chrome")
         );
-        assert_eq!(app_in_front(&seen(""), &guards), None);
-        guards.off_limits = Arc::new(|app| app == "1Password");
-        assert_eq!(app_in_front(&seen("1Password"), &guards), None);
+        assert_eq!(app_in_front(&seen(""), &guards, None), None);
+        // FNDR's own notch is in front: the app the person was in counts.
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("Safari")).as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(app_in_front(&seen("FNDR"), &guards, None), None);
+        guards.off_limits = Arc::new(|app| app == "1Password" || app.starts_with("FNDR"));
+        assert_eq!(
+            app_in_front(&seen("1Password"), &guards, Some("Safari")),
+            None
+        );
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("1Password")),
+            None
+        );
     }
 
     #[test]
@@ -2494,6 +2566,15 @@ mod tests {
             "paste the zoom link into Notes",
             &guards
         ));
+        assert_eq!(
+            paste_preview("  see\n you  at five "),
+            "\u{201c}see you at five\u{201d}"
+        );
+        let long = paste_preview(&"word ".repeat(100));
+        assert!(
+            long.ends_with("\u{2026}\u{201d} (499 characters)"),
+            "{long}"
+        );
     }
 
     #[test]
@@ -2828,18 +2909,7 @@ mod tests {
         let mut answers = serde_json::Map::new();
         let (mut passed, mut scored) = (0usize, 0usize);
         for case in suite.cases.iter().filter(|case| {
-            case.plan.is_some() && {
-                let is_app = |app: &str| suite.is_installed(app);
-                let known = plan::Known {
-                    saved_sets: &case.saved_sets,
-                    skills: &case.skills,
-                    is_app: &is_app,
-                };
-                matches!(
-                    plan::route(&case.request, &known),
-                    plan::Route::Planner { .. }
-                )
-            }
+            case.plan.is_some() && crate::operator::eval::goes_to_planner(&suite, case)
         }) {
             let mut observed = Observed::default();
             let planner = session.planner_thread.clone();
@@ -2852,7 +2922,11 @@ mod tests {
                 emit: &emit,
                 commands: &mut receiver,
             };
-            let request = plan_request_text(&case.request, &[], case.in_front.as_deref());
+            let request = plan_request_text(
+                &case.request,
+                &case.synthetic_snippets(),
+                case.in_front.as_deref(),
+            );
             let answer = tokio::time::timeout(
                 PLAN_TIMEOUT,
                 session.run_turn(&mut turn, &planner, &request, plan::plan_output_schema()),

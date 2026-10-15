@@ -69,6 +69,7 @@ fn toggle_omnibar<R: tauri::Runtime>(app: &AppHandle<R>) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
+            crate::operator::native::remember_app_in_front();
             super::screen_guide::schedule_fndr_window_activation_after_screen_guide_cancel_with_work(
                 &handle,
                 move |work_handle| {

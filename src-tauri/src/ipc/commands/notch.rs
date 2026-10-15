@@ -484,6 +484,9 @@ pub async fn set_notch_hud_hit_rect(rect: NotchHitRect) -> Result<(), String> {
 /// focusable by default, and only takes the keyboard for as long as it needs it.
 #[tauri::command]
 pub async fn set_notch_hud_keyboard(app: AppHandle, active: bool) -> Result<(), String> {
+    if active {
+        crate::operator::native::remember_app_in_front();
+    }
     KEYBOARD_ACTIVE.store(active, Ordering::SeqCst);
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let handle = app.clone();

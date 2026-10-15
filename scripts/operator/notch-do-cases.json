@@ -74,17 +74,18 @@
     {
       "id": "named-site",
       "request": "open github.com in Safari",
-      "route": "planner",
-      "memory_snippets": false,
+      "route": "local",
       "left_out": false,
       "plan": {
         "steps": [
           {
             "action": "open_url",
-            "url_host": "github.com"
+            "app": "Safari",
+            "url_host": "github.com",
+            "check": "page_loaded"
           }
         ],
-        "max_steps": 2
+        "max_steps": 1
       }
     },
     {
@@ -141,7 +142,7 @@
             "app": "Safari"
           }
         ],
-        "max_steps": 3
+        "max_steps": 4
       }
     },
     {
@@ -566,11 +567,20 @@
           {
             "action": "paste",
             "app": "Slack",
-            "check": "pasted"
+            "check": "pasted",
+            "text_has": "zoom.us/j/84213377210"
           }
         ],
         "max_steps": 2
-      }
+      },
+      "snippets": [
+        {
+          "app": "Mail",
+          "title": "Design sync moved to 3pm",
+          "when": "2026-10-15 08:12",
+          "text": "Hi all, the design sync is now at 3pm. Join with Zoom: https://zoom.us/j/84213377210 Passcode is in the calendar invite."
+        }
+      ]
     },
     {
       "id": "paste-given-words-here",
@@ -587,6 +597,91 @@
         ],
         "max_steps": 1
       }
+    },
+    {
+      "id": "paste-the-requests-own-words",
+      "request": "paste a reply saying I'm running late into Slack",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "paste",
+            "app": "Slack",
+            "check": "pasted",
+            "text_has": "running late"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "paste-never-composes",
+      "request": "paste a polite reply declining the meeting into Slack",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "forbid_actions": [
+          "paste"
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "reply-to-someone",
+      "request": "reply to Ana that I'm running late",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": true,
+      "plan": {
+        "forbid_actions": [
+          "paste",
+          "operate"
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "search-in-a-named-browser",
+      "request": "look up looped transformers in Chrome",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "app": "Chrome",
+            "url_has": "q=looped+transformers",
+            "check": "page_loaded"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "search-naming-an-app-that-is-not-a-browser",
+      "request": "look up memory leaks in Xcode",
+      "route": "local",
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "open_url",
+            "url_has": "in+xcode",
+            "check": "page_loaded"
+          }
+        ],
+        "max_steps": 1
+      }
+    },
+    {
+      "id": "open-an-app-in-a-browser",
+      "request": "open Notes in Safari",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false
     }
   ],
   "installed_apps": [

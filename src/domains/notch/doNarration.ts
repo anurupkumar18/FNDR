@@ -133,7 +133,9 @@ export function narrate(prev: DoState, next: DoState): Narration | null {
     if (next.phase === "choose" && next.options.length > 0 && next.options !== prev.options) return choices();
 
     if (next.approval && next.approval.requestKey !== prev.approval?.requestKey) {
-        return { text: `I need your okay to ${sentence(next.approval.summary)}. Tap Allow.`, urgent: true };
+        // Summaries start like a button ("Paste …", "Open …"); mid-sentence they read lower case.
+        const asked = sentence(next.approval.summary).replace(/^\p{Lu}(?!\p{Lu})/u, (letter) => letter.toLowerCase());
+        return { text: `I need your okay to ${asked}. Tap Allow.`, urgent: true };
     }
 
     const blocked = next.actions.find((a) => a.state === "blocked" && !prev.actions.some((p) => p.id === a.id));
