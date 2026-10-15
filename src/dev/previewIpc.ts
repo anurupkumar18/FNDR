@@ -1207,19 +1207,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     .slice(0, Math.max(0, limit))
                     .map((card) => clonePreview(card));
             }
-            case "fndr_get_memory_subgraph": {
-                const seedIds =
-                    typeof payload === "object" && payload !== null && "seedIds" in payload
-                        ? (payload as { seedIds?: unknown }).seedIds
-                        : [];
-                return {
-                    seed_ids: Array.isArray(seedIds)
-                        ? seedIds.filter((id): id is string => typeof id === "string")
-                        : [],
-                    node_count: 3,
-                    edge_count: 2,
-                };
-            }
             case "find_visually_similar_memories":
                 return clonePreview(previewSimilarResults);
             case "fndr_build_context_pack": {

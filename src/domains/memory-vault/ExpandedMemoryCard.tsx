@@ -4,7 +4,7 @@ import type {
     SourceStatementRef,
     MemoryCard as MemoryCardData,
 } from "../../shared/ipc/tauri";
-import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMemories } from "../../shared/ipc/tauri";
+import { fndrGetMemorySourceStatements, fndrGetRelatedMemories } from "../../shared/ipc/tauri";
 import { CopyForAgentButton } from "./CopyForAgentButton";
 import { SurfacingReason } from "./SurfacingReason";
 import { MemoryCard } from "./MemoryCard";
@@ -31,7 +31,7 @@ interface Props {
  * Modal shell around `<MemoryCard variant="expanded">`. The card itself
  * handles dossier corners, frame strip, provenance, threads, and action
  * buttons; this component supplies the modal scrim and stitches in the
- * dynamically-loaded extras (related memories, subgraph, evidence pack,
+ * dynamically-loaded extras (related memories, evidence pack,
  * insight layers).
  */
 export function ExpandedMemoryCard({
@@ -49,9 +49,7 @@ export function ExpandedMemoryCard({
     onResearch,
 }: Props) {
     const [related, setRelated] = useState<MemoryCardData[]>([]);
-    const [subgraph, setSubgraph] = useState<{ node_count: number; edge_count: number } | null>(null);
     const [relatedState, setRelatedState] = useState<"loading" | "ready" | "error">("loading");
-    const [subgraphState, setSubgraphState] = useState<"loading" | "ready" | "error">("loading");
     const [statements, setStatements] = useState<{
         memoryId: string;
         status: "loading" | "ready" | "error";
@@ -64,9 +62,7 @@ export function ExpandedMemoryCard({
         let cancelled = false;
         setStatements({ memoryId: card.id, status: "loading", items: [] });
         setRelated([]);
-        setSubgraph(null);
         setRelatedState("loading");
-        setSubgraphState("loading");
         void fndrGetRelatedMemories(card.id, 4)
             .then((cards) => {
                 if (!cancelled) {
@@ -76,16 +72,6 @@ export function ExpandedMemoryCard({
             })
             .catch(() => {
                 if (!cancelled) setRelatedState("error");
-            });
-        void fndrGetMemorySubgraph([card.id], 2)
-            .then((sub) => {
-                if (!cancelled) {
-                    setSubgraph({ node_count: sub.node_count, edge_count: sub.edge_count });
-                    setSubgraphState("ready");
-                }
-            })
-            .catch(() => {
-                if (!cancelled) setSubgraphState("error");
             });
         void fndrGetMemorySourceStatements(card.id)
             .then((items) => {
@@ -176,21 +162,6 @@ export function ExpandedMemoryCard({
             </section>
         ) : undefined;
 
-    const subgraphNode = (
-        <section>
-            <h4 className="fndr-emc-section-heading">Connected context</h4>
-            <p className="fndr-emc-meta" data-testid="fndr-subgraph-summary">
-                {subgraphState === "error"
-                    ? "Graph context unavailable."
-                    : subgraphState === "loading"
-                    ? "Loading connected context…"
-                    : subgraph
-                    ? `${subgraph.node_count} nodes · ${subgraph.edge_count} edges`
-                    : "No connected context found."}
-            </p>
-        </section>
-    );
-
     const relatedNode = (
         <section>
             <h4 className="fndr-emc-section-heading">Related memories</h4>
@@ -246,7 +217,6 @@ export function ExpandedMemoryCard({
             {chunkEvidenceNode}
             {evidenceNode}
             {statementsNode}
-            {subgraphNode}
             {relatedNode}
         </>
     );

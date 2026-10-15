@@ -35,6 +35,10 @@
     <key>NSCalendarsUsageDescription</key>
     <string>FNDR reads your upcoming events on this Mac to show related work a few minutes before a meeting. It never changes your calendar, and event details never leave this Mac.</string>
 
+    <!-- Automation (Apple events) -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>FNDR asks Finder which folder its window shows, so a memory reopens to that folder; reads a browser's page and what a music app is playing; and sends the keystrokes Notch Do and Auto-Fill type after you allow them.</string>
+
     <!-- Files and Folders Permissions -->
     <key>NSDocumentsFolderUsageDescription</key>
     <string>FNDR searches file names in Documents only when you ask Screen Guide, and may move an older FNDR speech runtime from Documents into private app storage once.</string>
