@@ -32,6 +32,7 @@ The native QA app repeatedly aborts on quit at ggml's Metal resource assertion. 
 ## Delivery and verification
 
 - Replace the text runtime's leaked model/context boundary first, keeping the model work and trace logic together. Verify real-model idle drop, an active completion and a cancelled waiter before relying on the new lifetime.
+- The idle process gate is `CARGO_BUILD_JOBS=2 FNDR_INFERENCE_TEST_APP_DIR="$HOME/Library/Application Support/com.fndr.app.quality-lab/office-pm" cargo test --test model_lifecycle -- --ignored --nocapture` from `src-tauri`. It requires installed weights and asserts a normal child-process exit after engine and runtime drops.
 - Apply the owned lifetime to the existing vision runtime and projector. Verify a real synthetic-image request with matching model assets. Missing or mismatched assets remain a failed or unverified gate; do not substitute a fake for this check.
 - Integrate native Quit with the existing initialization gate and helper shutdown. Test Quit while idle, while loading, after text generation and after vision use. Record exit codes and request-to-exit time. Every tested normal Quit must exit without the Metal assertion; do not invent a fixed timeout to report success.
 - Run relevant inference/cancellation tests and native model checks serially with the repository's resource limits. Run the vault and retrieval gates if output or retrieval behavior changes; preserve their exact results.

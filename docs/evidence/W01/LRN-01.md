@@ -165,6 +165,8 @@ A disposable example compiled against `0de1d31` compared the real Qwen3-VL-2B Q4
 
 This reproduces F9 without decoding and supports owned model/context teardown. An owned Tokio runtime alone did not fix it. The native QA app also reproduced the assertion on two October 15 quits. The vision runtime was not exercised by this comparison and remains a separate real-model gate.
 
+The durable `model_lifecycle::real_text_engine_drop_exits_cleanly` gate now runs the engine in a child process. Its first real-model run failed: zero passed, one failed; the child completed its drops, then received SIGABRT at the same Metal assertion. The parent test process returned 101 instead of aborting the whole test runner. This gate is explicitly selected because ordinary CI has no installed GGUF; it must pass against the real model before the lifetime fix is complete.
+
 Another release-lane Cargo process was present, so these runs establish exit behavior, not performance or memory measurements. The temporary example and its linked executables were deleted after the comparison; no prototype or dependency was added to production. Raw local logs are `/tmp/fndr-f9-owned.log` and `/tmp/fndr-f9-engine.log`. The implementation decision and remaining checks are in [ADR 032](../../decisions/032-owned-model-lifetimes.md).
 
 ## Reproduce
