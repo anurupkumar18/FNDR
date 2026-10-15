@@ -35,7 +35,7 @@ extern "C" {
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
 
-use crate::{load_ai_engines, models, AppState};
+use crate::{models, AppState};
 
 // ---------------------------------------------------------------------------
 // Onboarding state (persisted as JSON in app data dir)
@@ -193,10 +193,8 @@ pub async fn set_preferred_inference_model(
     // next download or restart will pick it up via
     // `models::inference_preferred_model_id`.
     let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
-    let config = state.inner().config.read().clone();
     if models::resolve_model(Some(trimmed.as_str()), Some(app_data_dir.as_path())).is_some() {
-        let loaded = load_ai_engines(app_data_dir.as_path(), &config).await;
-        state.inner().replace_ai_engines(loaded.inference);
+        state.inner().reload_ai_engines().await?;
         Ok(true)
     } else {
         tracing::info!(
@@ -714,7 +712,7 @@ pub async fn refresh_ai_models(
     let ai_model_available =
         models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
             .is_some();
-    let loaded_ai = load_ai_engines(app_data_dir.as_path(), &config).await;
+    let loaded_ai = state.inner().reload_ai_engines().await?;
 
     let loaded_model_id = loaded_ai
         .inference
@@ -744,8 +742,6 @@ pub async fn refresh_ai_models(
     };
 
     let vlm_model_id: Option<String> = None;
-
-    state.inner().replace_ai_engines(loaded_ai.inference);
 
     Ok(AiRuntimeStatus {
         ai_model_available,
