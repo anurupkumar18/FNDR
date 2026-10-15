@@ -241,7 +241,7 @@ fn query_encoded(query: &str) -> String {
 /// "github.com in Safari": the text before a browser named at the end, and
 /// that browser, when it is one and is installed.
 fn in_browser(text: &str, is_app: &dyn Fn(&str) -> bool) -> Option<(String, String)> {
-    let at = text.to_lowercase().rfind(" in ")?;
+    let at = text.to_ascii_lowercase().rfind(" in ")?;
     let (head, place) = (text[..at].trim(), text[at + 4..].trim());
     (!head.is_empty() && crate::browsers::is_browser(place) && is_app(place))
         .then(|| (head.to_string(), place.to_string()))
@@ -1148,6 +1148,21 @@ mod tests {
             check,
             item: None,
         }
+    }
+
+    #[test]
+    fn a_browser_named_after_text_that_lowercases_longer_is_still_found() {
+        // "İ" is two bytes and lowercases to three, so an index into a
+        // lowercased copy cuts the original in the wrong place, or inside a
+        // character.
+        let installed = |app: &str| app.eq_ignore_ascii_case("Safari");
+        let plan = local_plan("look up İstanbul weather in Safari", &installed).unwrap();
+        assert_eq!(plan.steps[0].app, "Safari");
+        assert!(
+            plan.steps[0].url.contains("q=%C4%B0stanbul+weather"),
+            "{}",
+            plan.steps[0].url
+        );
     }
 
     #[test]
