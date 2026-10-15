@@ -35,7 +35,7 @@ const APP_SWITCH_UNIQUE_THRESHOLD: usize = 6;
 const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
-fn main() {
+fn main() -> std::process::ExitCode {
     // `fndr operator-mcp`: Notch Do's computer-use tools, started by Codex as
     // a child process. It must not initialise the app, and stdout is the protocol.
     if std::env::args().nth(1).as_deref() == Some("operator-mcp") {
@@ -951,7 +951,7 @@ fn main() {
         .expect("error while running tauri application");
     // 0: running, 1: draining, 2: resources joined. Repeated Quit cannot skip drain.
     let quit_phase = Arc::new(std::sync::atomic::AtomicU8::new(0));
-    app.run(move |app_handle, event| {
+    let exit_code = app.run_return(move |app_handle, event| {
         use std::sync::atomic::Ordering;
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if quit_phase.load(Ordering::SeqCst) == 2 {
@@ -981,4 +981,5 @@ fn main() {
         }
     });
     drop(rt);
+    std::process::ExitCode::from(exit_code as u8)
 }
