@@ -35,6 +35,46 @@ const APP_SWITCH_UNIQUE_THRESHOLD: usize = 6;
 const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
+// The predefined macOS Quit calls AppKit terminate directly, bypassing
+// ExitRequested. Keep the native menu and route its Quit through Tauri instead.
+#[cfg(target_os = "macos")]
+fn configure_quit_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let menu = Menu::default(app.handle())?;
+    let label = PredefinedMenuItem::quit(app, None)?.text()?;
+    let quit = MenuItem::with_id(app, "fndr-quit", &label, true, Some("CmdOrCtrl+Q"))?;
+    let mut replaced = false;
+    for item in menu.items()? {
+        if let Some(submenu) = item.as_submenu() {
+            for (position, item) in submenu.items()?.into_iter().enumerate() {
+                if let Some(native) = item.as_predefined_menuitem() {
+                    if native.text()? == label {
+                        submenu.remove(&item)?;
+                        submenu.insert(&quit, position)?;
+                        replaced = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(replaced, "the native app menu must have a Quit item");
+    app.set_menu(menu)?;
+    app.on_menu_event(|handle, event| {
+        if event.id().as_ref() == "fndr-quit" {
+            handle.exit(0);
+        }
+    });
+    Ok(())
+}
+
+fn shutdown_native_helpers(app_handle: &tauri::AppHandle) {
+    ipc::commands::shutdown_screen_guide(app_handle);
+    ipc::commands::shutdown_computer_use();
+    ipc::commands::shutdown_hermes_gateway();
+    fndr_lib::voice::shutdown(app_handle);
+    fndr_lib::speech::shutdown_speech();
+}
+
 fn main() -> std::process::ExitCode {
     // `fndr operator-mcp`: Notch Do's computer-use tools, started by Codex as
     // a child process. It must not initialise the app, and stdout is the protocol.
@@ -90,6 +130,8 @@ fn main() -> std::process::ExitCode {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            configure_quit_menu(app)?;
             // Load configuration
             let config = Config::load_or_create()?;
             tracing::info!("Configuration loaded");
@@ -951,6 +993,7 @@ fn main() -> std::process::ExitCode {
         .expect("error while running tauri application");
     // 0: running, 1: draining, 2: resources joined. Repeated Quit cannot skip drain.
     let quit_phase = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let shutdown_runtime = rt.handle().clone();
     let exit_code = app.run_return(move |app_handle, event| {
         use std::sync::atomic::Ordering;
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
@@ -964,11 +1007,7 @@ fn main() -> std::process::ExitCode {
             {
                 return;
             }
-            ipc::commands::shutdown_screen_guide(app_handle);
-            ipc::commands::shutdown_computer_use();
-            ipc::commands::shutdown_hermes_gateway();
-            fndr_lib::voice::shutdown(app_handle);
-            fndr_lib::speech::shutdown_speech();
+            shutdown_native_helpers(app_handle);
             let state = app_handle.state::<Arc<AppState>>().inner().clone();
             let handle = app_handle.clone();
             let phase = quit_phase.clone();
@@ -978,6 +1017,14 @@ fn main() -> std::process::ExitCode {
                 tracing::info!("Model resources drained; exiting FNDR");
                 handle.exit(0);
             });
+        } else if matches!(event, tauri::RunEvent::Exit) && quit_phase.load(Ordering::SeqCst) != 2 {
+            // Dock/system termination can reach Exit without ExitRequested.
+            // AppKit will exit after this callback, so join before returning.
+            shutdown_native_helpers(app_handle);
+            let state = app_handle.state::<Arc<AppState>>().inner().clone();
+            shutdown_runtime.block_on(state.shutdown_models());
+            quit_phase.store(2, Ordering::SeqCst);
+            tracing::info!("Model resources drained during system termination");
         }
     });
     drop(rt);
