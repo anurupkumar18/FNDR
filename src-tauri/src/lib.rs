@@ -743,6 +743,9 @@ impl AppState {
     pub async fn shutdown_models(&self) {
         self.inference_stopping.store(true, Ordering::SeqCst);
         inference::stop_pixel_admission();
+        if let Some(engine) = self.inference.read().as_ref() {
+            engine.request_shutdown();
+        }
         self.is_paused.store(true, Ordering::SeqCst);
         let _guard = self.inference_init.lock().await;
         let engine = self.inference.write().take();

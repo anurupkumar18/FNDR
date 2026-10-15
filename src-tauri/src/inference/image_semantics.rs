@@ -1184,6 +1184,13 @@ pub fn pixel_vlm_loaded() -> bool {
 /// Reject future loads before waiting for any current initialization or work.
 pub(super) fn stop_pixel_admission() {
     VISION_STOPPING.store(true, Ordering::SeqCst);
+    if let Some(slot) = IMPORT_VISION.get() {
+        if let Some(guard) = slot.try_lock() {
+            if let Some(runtime) = guard.as_ref() {
+                runtime.request_shutdown();
+            }
+        }
+    }
 }
 
 pub(super) fn shutdown_pixel_runtime() {
@@ -1317,9 +1324,13 @@ impl MtmdVlmRuntime {
             .map_err(|_| "Vision runtime is stopped".to_string())?
     }
 
-    fn shutdown(&self) {
+    fn request_shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         let _ = self.requests.send(VisionRequest::Shutdown);
+    }
+
+    fn shutdown(&self) {
+        self.request_shutdown();
         let mut owner = self.thread.lock();
         if let Some(thread) = owner.take() {
             if let Err(error) = thread.join() {

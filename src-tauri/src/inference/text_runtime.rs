@@ -200,9 +200,13 @@ impl TextRuntime {
         })
     }
 
-    pub(super) fn shutdown(&self) {
+    pub(super) fn request_shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         let _ = self.requests.send(Request::Shutdown);
+    }
+
+    pub(super) fn shutdown(&self) {
+        self.request_shutdown();
         // Retain the guard through join so concurrent shutdown callers also
         // wait for the actual resource drops.
         let mut owner = self.thread.lock();

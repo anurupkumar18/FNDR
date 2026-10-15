@@ -960,6 +960,10 @@ impl InferenceEngine {
         })
     }
 
+    pub(crate) fn request_shutdown(&self) {
+        self.runtime.request_shutdown();
+    }
+
     /// Stop admission, cancel current decoding, and join the resource owner.
     pub fn shutdown(&self) {
         self.runtime.shutdown();
@@ -1760,6 +1764,13 @@ mod tests {
             was_pending
         };
         cancelled.store(true, Ordering::SeqCst);
+        engine.request_shutdown();
+        assert!(
+            runtime
+                .block_on(engine.build_prompt("synthetic", "after stop"))
+                .is_err(),
+            "shutdown must reject formatting before the worker drain completes"
+        );
         drop(release);
         drop(engine);
         drop(runtime);
