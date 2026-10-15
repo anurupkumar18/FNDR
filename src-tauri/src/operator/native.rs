@@ -162,6 +162,36 @@ pub(crate) fn parse_lsappinfo(out: &str) -> Option<(i32, String, String)> {
     Some((pid, name, bundle))
 }
 
+/// The app the person was in when FNDR's notch or command bar took the
+/// keyboard. While FNDR itself is in front, "this page" and "paste it here"
+/// still mean that app.
+static LOOKED_AT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Remembers the app in front, unless it is FNDR. Called just before the notch
+/// or the command bar takes the keyboard.
+pub fn remember_app_in_front() {
+    let Some((pid, name, bundle)) = lsappinfo_front() else {
+        return;
+    };
+    if pid == std::process::id() as i32
+        || name.trim().is_empty()
+        || crate::privacy::Blocklist::is_internal_app(&name, Some(&bundle))
+    {
+        return;
+    }
+    if let Ok(mut looked_at) = LOOKED_AT.lock() {
+        *looked_at = Some(name);
+    }
+}
+
+/// The app remembered by `remember_app_in_front`.
+pub fn app_looked_at() -> Option<String> {
+    LOOKED_AT
+        .lock()
+        .ok()
+        .and_then(|looked_at| looked_at.clone())
+}
+
 /// Which app LaunchServices has in front. Current even in a process whose main
 /// run loop is not spinning, where `NSWorkspace.frontmostApplication` goes stale.
 pub(crate) fn lsappinfo_front() -> Option<(i32, String, String)> {

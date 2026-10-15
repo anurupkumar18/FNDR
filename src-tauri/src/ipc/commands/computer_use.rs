@@ -912,10 +912,21 @@ fn plan_request_text(
     text
 }
 
-/// The app the person is looking at, for the planner. Never an app FNDR may
-/// not read, and never FNDR itself.
-fn app_in_front(seen: &plan::Observation, guards: &Guards) -> Option<String> {
-    let app = seen.frontmost_app.trim();
+/// The app the person is looking at, for the planner and for a paste that
+/// names no app. While FNDR's own notch or command bar is in front, it is the
+/// app they were in when it opened (`looked_at`). Never an app FNDR may not
+/// read, and never FNDR itself.
+fn app_in_front(
+    seen: &plan::Observation,
+    guards: &Guards,
+    looked_at: Option<&str>,
+) -> Option<String> {
+    let front = seen.frontmost_app.trim();
+    let app = if crate::privacy::Blocklist::is_internal_app(front, Some(&seen.frontmost_bundle)) {
+        looked_at.unwrap_or_default().trim()
+    } else {
+        front
+    };
     (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
 }
 
@@ -1183,7 +1194,11 @@ async fn attempt_step(
         }),
         StepAction::Paste => {
             let app = if step.app.is_empty() {
-                app_in_front(&native::observe(None).await, &ctx.guards)
+                app_in_front(
+                    &native::observe(None).await,
+                    &ctx.guards,
+                    native::app_looked_at().as_deref(),
+                )
             } else {
                 Some(step.app.clone())
             };
@@ -1664,7 +1679,11 @@ async fn run_with_snippets(
     let mut session = operator_session(&codex_pid).await?;
     let mut observed = Observed::default();
 
-    let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
+    let in_front = app_in_front(
+        &native::observe(None).await,
+        &ctx.guards,
+        native::app_looked_at().as_deref(),
+    );
     let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
@@ -2445,19 +2464,32 @@ mod tests {
     }
 
     #[test]
-    fn the_planner_learns_the_app_in_front_unless_it_is_off_limits() {
+    fn the_planner_learns_the_app_the_person_is_in_even_behind_fndr_unless_it_is_off_limits() {
         let seen = |app: &str| plan::Observation {
             frontmost_app: app.to_string(),
             ..Default::default()
         };
         let mut guards = Guards::open();
         assert_eq!(
-            app_in_front(&seen("Google Chrome"), &guards).as_deref(),
+            app_in_front(&seen("Google Chrome"), &guards, Some("Notes")).as_deref(),
             Some("Google Chrome")
         );
-        assert_eq!(app_in_front(&seen(""), &guards), None);
-        guards.off_limits = Arc::new(|app| app == "1Password");
-        assert_eq!(app_in_front(&seen("1Password"), &guards), None);
+        assert_eq!(app_in_front(&seen(""), &guards, None), None);
+        // FNDR's own notch is in front: the app the person was in counts.
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("Safari")).as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(app_in_front(&seen("FNDR"), &guards, None), None);
+        guards.off_limits = Arc::new(|app| app == "1Password" || app.starts_with("FNDR"));
+        assert_eq!(
+            app_in_front(&seen("1Password"), &guards, Some("Safari")),
+            None
+        );
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("1Password")),
+            None
+        );
     }
 
     #[test]
