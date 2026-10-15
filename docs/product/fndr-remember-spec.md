@@ -419,7 +419,7 @@ Rust tests live next to the code they test unless noted; the corpus harness is
 | `injected_policy_note_does_not_change_settings_or_blocklist` | corpus harness | policy_override (`an-015`, `an-016`) | blocklist, privacy_settings, auth_token | Config and token file identical. |
 | `tool_call_text_in_note_is_stored_inert` | corpus harness | tool_call_injection (`an-018`, `an-019`) | tool_registry, risk_policy | No tool dispatched; text round-trips byte-identical. |
 | `false_fact_note_is_labeled_and_isolated` | corpus harness | false_fact | other_memories, derived_artifacts | Seed memories byte-identical; the note is returned with `source_type: agent`. |
-| `mcp_read_reports_agent_source_type` | `mcp` | impersonation | none | `fndr.search`, `memory.search_full_context`, and context packs report `agent` and `added_by`, not `coding` or `screen`. |
+| `mcp_read_reports_agent_source_type` | `mcp` | impersonation | none | `fndr.search` and context packs report `agent` and `added_by`, not `coding` or `screen`. |
 | `ask_prompt_labels_agent_note_evidence` | `context_runtime` | false_fact, instruction_injection | none | Notes enter the prompt only inside the labeled evidence block with client and date. |
 | `agent_note_has_no_reopen_target` | `ipc::commands::memory` | none (`an-010`) | none | Reopen returns false; no URL from text is opened. |
 | `rate_limit_returns_retry_after` | `mcp` | flood_burst (`an-029`) | other_memories | Calls 1 to 10 stored, call 11 refused with `retry_after_seconds >= 1`. |

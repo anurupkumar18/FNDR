@@ -16,7 +16,7 @@ A person picks a provider, sends a message, and gets an answer. They can attach 
 Hermes answers only. Started by FNDR it has two kinds of tools and no others:
 
 - its own `todo` planning list
-- FNDR's read-only memory tools over MCP: `memory.search_full_context`, `memory.get_context_pack`, `memory.timeline`, `memory.source_evidence`
+- FNDR's read-only memory tools over MCP: `fndr.search`, `fndr.build_context_pack`, `fndr.timeline`, `memory.source_evidence` (raw text refused)
 
 It has no terminal, file, code, browser or schedule tools. FNDR writes that limit into the Hermes config (`hermes_codex.rs`: `HERMES_TOOLS_YAML`, `HERMES_MCP_TOOLS`) and enforces the four memory reads again at the MCP server with a separate bearer token. The config was checked on a live gateway (`docs/evidence/W03/agent-surfaces-phase1.md`); the server grant was checked with a real localhost MCP test (ADR 025). The token is scoped to this embedded Hermes connection, not to every process running as the Mac owner.
 
@@ -76,7 +76,7 @@ All in `src-tauri/src/inference/prompts.rs`, fingerprinted: `HERMES_CHAT_INSTRUC
 
 ## The MCP agent tools
 
-Outside agents that connect to FNDR over MCP can call `agent.build_context_pack`, `agent.run`, `fndr.privacy_status`, `agent.explain_retrieval`, `agent.rate_result`, `agent.list_prompts` and `agent.get_prompt`. These use the `src-tauri/src/agent/` module and load no model.
+Outside agents that connect to FNDR over MCP can call `agent.run`, `fndr.privacy_status`, `agent.explain_retrieval`, `agent.rate_result`, `agent.list_prompts` and `agent.get_prompt`. These use the `src-tauri/src/agent/` module and load no model.
 
 ```text
 memory records / graph / search

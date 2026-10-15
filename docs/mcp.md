@@ -18,7 +18,6 @@ Configuration is documented in `README.md`:
 
 ## Agent Tools Added In This Slice
 
-- `agent.build_context_pack`: returns the typed `AgentContextPack` for Ask / Plan / Act / Learn.
 - `agent.run`: builds a pack, persists an audit record, and returns deterministic local output with policy and blocked action details. It does not execute dangerous actions.
 - `fndr.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
 - `agent.explain_retrieval`: explains selected memories, qualitative ranking signals, dropped context, redactions, policy reasons, and limitations.
@@ -26,7 +25,7 @@ Configuration is documented in `README.md`:
 - `agent.list_prompts`: lists FNDR-specific prompt templates.
 - `agent.get_prompt`: returns one prompt template.
 
-Existing memory tools remain available, including `memory.search_full_context`, `memory.get_context_pack`, `memory.agent_brief`, `memory.timeline`, `memory.project_context`, `memory.decisions`, `memory.todos`, and graph/context tools.
+Start with `memory.resume_work`, `fndr.search`, `fndr.answer`, `fndr.build_context_pack`, `fndr.timeline` and `fndr.active_focus`; `memory.project_context`, `memory.decisions`, `memory.todos` and the graph tools stay for narrower reads. The duplicates that once sat beside these (RET-02, `docs/product/mcp-tool-audit.md`) are folded into them.
 
 ## Resources
 
@@ -107,12 +106,11 @@ The tool still writes to the separate decision ledger and rebuilds project conte
 
 ```json
 {
-  "name": "agent.build_context_pack",
+  "name": "fndr.build_context_pack",
   "arguments": {
-    "user_goal": "Summarize what I was debugging before lunch",
-    "mode": "ask",
-    "window_minutes": 240,
-    "include_raw_evidence": false
+    "query": "what I was debugging before lunch",
+    "agent_type": "coding_agent",
+    "budget_tokens": 1600
   }
 }
 ```

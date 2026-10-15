@@ -189,9 +189,9 @@ enum McpScope {
 
 /// FNDR's server-enforced grant for its embedded Hermes runtime.
 pub(crate) const HERMES_READ_TOOLS: &[&str] = &[
-    "memory.search_full_context",
-    "memory.get_context_pack",
-    "memory.timeline",
+    "fndr.search",
+    "fndr.build_context_pack",
+    "fndr.timeline",
     "memory.source_evidence",
 ];
 
@@ -439,46 +439,11 @@ struct SearchMeetingTranscriptsArgs {
 }
 
 #[derive(Debug, Deserialize)]
-struct GetAmbientContextArgs {
-    #[serde(default = "default_ambient_limit")]
-    limit: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchFullContextArgs {
-    query: String,
-    #[serde(default)]
-    time_window: Option<Value>,
-    #[serde(default = "default_full_context_limit")]
-    limit: usize,
-    #[serde(default)]
-    include_raw: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GetContextPackArgs {
-    topic: String,
-    #[serde(default)]
-    time_window: Option<Value>,
-    #[serde(default = "default_context_pack_depth")]
-    depth: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ResumeWorkArgs {
     #[serde(default = "default_resume_hours")]
     hours: u32,
     #[serde(default = "default_resume_budget")]
     budget_tokens: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentBriefArgs {
-    topic: String,
-    #[serde(default = "default_agent_brief_budget")]
-    token_budget: u32,
-    #[serde(default)]
-    include_raw_evidence: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -583,30 +548,6 @@ struct FndrDiffArgs {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct WarmStartArgs {
-    #[serde(default)]
-    client_name: Option<String>,
-    #[serde(default)]
-    current_task: Option<String>,
-    #[serde(default = "default_agent_brief_budget")]
-    token_budget: u32,
-    #[serde(default = "default_true")]
-    include_recent_activity: bool,
-    #[serde(default = "default_true")]
-    include_project_context: bool,
-    #[serde(default = "default_true")]
-    include_decisions: bool,
-    #[serde(default = "default_true")]
-    include_open_tasks: bool,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AgentOnboardingArgs {
-    #[serde(default = "default_agent_brief_budget")]
-    token_budget: u32,
-}
-
-#[derive(Debug, Deserialize, Default)]
 struct ProjectWikiArgs {
     #[serde(default)]
     project: Option<String>,
@@ -641,11 +582,6 @@ struct SourceEvidenceArgs {
     #[serde(default)]
     include_raw: bool,
 }
-
-fn default_ambient_limit() -> usize {
-    5
-}
-
 fn default_search_limit() -> usize {
     10
 }
@@ -653,15 +589,6 @@ fn default_search_limit() -> usize {
 fn default_full_context_limit() -> usize {
     12
 }
-
-fn default_agent_brief_budget() -> u32 {
-    1800
-}
-
-fn default_context_pack_depth() -> String {
-    "standard".to_string()
-}
-
 fn default_resume_hours() -> u32 {
     24
 }
@@ -681,11 +608,6 @@ fn default_projects_limit() -> usize {
 fn default_recent_changes_lookback_minutes() -> u32 {
     180
 }
-
-fn default_true() -> bool {
-    true
-}
-
 // ---------------------------------------------------------------------------
 // Global singleton runtime
 // ---------------------------------------------------------------------------
@@ -1823,58 +1745,6 @@ fn tools_list_result() -> Value {
     let mut listing = json!({
         "tools": [
             {
-                "name": "memory.search_full_context",
-                "description": "Agent-first full-context search with semantic + keyword matches, related memory links, timeline context, and synthesized next steps.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string", "description": "Semantic search query" },
-                        "time_window": {
-                            "description": "Optional range. Accepts '1h','24h','7d','today','yesterday', ISO timestamps, unix ms, or {from,to}.",
-                            "oneOf": [
-                                { "type": "string" },
-                                { "type": "number" },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "from": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-                                        "to": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
-                                    }
-                                }
-                            ]
-                        },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
-                        "include_raw": { "type": "boolean" }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "memory.get_context_pack",
-                "description": "Build an instant continuation pack for agents: active project, goals, files, URLs, errors, blockers, decisions, todos, and likely next actions.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "topic": { "type": "string" },
-                        "time_window": {
-                            "oneOf": [
-                                { "type": "string" },
-                                { "type": "number" },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "from": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-                                        "to": { "oneOf": [{ "type": "string" }, { "type": "number" }] }
-                                    }
-                                }
-                            ]
-                        },
-                        "depth": { "type": "string", "enum": ["shallow", "standard", "deep"] }
-                    },
-                    "required": ["topic"]
-                }
-            },
-            {
                 "name": "memory.resume_work",
                 "description": "Return recent work threads with cited, token-budgeted evidence for resuming a task.",
                 "inputSchema": {
@@ -1883,38 +1753,6 @@ fn tools_list_result() -> Value {
                         "hours": { "type": "integer", "minimum": 1, "maximum": 168 },
                         "budget_tokens": { "type": "integer", "minimum": 256, "maximum": 4000 }
                     }
-                }
-            },
-            {
-                "name": "memory.agent_brief",
-                "description": "Return a compact LLM-ready brief with timeline, facts, decisions, errors, files, URLs, and optional raw evidence.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "topic": { "type": "string" },
-                        "token_budget": { "type": "integer", "minimum": 256, "maximum": 12000 },
-                        "include_raw_evidence": { "type": "boolean" }
-                    },
-                    "required": ["topic"]
-                }
-            },
-            {
-                "name": "agent.build_context_pack",
-                "description": "Build FNDR's typed AgentContextPack for Ask, Plan, Act, or Learn mode. Read-only by default; raw evidence is excluded unless requested.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "user_goal": { "type": "string" },
-                        "mode": { "type": "string", "enum": ["ask", "plan", "act", "learn"] },
-                        "project": { "type": "string" },
-                        "app": { "type": "string" },
-                        "domain": { "type": "string" },
-                        "window_minutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
-                        "selected_memory_ids": { "type": "array", "items": { "type": "string" } },
-                        "include_raw_evidence": { "type": "boolean" },
-                        "budget_tokens": { "type": "integer", "minimum": 300, "maximum": 4000 }
-                    },
-                    "required": ["user_goal"]
                 }
             },
             {
@@ -1980,50 +1818,12 @@ fn tools_list_result() -> Value {
                 }
             },
             {
-                "name": "memory.timeline",
-                "description": "Chronological activity timeline grouped by session/hour/day/app/project, including timestamps, summaries, apps, windows, URLs, and memory IDs.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "from": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-                        "to": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
-                        "granularity": { "type": "string", "enum": ["session", "hour", "day", "app", "project"] }
-                    }
-                }
-            },
-            {
-                "name": "memory.active_focus",
-                "description": "Infer active app/window/project/task intent from recent activity for live agent assistance.",
+                "name": "fndr.active_focus",
+                "description": "What the person is doing now: the app and window in front, the likely project, task and intent, their focus task, and recent context with memory ids.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "lookback_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
-                    }
-                }
-            },
-            {
-                "name": "memory.warm_start",
-                "description": "Return an agent warm-start context with active focus, likely project, relevant wiki pages, decisions, blockers, todos, files, URLs, and graph-neighbored memories.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "client_name": { "type": "string" },
-                        "current_task": { "type": "string" },
-                        "token_budget": { "type": "integer", "minimum": 256, "maximum": 12000 },
-                        "include_recent_activity": { "type": "boolean" },
-                        "include_project_context": { "type": "boolean" },
-                        "include_decisions": { "type": "boolean" },
-                        "include_open_tasks": { "type": "boolean" }
-                    }
-                }
-            },
-            {
-                "name": "memory.agent_onboarding",
-                "description": "FNDR-native onboarding context for new agents: stable profile context, active projects, working preferences, constraints, recent decisions, blockers, and high-value context packs.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "token_budget": { "type": "integer", "minimum": 256, "maximum": 12000 }
                     }
                 }
             },
@@ -2245,22 +2045,6 @@ fn tools_list_result() -> Value {
                 }
             },
             {
-                "name": "get_ambient_context",
-                "description": "Return what the user is actively working on right now: frontmost app, recent memory snippets, and window context. Use this to give code editors, AI assistants, or other clients real-time awareness of the user's current task (the 'Time Machine for IDEs' feature).",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 20,
-                            "description": "Number of recent memory snippets to include (default: 5)"
-                        }
-                    }
-                }
-            },
-
-            {
                 "name": "fndr_search_code_context",
                 "description": "Return coding-oriented context for the active repo and files.",
                 "inputSchema": {
@@ -2283,16 +2067,6 @@ fn tools_list_result() -> Value {
                         "since_timestamp": { "type": "integer" }
                     },
                     "required": ["session_id"]
-                }
-            },
-            {
-                "name": "fndr_get_recent_working_state",
-                "description": "Return FNDR's best current understanding of what the user was just doing.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "project": { "type": "string" }
-                    }
                 }
             },
             {
@@ -2373,12 +2147,13 @@ fn tools_list_result() -> Value {
 
             {
                 "name": "fndr.timeline",
-                "description": "Return the recent activity timeline (most recent memories with timestamps and titles).",
+                "description": "Chronological activity between two times (default: today), grouped by session, hour, day, app or project, with timestamps, summaries, apps, windows, URLs and memory ids.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
-                        "project": { "type": "string" }
+                        "from": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+                        "to": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+                        "granularity": { "type": "string", "enum": ["session", "hour", "day", "app", "project"] }
                     }
                 }
             },
@@ -2452,10 +2227,7 @@ async fn call_tool(
         )));
     }
     if request.scope == McpScope::HermesReadOnly
-        && matches!(
-            params.name.as_str(),
-            "memory.search_full_context" | "memory.source_evidence"
-        )
+        && params.name == "memory.source_evidence"
         && params.arguments["include_raw"] == true
     {
         return Ok(tool_error(
@@ -2531,22 +2303,6 @@ async fn call_tool(
     }
 
     match params.name.as_str() {
-        "memory.search_full_context" => {
-            let args: SearchFullContextArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid memory.search_full_context args: {err}"),
-                })?;
-            run_memory_search_full_context(app_state, args).await
-        }
-        "memory.get_context_pack" => {
-            let args: GetContextPackArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid memory.get_context_pack args: {err}"),
-                })?;
-            run_memory_get_context_pack(app_state, args).await
-        }
         "memory.resume_work" => {
             let args: ResumeWorkArgs =
                 serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
@@ -2554,22 +2310,6 @@ async fn call_tool(
                     message: format!("Invalid memory.resume_work args: {err}"),
                 })?;
             run_memory_resume_work(app_state, args).await
-        }
-        "memory.agent_brief" => {
-            let args: AgentBriefArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid memory.agent_brief args: {err}"),
-                })?;
-            run_memory_agent_brief(app_state, args).await
-        }
-        "agent.build_context_pack" => {
-            let args: AgentContextRequest =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid agent.build_context_pack args: {err}"),
-                })?;
-            run_agent_build_context_pack(app_state, args).await
         }
         "agent.run" => {
             let args: AgentContextRequest =
@@ -2608,7 +2348,7 @@ async fn call_tool(
                 "prompt": get_agent_prompt(name)
             })))
         }
-        "memory.timeline" => {
+        "fndr.timeline" => {
             let args: TimelineArgs =
                 serde_json::from_value(params.arguments).unwrap_or_else(|_| TimelineArgs {
                     from: None,
@@ -2617,19 +2357,10 @@ async fn call_tool(
                 });
             run_memory_timeline(app_state, args).await
         }
-        "memory.active_focus" => {
+        "fndr.active_focus" => {
             let args: ActiveFocusArgs =
                 serde_json::from_value(params.arguments).unwrap_or_default();
             run_memory_active_focus(app_state, args).await
-        }
-        "memory.warm_start" => {
-            let args: WarmStartArgs = serde_json::from_value(params.arguments).unwrap_or_default();
-            run_memory_warm_start(app_state, args).await
-        }
-        "memory.agent_onboarding" => {
-            let args: AgentOnboardingArgs =
-                serde_json::from_value(params.arguments).unwrap_or_default();
-            run_memory_agent_onboarding(app_state, args).await
         }
         "memory.project_wiki" => {
             let args: ProjectWikiArgs =
@@ -2748,13 +2479,6 @@ async fn call_tool(
                 })?;
             run_search_meeting_transcripts(args).await
         }
-        "get_ambient_context" => {
-            let args: GetAmbientContextArgs = serde_json::from_value(params.arguments)
-                .unwrap_or_else(|_| GetAmbientContextArgs {
-                    limit: default_ambient_limit(),
-                });
-            run_get_ambient_context(app_state, args).await
-        }
         "fndr_search_code_context" => {
             let args: CodeContextRequest =
                 serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
@@ -2770,11 +2494,6 @@ async fn call_tool(
                     message: format!("Invalid fndr_diff args: {err}"),
                 })?;
             run_fndr_diff(app_state, args).await
-        }
-        "fndr_get_recent_working_state" => {
-            let args: ContextRequest = serde_json::from_value(params.arguments)
-                .unwrap_or_else(|_| ContextRequest::default());
-            run_fndr_get_recent_working_state(app_state, args).await
         }
         remember::TOOL_NAME => match &request.writer {
             Ok(writer) => Ok(remember::run(app_state, writer, params.arguments).await),
@@ -2797,7 +2516,6 @@ async fn call_tool(
         "fndr.get_related_memories" => {
             run_fndr_namespace_related_memories(app_state, params.arguments).await
         }
-        "fndr.timeline" => run_fndr_namespace_timeline(app_state, params.arguments).await,
         "fndr.quality_status" => run_fndr_namespace_quality_status(app_state).await,
         "fndr.privacy_status" => run_agent_privacy_status(app_state).await,
         "fndr.open_target" => run_fndr_namespace_open_target(app_state, params.arguments).await,
@@ -2845,30 +2563,6 @@ async fn run_search_meeting_transcripts(
     })))
 }
 
-async fn run_get_ambient_context(
-    app_state: Arc<AppState>,
-    args: GetAmbientContextArgs,
-) -> Result<Value, JsonRpcError> {
-    let _limit = args.limit.clamp(1, 20);
-    let frontmost_app =
-        crate::capture::macos_frontmost_app_name().unwrap_or_else(|| "Unknown".to_string());
-    let focus_task = app_state.focus_task.read().clone();
-    let focus_drift_count = app_state
-        .focus_drift_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let working_state = context_runtime::get_recent_working_state(&app_state, None)
-        .await
-        .map_err(internal_tool_error)?;
-
-    Ok(tool_success(json!({
-        "frontmost_app": frontmost_app,
-        "focus_task": focus_task,
-        "focus_drift_count": focus_drift_count,
-        "summary": working_state.summary,
-        "working_state": working_state
-    })))
-}
-
 async fn run_fndr_search_code_context(
     app_state: Arc<AppState>,
     args: CodeContextRequest,
@@ -2888,16 +2582,6 @@ async fn run_fndr_diff(
             .await
             .map_err(internal_tool_error)?;
     Ok(tool_success(json!({ "context_delta": delta })))
-}
-
-async fn run_fndr_get_recent_working_state(
-    app_state: Arc<AppState>,
-    args: ContextRequest,
-) -> Result<Value, JsonRpcError> {
-    let working_state = context_runtime::get_recent_working_state(&app_state, args.project)
-        .await
-        .map_err(internal_tool_error)?;
-    Ok(tool_success(json!({ "working_state": working_state })))
 }
 
 async fn run_fndr_remember_decision(
@@ -3049,40 +2733,6 @@ async fn run_fndr_namespace_related_memories(
     Ok(tool_success(json!({ "cards": cards })))
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct FndrTimelineArgs {
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    project: Option<String>,
-}
-
-async fn run_fndr_namespace_timeline(
-    app_state: Arc<AppState>,
-    arguments: Value,
-) -> Result<Value, JsonRpcError> {
-    let args: FndrTimelineArgs = serde_json::from_value(arguments).unwrap_or_default();
-    let events = app_state
-        .store
-        .list_activity_events(args.limit.unwrap_or(20), args.project.as_deref())
-        .await
-        .map_err(internal_tool_error)?;
-    let events = context_runtime::retain_context_events(&app_state, events)
-        .await
-        .map_err(internal_tool_error)?;
-    let entries: Vec<_> = events
-        .into_iter()
-        .map(|e| {
-            json!({
-                "memory_id": e.memory_id,
-                "timestamp": e.end_time,
-                "title": e.title,
-            })
-        })
-        .collect();
-    Ok(tool_success(json!({ "entries": entries })))
-}
-
 async fn run_fndr_namespace_quality_status(
     app_state: Arc<AppState>,
 ) -> Result<Value, JsonRpcError> {
@@ -3165,224 +2815,6 @@ struct ParsedTimeWindow {
     end_ms: Option<i64>,
 }
 
-async fn run_memory_search_full_context(
-    app_state: Arc<AppState>,
-    args: SearchFullContextArgs,
-) -> Result<Value, JsonRpcError> {
-    let limit = args.limit.clamp(1, 100);
-    let time_window = parse_time_window_value(args.time_window.as_ref())?;
-    let index_status = inspect_memory_index_status(&app_state).await?;
-
-    // One ranked list from the shared retrieval path (VS-11); the keyword
-    // matches are the ones its keyword route found, in the same order.
-    let time = time_window.time_filter.clone().or_else(|| {
-        time_window.start_ms.map(|start| {
-            let end = time_window
-                .end_ms
-                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            format!("range:{start}:{}", end.saturating_add(1))
-        })
-    });
-    let (_, retrieved) = context_runtime::retrieve_search_results(
-        &app_state,
-        &context_runtime::RetrieveRequest {
-            query: args.query.trim().to_string(),
-            time,
-            app: None,
-            limit,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-    let mut semantic_matches = filter_results_by_window(retrieved, &time_window);
-    let mut keyword_matches = semantic_matches
-        .iter()
-        .filter(|result| result.matched_routes.iter().any(|route| route == "keyword"))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let mut merged = dedupe_results_by_id(
-        semantic_matches
-            .iter()
-            .cloned()
-            .chain(keyword_matches.iter().cloned())
-            .collect(),
-    );
-
-    let memory_map = load_memories_for_results(&app_state, &merged).await?;
-    semantic_matches.retain(|row| memory_map.contains_key(&row.id));
-    keyword_matches.retain(|row| memory_map.contains_key(&row.id));
-    merged.retain(|row| memory_map.contains_key(&row.id));
-    let related_memories = fetch_related_memories(
-        &app_state,
-        &memory_map.values().cloned().collect::<Vec<_>>(),
-        limit.saturating_mul(2),
-    )
-    .await?;
-
-    let mut timeline_range = derive_window_from_results(&merged);
-    if let Some(start) = timeline_range.0 {
-        timeline_range.0 = Some(start - chrono::Duration::minutes(45).num_milliseconds());
-    }
-    if let Some(end) = timeline_range.1 {
-        timeline_range.1 = Some(end + chrono::Duration::minutes(45).num_milliseconds());
-    }
-    let timeline_rows = fetch_results_in_range(
-        &app_state,
-        timeline_range.0.or(time_window.start_ms),
-        timeline_range.1.or(time_window.end_ms),
-        120,
-    )
-    .await?;
-    let timeline = build_timeline_buckets(timeline_rows, "session");
-
-    let context_pack = context_runtime::build_context_pack(
-        &app_state,
-        ContextRequest {
-            query: args.query.clone(),
-            agent_type: "memory_agent".to_string(),
-            budget_tokens: 2600,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    let related_urls = aggregate_urls(&merged, &memory_map);
-    let related_files = aggregate_files(&merged, &memory_map);
-    let suggested_next_steps = suggested_next_steps_from_pack(&context_pack);
-
-    let semantic_json = build_result_rows(&semantic_matches, &memory_map, args.include_raw);
-    let keyword_json = build_result_rows(&keyword_matches, &memory_map, args.include_raw);
-    let related_json = build_memory_rows(&related_memories, args.include_raw);
-
-    let raw_evidence = if args.include_raw {
-        Some(
-            memory_map
-                .values()
-                .map(|memory| {
-                    json!({
-                        "memory_id": memory.id,
-                        "timestamp": memory.timestamp,
-                        "app_name": memory.app_name,
-                        "window_title": memory.window_title,
-                        "url": memory.url,
-                        "text": trim_chars(&memory.text, 1600),
-                        "clean_text": trim_chars(&memory.clean_text, 1200),
-                        "internal_context": trim_chars(&memory.internal_context, 1200)
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        None
-    };
-
-    Ok(tool_success(json!({
-        "query": args.query,
-        "time_window": time_window,
-        "index_status": index_status,
-        "semantic_matches": semantic_json,
-        "keyword_matches": keyword_json,
-        "related_memories": related_json,
-        "related_urls": related_urls,
-        "related_files": related_files,
-        "timeline_around_matches": timeline,
-        "synthesized_summary": context_pack.summary,
-        "suggested_next_steps": suggested_next_steps,
-        "context_pack_id": context_pack.id,
-        "include_raw": args.include_raw,
-        "raw_evidence": raw_evidence
-    })))
-}
-
-async fn run_memory_get_context_pack(
-    app_state: Arc<AppState>,
-    args: GetContextPackArgs,
-) -> Result<Value, JsonRpcError> {
-    let time_window = parse_time_window_value(args.time_window.as_ref())?;
-    let index_status = inspect_memory_index_status(&app_state).await?;
-    let depth = args.depth.trim().to_ascii_lowercase();
-    let budget_tokens = match depth.as_str() {
-        "shallow" => 1200,
-        "deep" => 4200,
-        _ => 2400,
-    };
-
-    let pack = context_runtime::build_context_pack(
-        &app_state,
-        ContextRequest {
-            query: args.topic.clone(),
-            agent_type: "agent_context_pack".to_string(),
-            budget_tokens,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-    let working_state = context_runtime::get_recent_working_state(&app_state, pack.project.clone())
-        .await
-        .map_err(internal_tool_error)?;
-
-    let mut relevant_results = filter_results_by_window(
-        fetch_results_in_range(&app_state, None, None, 80).await?,
-        &time_window,
-    );
-    relevant_results.reverse();
-    let memory_map = load_memories_for_results(&app_state, &relevant_results).await?;
-
-    let files_touched = aggregate_files(&relevant_results, &memory_map);
-    let urls_seen = aggregate_urls(&relevant_results, &memory_map);
-    let blockers = pack
-        .known_failures
-        .iter()
-        .map(|failure| {
-            json!({
-                "id": failure.id,
-                "title": failure.title,
-                "summary": failure.summary,
-                "error": failure.error,
-                "related_files": failure.related_files,
-                "last_seen_at": failure.last_seen_at
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let recent_work = build_timeline_buckets(relevant_results.clone(), "session");
-    let recent_memory_rows = relevant_results
-        .iter()
-        .take(20)
-        .cloned()
-        .collect::<Vec<_>>();
-    let recent_memories = build_result_rows(&recent_memory_rows, &memory_map, false);
-    let next_actions = suggested_next_steps_from_pack(&pack);
-
-    Ok(tool_success(json!({
-        "topic": args.topic,
-        "depth": depth,
-        "time_window": time_window,
-        "index_status": index_status,
-        "active_project": pack.project,
-        "current_goal": pack.active_goal,
-        "recent_work": recent_work,
-        "files_touched": files_touched,
-        "urls_seen": urls_seen,
-        "errors": working_state.recent_errors,
-        "blockers": blockers,
-        "decisions": pack.recent_decisions,
-        "todos": pack.open_tasks,
-        "relevant_memories": recent_memories,
-        "graph_neighbors": pack.included,
-        "next_actions": next_actions,
-        "summary": pack.summary,
-        "context_pack_id": pack.id
-    })))
-}
-
 async fn run_memory_resume_work(
     app_state: Arc<AppState>,
     args: ResumeWorkArgs,
@@ -3400,136 +2832,6 @@ async fn run_memory_resume_work(
         "budget_tokens": budget_tokens,
         "threads": threads,
     })))
-}
-
-async fn run_memory_agent_brief(
-    app_state: Arc<AppState>,
-    args: AgentBriefArgs,
-) -> Result<Value, JsonRpcError> {
-    let budget = args.token_budget.clamp(256, 12000);
-    let index_status = inspect_memory_index_status(&app_state).await?;
-    let factor = (budget as f32 / 1800.0).clamp(0.4, 4.0);
-    let max_items = (8.0 * factor) as usize;
-    let timeline_items = (5.0 * factor) as usize;
-
-    let pack = context_runtime::build_context_pack(
-        &app_state,
-        ContextRequest {
-            query: args.topic.clone(),
-            agent_type: "llm_brief".to_string(),
-            budget_tokens: budget,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    let mut results =
-        fetch_results_in_range(&app_state, None, None, max_items.saturating_mul(3).max(12)).await?;
-    results.reverse();
-    let timeline = build_timeline_buckets(results.clone(), "session");
-    let memory_map = load_memories_for_results(&app_state, &results).await?;
-    let files = aggregate_files(&results, &memory_map)
-        .into_iter()
-        .take(max_items)
-        .collect::<Vec<_>>();
-    let urls = aggregate_urls(&results, &memory_map)
-        .into_iter()
-        .take(max_items)
-        .collect::<Vec<_>>();
-
-    let facts = build_result_rows(
-        &results.into_iter().take(max_items).collect::<Vec<_>>(),
-        &memory_map,
-        false,
-    );
-    let decisions = pack
-        .recent_decisions
-        .iter()
-        .take(max_items)
-        .cloned()
-        .collect::<Vec<_>>();
-    let errors = pack
-        .known_failures
-        .iter()
-        .take(max_items)
-        .map(|failure| {
-            json!({
-                "title": failure.title,
-                "summary": failure.summary,
-                "error": failure.error,
-                "last_seen_at": failure.last_seen_at
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let support = if args.include_raw_evidence {
-        memory_map
-            .values()
-            .take(max_items)
-            .map(|memory| {
-                json!({
-                    "memory_id": memory.id,
-                    "timestamp": memory.timestamp,
-                    "app_name": memory.app_name,
-                    "window_title": memory.window_title,
-                    "url": memory.url,
-                    "snippet": trim_chars(&memory.snippet, 200),
-                    "text": trim_chars(&memory.clean_text, 1000)
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    let likely_next_actions = suggested_next_steps_from_pack(&pack);
-    let llm_payload = format!(
-        "Topic: {}\nProject: {}\nSummary: {}\nCurrent goal: {}\nNext actions: {}\n",
-        args.topic,
-        pack.project
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        pack.summary,
-        pack.active_goal
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        likely_next_actions.join(" | ")
-    );
-    let max_payload_chars = budget as usize * 4;
-    let llm_payload = trim_chars(&llm_payload, max_payload_chars);
-    let estimated_tokens = (serde_json::to_string(&facts).unwrap_or_default().len() as u32 / 4)
-        + (llm_payload.len() as u32 / 4);
-
-    Ok(tool_success(json!({
-        "topic": args.topic,
-        "token_budget": budget,
-        "estimated_tokens": estimated_tokens,
-        "index_status": index_status,
-        "summary": pack.summary,
-        "timeline": timeline.into_iter().take(timeline_items).collect::<Vec<_>>(),
-        "facts": facts,
-        "decisions": decisions,
-        "errors": errors,
-        "files": files,
-        "urls": urls,
-        "graph_neighbors": pack.included,
-        "supporting_snippets": support,
-        "next_actions": likely_next_actions,
-        "llm_payload": llm_payload
-    })))
-}
-
-async fn run_agent_build_context_pack(
-    app_state: Arc<AppState>,
-    args: AgentContextRequest,
-) -> Result<Value, JsonRpcError> {
-    let pack = crate::agent::build_agent_context_pack(&app_state, args)
-        .await
-        .map_err(internal_tool_error)?;
-    Ok(tool_success(json!({ "agent_context_pack": pack })))
 }
 
 async fn run_agent_run(
@@ -3704,6 +3006,9 @@ async fn run_memory_active_focus(
         "current_project_guess": working_state.project,
         "current_task_guess": working_state.active_goal,
         "likely_intent": working_state.summary,
+        "focus_task": app_state.focus_task.read().clone(),
+        "focus_drift_count": app_state.focus_drift_count.load(std::sync::atomic::Ordering::Relaxed),
+        "working_state": working_state,
         "recent_context": build_timeline_buckets(recent.clone(), "session"),
         "relevant_memories": relevant_memories,
         "confidence": working_state.confidence
@@ -3755,145 +3060,6 @@ async fn ensure_knowledge_pages(
         let _ = app_state.store.upsert_knowledge_pages(&pages).await;
     }
     Ok(pages)
-}
-
-async fn run_memory_warm_start(
-    app_state: Arc<AppState>,
-    args: WarmStartArgs,
-) -> Result<Value, JsonRpcError> {
-    let budget = args.token_budget.clamp(256, 12000);
-    let focus = run_memory_active_focus(app_state.clone(), ActiveFocusArgs::default()).await?;
-    let focus_payload = focus
-        .get("structuredContent")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let project_guess = focus_payload
-        .get("current_project_guess")
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
-    let pages = ensure_knowledge_pages(app_state.as_ref(), project_guess.as_deref()).await?;
-    let project_pages =
-        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ProjectPage, 6);
-    let claim_pages = filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ClaimPage, 8);
-    let decision_pages =
-        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::DecisionPage, 8);
-    let breakthrough_pages = filter_pages_by_type(
-        &pages,
-        crate::storage::KnowledgePageType::BreakthroughPage,
-        8,
-    );
-
-    let pack = context_runtime::build_context_pack(
-        app_state.as_ref(),
-        ContextRequest {
-            query: args.current_task.clone().unwrap_or_default(),
-            agent_type: args
-                .client_name
-                .clone()
-                .unwrap_or_else(|| "mcp_warm_start".to_string()),
-            budget_tokens: budget,
-            session_id: None,
-            active_files: Vec::new(),
-            project: project_guess.clone(),
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    let recent_results = app_state
-        .store
-        .list_recent_results(24, None)
-        .await
-        .map_err(internal_tool_error)?;
-    let memory_map = load_memories_for_results(&app_state, &recent_results).await?;
-    let recent_contexts = if args.include_recent_activity {
-        build_result_rows(
-            &recent_results.iter().take(12).cloned().collect::<Vec<_>>(),
-            &memory_map,
-            false,
-        )
-    } else {
-        Vec::new()
-    };
-    let next_steps = suggested_next_steps_from_pack(&pack);
-    let open_tasks = if args.include_open_tasks {
-        pack.open_tasks.clone()
-    } else {
-        Vec::new()
-    };
-
-    Ok(tool_success(json!({
-        "orientation": pack.summary,
-        "current_focus": focus_payload.get("likely_intent").cloned().unwrap_or(Value::Null),
-        "likely_project": project_guess,
-        "relevant_project_pages": if args.include_project_context { project_pages } else { Vec::new() },
-        "relevant_claims": claim_pages,
-        "recent_memory_contexts": recent_contexts,
-        "decisions": if args.include_decisions { decision_pages } else { Vec::new() },
-        "breakthroughs": breakthrough_pages,
-        "blockers": pack.known_failures,
-        "todos": open_tasks,
-        "files_and_urls": {
-            "files": pack.relevant_files,
-            "urls": aggregate_urls(&recent_results, &memory_map)
-        },
-        "graph_neighbors": pack.included,
-        "what_the_agent_should_remember": next_steps,
-        "token_budget": budget
-    })))
-}
-
-async fn run_memory_agent_onboarding(
-    app_state: Arc<AppState>,
-    args: AgentOnboardingArgs,
-) -> Result<Value, JsonRpcError> {
-    let budget = args.token_budget.clamp(256, 12000);
-    let pages = ensure_knowledge_pages(app_state.as_ref(), None).await?;
-    let project_pages =
-        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::ProjectPage, 8);
-    let decision_pages =
-        filter_pages_by_type(&pages, crate::storage::KnowledgePageType::DecisionPage, 8);
-    let breakthrough_pages = filter_pages_by_type(
-        &pages,
-        crate::storage::KnowledgePageType::BreakthroughPage,
-        8,
-    );
-    let contradiction_pages = filter_pages_by_type(
-        &pages,
-        crate::storage::KnowledgePageType::ContradictionPage,
-        8,
-    );
-
-    let pack = context_runtime::build_context_pack(
-        app_state.as_ref(),
-        ContextRequest {
-            query: "agent onboarding".to_string(),
-            agent_type: "agent_onboarding".to_string(),
-            budget_tokens: budget,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    Ok(tool_success(json!({
-        "user_profile_context": pack.summary,
-        "active_projects": project_pages,
-        "working_preferences": pack.do_not_do,
-        "current_focus": pack.active_goal,
-        "recurring_constraints": pack.do_not_do,
-        "recent_decisions": decision_pages,
-        "open_blockers": pack.known_failures,
-        "important_tools": pack.relevant_files,
-        "high_value_context_packs": {
-            "context_pack_id": pack.id,
-            "confidence": pack.confidence
-        },
-        "breakthroughs": breakthrough_pages,
-        "contradictions": contradiction_pages
-    })))
 }
 
 async fn run_memory_project_wiki(
@@ -4762,16 +3928,6 @@ fn timestamp_in_window(timestamp: i64, window: &ParsedTimeWindow) -> bool {
     }
     true
 }
-
-fn filter_results_by_window(
-    rows: Vec<crate::storage::SearchResult>,
-    window: &ParsedTimeWindow,
-) -> Vec<crate::storage::SearchResult> {
-    rows.into_iter()
-        .filter(|row| timestamp_in_window(row.timestamp, window))
-        .collect()
-}
-
 async fn fetch_results_in_range(
     app_state: &Arc<AppState>,
     start_ms: Option<i64>,
@@ -4801,20 +3957,6 @@ async fn fetch_results_in_range(
     rows.sort_by_key(|row| row.timestamp);
     Ok(rows)
 }
-
-fn dedupe_results_by_id(
-    rows: Vec<crate::storage::SearchResult>,
-) -> Vec<crate::storage::SearchResult> {
-    let mut seen = HashSet::new();
-    let mut deduped = Vec::new();
-    for row in rows {
-        if seen.insert(row.id.clone()) {
-            deduped.push(row);
-        }
-    }
-    deduped
-}
-
 async fn load_memories_for_results(
     app_state: &Arc<AppState>,
     rows: &[crate::storage::SearchResult],
@@ -4851,63 +3993,6 @@ async fn load_memories_for_results(
     }
     Ok(map)
 }
-
-async fn fetch_related_memories(
-    app_state: &Arc<AppState>,
-    memories: &[crate::storage::MemoryRecord],
-    limit: usize,
-) -> Result<Vec<crate::storage::MemoryRecord>, JsonRpcError> {
-    let seed_rows = memories
-        .iter()
-        .map(memory_to_search_result)
-        .collect::<Vec<_>>();
-    let seeds = load_memories_for_results(app_state, &seed_rows).await?;
-    let mut ids = HashSet::new();
-    for memory in seeds.values() {
-        if let Some(parent) = memory.parent_id.as_deref() {
-            ids.insert(parent.to_string());
-        }
-        for related in &memory.related_ids {
-            ids.insert(related.clone());
-        }
-        for related in &memory.consolidated_from {
-            ids.insert(related.clone());
-        }
-    }
-    let mut ids = ids.into_iter().collect::<Vec<_>>();
-    ids.sort();
-    let target_rows = ids
-        .into_iter()
-        .take(limit.max(1))
-        .map(|id| crate::storage::SearchResult {
-            id,
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
-    let targets = load_memories_for_results(app_state, &target_rows).await?;
-    let mut seen = HashSet::new();
-    let mut results = targets
-        .into_values()
-        .filter(|memory| seen.insert(memory.id.clone()))
-        .collect::<Vec<_>>();
-    results.sort_by_key(|memory| std::cmp::Reverse(memory.timestamp));
-    results.truncate(limit.max(1));
-    Ok(results)
-}
-
-fn derive_window_from_results(rows: &[crate::storage::SearchResult]) -> (Option<i64>, Option<i64>) {
-    if rows.is_empty() {
-        return (None, None);
-    }
-    let mut min_ts = i64::MAX;
-    let mut max_ts = i64::MIN;
-    for row in rows {
-        min_ts = min_ts.min(row.timestamp);
-        max_ts = max_ts.max(row.timestamp);
-    }
-    (Some(min_ts), Some(max_ts))
-}
-
 fn build_result_rows(
     rows: &[crate::storage::SearchResult],
     memory_map: &HashMap<String, crate::storage::MemoryRecord>,
@@ -4923,41 +4008,6 @@ fn build_result_rows(
         })
         .collect()
 }
-
-fn build_memory_rows(memories: &[crate::storage::MemoryRecord], include_raw: bool) -> Vec<Value> {
-    memories
-        .iter()
-        .map(|memory| {
-            let mut base = json!({
-                "memory_id": memory.id,
-                "timestamp": memory.timestamp,
-                "app_name": memory.app_name,
-                "text_source": crate::memory_quality::text_source_from_raw_evidence(&memory.raw_evidence),
-                "window_title": memory.window_title,
-                "url": memory.url,
-                "project": (!memory.project.is_empty()).then(|| memory.project.clone()),
-                "snippet": memory.snippet,
-                "display_summary": memory.display_summary,
-                "files_touched": memory.files_touched,
-                "errors": memory.errors,
-                "decisions": memory.decisions,
-                "next_steps": memory.next_steps,
-                "source_type": if memory.is_agent_note() { crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string() } else { infer_source_type(memory.url.as_deref(), &memory.app_name) },
-                "added_by": memory.added_by(),
-                "confidence": memory.extraction_confidence
-            });
-            if include_raw {
-                base["raw"] = json!({
-                    "text": trim_chars(&memory.text, 1200),
-                    "clean_text": trim_chars(&memory.clean_text, 1200),
-                    "internal_context": trim_chars(&memory.internal_context, 900)
-                });
-            }
-            base
-        })
-        .collect()
-}
-
 fn result_row_to_json(
     row: &crate::storage::SearchResult,
     memory: Option<&crate::storage::MemoryRecord>,
@@ -5025,33 +4075,6 @@ fn aggregate_urls(
     urls.truncate(50);
     urls
 }
-
-fn aggregate_files(
-    rows: &[crate::storage::SearchResult],
-    memory_map: &HashMap<String, crate::storage::MemoryRecord>,
-) -> Vec<Value> {
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for memory in rows.iter().filter_map(|row| memory_map.get(&row.id)) {
-        for file in &memory.files_touched {
-            if !file.trim().is_empty() {
-                *counts.entry(file.clone()).or_default() += 1;
-            }
-        }
-    }
-    let mut files = counts
-        .into_iter()
-        .map(|(path, count)| json!({ "path": path, "count": count }))
-        .collect::<Vec<_>>();
-    files.sort_by(|left, right| {
-        right["count"]
-            .as_u64()
-            .unwrap_or_default()
-            .cmp(&left["count"].as_u64().unwrap_or_default())
-    });
-    files.truncate(80);
-    files
-}
-
 fn suggested_next_steps_from_pack(pack: &crate::storage::ContextPack) -> Vec<String> {
     let mut steps = Vec::new();
     if let Some(step) = pack.recommended_next_action.as_deref() {
@@ -5333,9 +4356,10 @@ mod tests {
             ..Default::default()
         };
         let result = memory_to_search_result(&memory);
-        let mut rows = build_memory_rows(&[memory], false);
-        rows.push(result_row_to_json(&result, None, false));
-        for row in rows {
+        for row in [
+            result_row_to_json(&result, Some(&memory), false),
+            result_row_to_json(&result, None, false),
+        ] {
             assert_eq!(row["source_type"], "agent");
             assert_eq!(row["added_by"], "Claude Code");
         }
@@ -5353,9 +4377,10 @@ mod tests {
                 ..Default::default()
             };
             let result = memory_to_search_result(&memory);
-            let mut rows = build_memory_rows(&[memory], false);
-            rows.push(result_row_to_json(&result, None, false));
-            for row in rows {
+            for row in [
+                result_row_to_json(&result, Some(&memory), false),
+                result_row_to_json(&result, None, false),
+            ] {
                 assert_eq!(row["text_source"], expected);
                 assert!(row.get("raw").is_none());
                 assert!(row.get("raw_evidence").is_none());
@@ -5523,7 +4548,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_visibility_full_context_helpers_authorize_actual_records_and_keep_notes() {
+    fn mcp_visibility_row_and_timeline_helpers_authorize_actual_records_and_keep_notes() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let dir = tempdir().unwrap();
         let state = related_test_state(dir.path());
@@ -5577,14 +4602,8 @@ mod tests {
                 .unwrap()
                 .contains("PRIVATE_STALE")
         );
-        assert!(!serde_json::to_string(&aggregate_files(&[stale], &map))
-            .unwrap()
-            .contains("PRIVATE_STALE"));
 
         assert!(!serde_json::to_string(&aggregate_urls(&rows, &map))
-            .unwrap()
-            .contains("PRIVATE"));
-        assert!(!serde_json::to_string(&aggregate_files(&rows, &map))
             .unwrap()
             .contains("PRIVATE"));
         let built = build_result_rows(&rows, &map, true);
@@ -5592,19 +4611,6 @@ mod tests {
         assert!(built
             .iter()
             .all(|row| matches!(row["memory_id"].as_str(), Some("visible" | "note"))));
-        let related = runtime
-            .block_on(fetch_related_memories(&state, &[visible], 12))
-            .unwrap();
-        assert_eq!(
-            related.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            ["note"]
-        );
-        // A stale supplied seed cannot override the current stored visibility.
-        blocked.app_name = "Editor".into();
-        assert!(runtime
-            .block_on(fetch_related_memories(&state, &[blocked], 12))
-            .unwrap()
-            .is_empty());
         let timeline = runtime
             .block_on(fetch_results_in_range(
                 &state,
@@ -5617,57 +4623,6 @@ mod tests {
         assert!(timeline
             .iter()
             .all(|row| matches!(row.id.as_str(), "visible" | "note")));
-    }
-
-    #[test]
-    fn mcp_visibility_namespace_timeline_checks_all_derived_event_sources() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let dir = tempdir().unwrap();
-        let state = related_test_state(dir.path());
-        let visible = related_test_record("visible");
-        let mut blocked = related_test_record("blocked");
-        blocked.app_name = "PrivateWorkspace".into();
-        let mut note = related_test_record("note");
-        note.source_type = "agent".into();
-        runtime
-            .block_on(
-                state
-                    .store
-                    .add_batch_preserving_ids(&[visible, blocked, note]),
-            )
-            .unwrap();
-        let event = |id: &str, source: &str| crate::storage::ActivityEvent {
-            id: id.into(),
-            memory_id: source.into(),
-            title: id.into(),
-            end_time: 1_800_000_000_000,
-            source_memory_ids: vec![source.into()],
-            ..Default::default()
-        };
-        let mut mixed = event("PRIVATE_MIXED", "visible");
-        mixed.source_memory_ids.push("blocked".into());
-        let mut secret = event("PRIVATE_SECRET", "visible");
-        secret.privacy_class = crate::storage::PrivacyClass::Secret;
-        runtime
-            .block_on(state.store.upsert_activity_events(&[
-                event("Visible event", "visible"),
-                event("PRIVATE_BLOCKED", "blocked"),
-                event("PRIVATE_NOTE", "note"),
-                event("PRIVATE_MISSING", "missing"),
-                mixed,
-                secret,
-            ]))
-            .unwrap();
-        state.config.write().blocklist = vec!["privateworkspace".into()];
-        let response = runtime
-            .block_on(run_fndr_namespace_timeline(state, json!({"limit":20})))
-            .unwrap();
-        assert_eq!(
-            response["structuredContent"]["entries"],
-            json!([{
-                "memory_id":"visible", "timestamp":1_800_000_000_000_i64, "title":"Visible event"
-            }])
-        );
     }
 
     #[test]
@@ -5707,7 +4662,10 @@ mod tests {
         state.config.write().blocklist = vec!["privateworkspace".into()];
 
         let response = runtime
-            .block_on(run_memory_projects(state.clone(), ProjectsArgs { limit: 20 }))
+            .block_on(run_memory_projects(
+                state.clone(),
+                ProjectsArgs { limit: 20 },
+            ))
             .unwrap();
         assert_eq!(
             response["structuredContent"]["projects"],
@@ -5740,7 +4698,10 @@ mod tests {
                 },
             ))
             .unwrap();
-        assert_eq!(context["structuredContent"]["errors"], json!(["Visible project"]));
+        assert_eq!(
+            context["structuredContent"]["errors"],
+            json!(["Visible project"])
+        );
         assert!(!context.to_string().contains("PRIVATE_"));
         assert_eq!(
             runtime
@@ -5999,59 +4960,6 @@ mod tests {
         assert!(!response.to_string().contains("blocked"));
         assert!(!response.to_string().contains("missing"));
         assert!(!response.to_string().contains("PRIVATE_STALE"));
-    }
-
-    #[test]
-    fn mcp_visibility_recent_context_wrappers_preserve_newest_first() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let dir = tempdir().unwrap();
-        let state = related_test_state(dir.path());
-        let now = chrono::Utc::now().timestamp_millis();
-        let rows = ["oldest", "middle", "newest"]
-            .into_iter()
-            .enumerate()
-            .map(|(i, id)| {
-                let mut row = related_test_record(id);
-                row.timestamp = now - 3000 + i as i64 * 1000;
-                row
-            })
-            .collect::<Vec<_>>();
-        runtime
-            .block_on(state.store.add_batch_preserving_ids(&rows))
-            .unwrap();
-        let brief = runtime
-            .block_on(run_memory_agent_brief(
-                state.clone(),
-                AgentBriefArgs {
-                    topic: String::new(),
-                    token_budget: 1800,
-                    include_raw_evidence: false,
-                },
-            ))
-            .unwrap();
-        let pack = runtime
-            .block_on(run_memory_get_context_pack(
-                state,
-                GetContextPackArgs {
-                    topic: String::new(),
-                    time_window: None,
-                    depth: "shallow".into(),
-                },
-            ))
-            .unwrap();
-        for rows in [
-            &brief["structuredContent"]["facts"],
-            &pack["structuredContent"]["relevant_memories"],
-        ] {
-            assert_eq!(
-                rows.as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row["memory_id"].as_str().unwrap())
-                    .collect::<Vec<_>>(),
-                ["newest", "middle", "oldest"]
-            );
-        }
     }
 
     #[test]
@@ -6584,15 +5492,6 @@ mod tests {
                     .expect(name)
             };
 
-            let full_context = call("memory.search_full_context");
-            assert_eq!(
-                ids(
-                    &full_context["structuredContent"]["semantic_matches"],
-                    "memory_id"
-                ),
-                screen,
-                "memory.search_full_context: {query}"
-            );
             let fndr_search = call("fndr.search");
             assert_eq!(
                 ids(&fndr_search["structuredContent"]["cards"], "id"),
@@ -6819,7 +5718,9 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         runtime.block_on(async move {
             let _ = stop().await;
-            let status = start(None, app_state, None, Some(0)).await.expect("start mcp");
+            let status = start(None, app_state, None, Some(0))
+                .await
+                .expect("start mcp");
             let base_url = format!("http://{}:{}/", status.host, status.port);
             wait_for_server(&base_url).await;
 
@@ -7129,8 +6030,8 @@ mod tests {
                 .filter_map(|tool| tool["name"].as_str())
                 .collect::<Vec<_>>();
             assert_eq!(names, vec![
-                "memory.search_full_context", "memory.get_context_pack",
-                "memory.timeline", "memory.source_evidence",
+                "memory.source_evidence", "fndr.search",
+                "fndr.build_context_pack", "fndr.timeline",
             ]);
 
             let denied: Value = client.post(&status.endpoint)
@@ -7145,7 +6046,7 @@ mod tests {
             assert!(action.to_string().contains("outside this token's tool grant"));
             let allowed: Value = client.post(&status.endpoint)
                 .bearer_auth(&read_token)
-                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{}})))
+                .json(&call("tools/call", json!({"name":"fndr.timeline","arguments":{}})))
                 .send().await.unwrap().json().await.unwrap();
             assert!(!allowed.to_string().contains("outside this token's tool grant"));
             let resource: Value = client.post(&status.endpoint)
@@ -7154,7 +6055,6 @@ mod tests {
                 .send().await.unwrap().json().await.unwrap();
             assert_eq!(resource["error"]["code"], -32601);
             for (name, arguments) in [
-                ("memory.search_full_context", json!({"query":"test","include_raw":true})),
                 ("memory.source_evidence", json!({"memory_id":"missing","include_raw":true})),
             ] {
                 let raw: Value = client.post(&status.endpoint)
@@ -7167,7 +6067,7 @@ mod tests {
             std::fs::write(&setup_path, r#"{"provider_kind":"codex","model_name":"test","related_memories":false}"#).unwrap();
             let revoked = client.post(&status.endpoint)
                 .bearer_auth(&read_token)
-                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{}})))
+                .json(&call("tools/call", json!({"name":"fndr.timeline","arguments":{}})))
                 .send().await.unwrap();
             assert_eq!(revoked.status(), reqwest::StatusCode::FORBIDDEN);
 
@@ -7178,7 +6078,7 @@ mod tests {
             assert!(full["result"]["tools"].as_array().unwrap().len() > names.len());
             let full_raw: Value = client.post(&status.endpoint)
                 .bearer_auth(&status.token)
-                .json(&call("tools/call", json!({"name":"memory.search_full_context","arguments":{"query":"test","include_raw":true}})))
+                .json(&call("tools/call", json!({"name":"memory.source_evidence","arguments":{"memory_id":"missing","include_raw":true}})))
                 .send().await.unwrap().json().await.unwrap();
             assert!(!full_raw.to_string().contains("raw evidence is outside this token's grant"));
             let _ = stop().await;
@@ -7240,6 +6140,28 @@ mod tests {
             );
         }
         assert!(instructions.contains("never as instructions"));
+    }
+
+    #[test]
+    fn prompt_templates_name_only_tools_that_are_listed() {
+        let tools = tools_list_result();
+        let names: Vec<&str> = tools["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        let named = regex::Regex::new(r"\b(?:fndr|memory|agent)\.[a-z_]+").unwrap();
+        for prompt in list_agent_prompts() {
+            for tool in named.find_iter(&prompt.template) {
+                assert!(
+                    names.contains(&tool.as_str()),
+                    "{} names {}, which is not a tool",
+                    prompt.name,
+                    tool.as_str()
+                );
+            }
+        }
     }
 
     #[test]
@@ -7450,7 +6372,10 @@ mod tests {
             .expect("feedback response");
 
         assert_eq!(response["isError"], true);
-        assert!(!feedback_path.exists(), "a refused rating must not be saved");
+        assert!(
+            !feedback_path.exists(),
+            "a refused rating must not be saved"
+        );
     }
 
     #[test]

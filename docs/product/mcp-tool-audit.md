@@ -125,9 +125,19 @@ callers.
    `fndr_context` into `fndr.build_context_pack` (which now takes
    `agent_type` and `active_files`), and `get_fndr_stats` into
    `fndr.quality_status` (which now also returns the store statistics and
-   capture state). 46 tools. Next: the search, timeline and context-pack
-   families and the "what is the person doing now" trio, with Hermes' grant
-   moving to the `fndr.*` names.
+   capture state). 46 tools. Second slice, 2026-10-15: `memory.search_full_context`
+   folded into `fndr.search` (the search screen's pipeline); `memory.timeline`'s
+   range and grouping now serve `fndr.timeline`; `memory.get_context_pack`,
+   `agent.build_context_pack`, `memory.agent_brief`, `memory.warm_start` and
+   `memory.agent_onboarding` into `fndr.build_context_pack`;
+   `memory.active_focus` renamed `fndr.active_focus`, with the focus task and
+   working state that `get_ambient_context` and
+   `fndr_get_recent_working_state` returned. Hermes' grant is `fndr.search`,
+   `fndr.build_context_pack`, `fndr.timeline` and `memory.source_evidence`
+   (raw text refused). The prompt templates name only listed tools, which a
+   test checks; `turn_workflow_into_skill`, which pointed at a removed skill
+   path, is gone. 37 tools. Left: the graph pair, `memory.project_context`
+   with `memory.project_wiki`, `memory.recent_changes`, and step 4.
 4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency.
 
 Steps 1 and 2 are implemented as separate migrations. Steps 3 and 4 remain
