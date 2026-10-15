@@ -36,10 +36,12 @@ describe("release workflow", () => {
     it("builds Rust against OpenSSL 3 wherever the macOS image is used", () => {
         // The image carries OpenSSL 4 since 2026-10-13, and llama.cpp's bundled
         // HTTP client does not compile against it.
-        const pinned = 'OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)';
         const gate = read(".github/workflows/retrieval-gate.yml");
         for (const macJob of [job(test, "rust"), job(release, "build-release"), gate]) {
-            expect(macJob).toContain(pinned);
+            expect(macJob).toContain('prefix="$(brew --prefix openssl@3)"');
+            expect(macJob).toContain('OPENSSL_ROOT_DIR=$prefix');
+            expect(macJob).toContain('CPATH=$prefix/include');
+            expect(macJob).toContain("key: openssl3");
         }
     });
 
