@@ -1007,6 +1007,7 @@ fn main() -> std::process::ExitCode {
             {
                 return;
             }
+            tracing::info!("Quit requested; draining model resources");
             shutdown_native_helpers(app_handle);
             let state = app_handle.state::<Arc<AppState>>().inner().clone();
             let handle = app_handle.clone();

@@ -110,6 +110,7 @@ impl TextRuntime {
                         }
                     }
                 };
+                tracing::info!(model = %model_id, "Text inference runtime ready");
                 let _ = ready.send(Ok(()));
                 while let Ok(request) = receiver.recv() {
                     if worker_stop.load(Ordering::SeqCst) {
