@@ -392,10 +392,18 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         continuation_of,
         reopen_target,
         reopen_page: result.reopen_page,
-        insight_what_happened: result.insight_what_happened.clone(),
-        insight_why_mattered: result.insight_why_mattered.clone(),
-        insight_what_changed: result.insight_what_changed.clone(),
-        insight_context_thread: result.insight_context_thread.clone(),
+        insight_what_happened: crate::search::memory_cards::safe_insight(
+            &result.insight_what_happened,
+        ),
+        insight_why_mattered: crate::search::memory_cards::safe_insight(
+            &result.insight_why_mattered,
+        ),
+        insight_what_changed: crate::search::memory_cards::safe_insight(
+            &result.insight_what_changed,
+        ),
+        insight_context_thread: crate::search::memory_cards::safe_thread(
+            &result.insight_context_thread,
+        ),
         insight_spans_json: result.insight_spans_json.clone(),
         insight_card_confidence: result.insight_card_confidence,
         timeline_action_class: crate::timeline::classify_action_class(&result)
@@ -1296,6 +1304,29 @@ mod tests {
             crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
         let card = memory_card_from_result(result);
         assert_eq!(serde_json::to_value(card).unwrap()["text_source"], "ocr");
+    }
+
+    #[test]
+    fn direct_vault_card_hides_a_stored_goal_identifier() {
+        let record = MemoryRecord {
+            id: "checklist".into(),
+            window_title: "Launch checklist".into(),
+            insight_what_happened: "You were listening to a live performance.".into(),
+            insight_why_mattered: "Goal: organizing_information.".into(),
+            insight_context_thread: "session …bb3a".into(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert!(card.insight_why_mattered.is_empty());
+        assert!(card.insight_context_thread.is_empty());
+        assert_eq!(card.window_title, "Launch checklist");
+        assert_eq!(card.evidence_ids, vec!["checklist"]);
+        assert_eq!(
+            card.insight_what_happened,
+            "Listened to a live performance."
+        );
     }
 
     #[test]

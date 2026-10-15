@@ -73,6 +73,14 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 
 **Ownership and checks.** Rust `resume_work` owns grouping, ordering and current visibility rules. `WorkSetOpener` owns the shared foreground reopen state; Home composes the existing sections and IPC wrappers. This change adds no storage, command or model path. Check the Home component tests and typecheck, inspect the first screen and action states in the running browser UI in both themes, then inspect the native Tauri window with a synthetic profile whose capture is paused. Browser IPC fixtures establish presentation only; real reopen behavior needs a native result from an actual supported source.
 
+### Search and Vault insight display contract, October 14, 2026
+
+**Purpose.** A result should explain the captured work in ordinary language before offering its evidence and actions. Search and Vault use the same insight display rules for grouped and direct cards. Rows with no useful explanation stay absent instead of showing an internal value such as `Goal: organizing_information.`.
+
+**Boundary.** Display shaping may omit a stored machine identifier or older instruction-like text. It does not rewrite the record or its embedding, so the current vector space and source evidence stay intact. The stored fallback that created these values remains a separate migration and retrieval decision.
+
+**Check.** Verify the old-record cases in Rust card-projection tests and inspect an actual Tauri Search result from the paused synthetic profile. The card should retain its title, summary, source and actions when the unusable insight row is omitted.
+
 ### Screen Guide overlay
 
 Screen Guide should feel like a small native FNDR affordance, not a second app.
