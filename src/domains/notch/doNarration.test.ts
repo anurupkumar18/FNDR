@@ -66,6 +66,8 @@ describe("narrate", () => {
         const said = lines(...start, event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Add to cart" }))[2];
         expect(said?.urgent).toBe(true);
         expect(said?.text).toBe("I need your okay to click Add to cart. Tap Allow.");
+        const paste = lines(...start, event({ kind: "approval", runId: "r1", requestKey: "p", tool: "paste", summary: "Paste “see you at five” into Slack" }))[2];
+        expect(paste?.text).toBe("I need your okay to paste “see you at five” into Slack. Tap Allow.");
     });
 
     it("says what it refused to do", () => {
