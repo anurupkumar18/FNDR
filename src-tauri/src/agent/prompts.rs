@@ -32,7 +32,7 @@ fn prompt_specs() -> &'static [(&'static str, &'static str, &'static str, &'stat
             "resume_work",
             "Resume Work",
             "Reconstruct the user's recent work and propose the next safe step.",
-            "Call agent.privacy_status, then agent.build_context_pack in ask or plan mode for the user's goal. Cite FNDR memories by id, explain uncertainty, and do not take actions unless the user approves them.",
+            "Call fndr.privacy_status, then agent.build_context_pack in ask or plan mode for the user's goal. Cite FNDR memories by id, explain uncertainty, and do not take actions unless the user approves them.",
         ),
         (
             "debug_with_history",
@@ -44,7 +44,7 @@ fn prompt_specs() -> &'static [(&'static str, &'static str, &'static str, &'stat
             "write_status_update",
             "Write Status Update",
             "Draft a progress update grounded in captured work.",
-            "Call agent.privacy_status and agent.build_context_pack. Group evidence by theme, cite memory ids, exclude sensitive/private context, and mark uncertain claims.",
+            "Call fndr.privacy_status and agent.build_context_pack. Group evidence by theme, cite memory ids, exclude sensitive/private context, and mark uncertain claims.",
         ),
         (
             "prepare_for_meeting",

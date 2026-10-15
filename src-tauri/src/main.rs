@@ -694,7 +694,6 @@ fn main() {
             ipc::commands::retrieval::fndr_search,
             ipc::commands::retrieval::fndr_answer,
             ipc::commands::retrieval::fndr_build_context_pack,
-            ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
             ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,

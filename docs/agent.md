@@ -76,7 +76,7 @@ All in `src-tauri/src/inference/prompts.rs`, fingerprinted: `HERMES_CHAT_INSTRUC
 
 ## The MCP agent tools
 
-Outside agents that connect to FNDR over MCP can call `agent.build_context_pack`, `agent.run`, `agent.privacy_status`, `agent.explain_retrieval`, `agent.rate_result`, `agent.list_prompts` and `agent.get_prompt`. These use the `src-tauri/src/agent/` module and load no model.
+Outside agents that connect to FNDR over MCP can call `agent.build_context_pack`, `agent.run`, `fndr.privacy_status`, `agent.explain_retrieval`, `agent.rate_result`, `agent.list_prompts` and `agent.get_prompt`. These use the `src-tauri/src/agent/` module and load no model.
 
 ```text
 memory records / graph / search

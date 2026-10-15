@@ -20,7 +20,7 @@ Configuration is documented in `README.md`:
 
 - `agent.build_context_pack`: returns the typed `AgentContextPack` for Ask / Plan / Act / Learn.
 - `agent.run`: builds a pack, persists an audit record, and returns deterministic local output with policy and blocked action details. It does not execute dangerous actions.
-- `agent.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
+- `fndr.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
 - `agent.explain_retrieval`: explains selected memories, qualitative ranking signals, dropped context, redactions, policy reasons, and limitations.
 - `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking. Requires a valid MCP token, actions enabled, and "Let assistants add notes" enabled.
 - `agent.list_prompts`: lists FNDR-specific prompt templates.
@@ -50,7 +50,7 @@ The MCP server now supports `prompts/list` and `prompts/get` for:
 - `explain_my_thinking`
 - `turn_workflow_into_skill`
 
-Each prompt tells the external agent to call FNDR tools first, cite evidence, respect `agent.privacy_status`, explain uncertainty, and avoid actions without approval.
+Each prompt tells the external agent to call FNDR tools first, cite evidence, respect `fndr.privacy_status`, explain uncertainty, and avoid actions without approval.
 
 ## Security Model
 

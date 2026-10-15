@@ -277,13 +277,6 @@ export async function fndrGetMemorySourceStatements(memoryId: string): Promise<S
     return invoke("fndr_get_memory_source_statements", { memoryId });
 }
 
-export async function fndrGetMemorySubgraph(
-    seedIds: string[],
-    maxHops = 2,
-): Promise<{ seed_ids: string[]; node_count: number; edge_count: number }> {
-    return invoke("fndr_get_memory_subgraph", { seedIds, maxHops });
-}
-
 export async function fndrTimeline(args?: {
     limit?: number;
     project?: string;

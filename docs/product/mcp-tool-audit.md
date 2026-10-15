@@ -117,7 +117,17 @@ callers.
    MCP and UI checks pass.
 2. Remove `memory.search_raw` and `search_memories` (pure duplicates). Done.
 3. Point every merge candidate's callers at its `fndr.*` equivalent, then
-   remove the old name once nothing calls it.
+   remove the old name once nothing calls it. In progress (owner decision,
+   2026-10-15). First slice, 2026-10-15: `fndr.get_memory_subgraph` removed
+   (it always returned an empty graph, and so did the Memory Vault card's
+   "Connected context" line that called its app twin); `agent.privacy_status`
+   folded into `fndr.privacy_status`, `ask_fndr` into `fndr.answer`,
+   `fndr_context` into `fndr.build_context_pack` (which now takes
+   `agent_type` and `active_files`), and `get_fndr_stats` into
+   `fndr.quality_status` (which now also returns the store statistics and
+   capture state). 46 tools. Next: the search, timeline and context-pack
+   families and the "what is the person doing now" trio, with Hermes' grant
+   moving to the `fndr.*` names.
 4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency.
 
 Steps 1 and 2 are implemented as separate migrations. Steps 3 and 4 remain

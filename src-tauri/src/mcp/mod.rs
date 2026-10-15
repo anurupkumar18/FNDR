@@ -420,11 +420,6 @@ struct ToolCallParams {
 }
 
 #[derive(Debug, Deserialize)]
-struct AskFndrArgs {
-    query: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct StartMeetingArgs {
     title: String,
     #[serde(default)]
@@ -1937,14 +1932,7 @@ fn tools_list_result() -> Value {
                     "required": ["user_goal"]
                 }
             },
-            {
-                "name": "agent.privacy_status",
-                "description": "Return FNDR Agent/MCP privacy posture: local-only defaults, read-only default mode, redaction defaults, and blocked app/domain counts.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
+
             {
                 "name": "agent.explain_retrieval",
                 "description": "Explain why FNDR Agent selected memories and dropped/redacted context for a run, context pack, or query.",
@@ -2211,25 +2199,8 @@ fn tools_list_result() -> Value {
                     }
                 }
             },
-            {
-                "name": "ask_fndr",
-                "description": "Ask FNDR a question and get an answer grounded in captured memories. Times out after 30 seconds.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string", "description": "Question about captured activity" }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "get_fndr_stats",
-                "description": "Return current capture/storage stats.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
+
+
             {
                 "name": "start_meeting",
                 "description": "Start a meeting recording session (Whisper large-v3 turbo GGUF on demand).",
@@ -2288,21 +2259,7 @@ fn tools_list_result() -> Value {
                     }
                 }
             },
-            {
-                "name": "fndr_context",
-                "description": "Build a source-backed FNDR context pack for an agent session.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "agent_type": { "type": "string" },
-                        "budget_tokens": { "type": "integer", "minimum": 200, "maximum": 12000 },
-                        "session_id": { "type": "string" },
-                        "active_files": { "type": "array", "items": { "type": "string" } },
-                        "project": { "type": "string" }
-                    }
-                }
-            },
+
             {
                 "name": "fndr_search_code_context",
                 "description": "Return coding-oriented context for the active repo and files.",
@@ -2387,13 +2344,15 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "fndr.build_context_pack",
-                "description": "Build a ContextPack (now upgraded by the agentic-graph-rag pipeline under the hood).",
+                "description": "Build a source-backed context pack for a goal: summary, evidence with memory ids, files, URLs, decisions and blockers, within a token budget.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string" },
                         "session_id": { "type": "string" },
                         "project": { "type": "string" },
+                        "agent_type": { "type": "string", "description": "Who reads the pack, such as coding_agent or chat_agent." },
+                        "active_files": { "type": "array", "items": { "type": "string" }, "description": "Files open in the agent's editor, to weight related evidence." },
                         "budget_tokens": { "type": "integer", "minimum": 256, "maximum": 4000 }
                     },
                     "required": ["query"]
@@ -2411,18 +2370,7 @@ fn tools_list_result() -> Value {
                     "required": ["memory_id"]
                 }
             },
-            {
-                "name": "fndr.get_memory_subgraph",
-                "description": "Return a bounded subgraph descriptor for the given seed memory ids. (Typed-graph persistence is still pending; descriptor reports zero nodes/edges until that lands.)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "seed_ids": { "type": "array", "items": { "type": "string" } },
-                        "max_hops": { "type": "integer", "minimum": 1, "maximum": 4 }
-                    },
-                    "required": ["seed_ids"]
-                }
-            },
+
             {
                 "name": "fndr.timeline",
                 "description": "Return the recent activity timeline (most recent memories with timestamps and titles).",
@@ -2436,12 +2384,12 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "fndr.quality_status",
-                "description": "Aggregate storage quality counters: stored / dropped / flagged.",
+                "description": "Capture and storage status: memories stored and dropped, store statistics, and whether capture is running or paused.",
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "fndr.privacy_status",
-                "description": "Privacy status snapshot (alias of agent.privacy_status under the fndr.* namespace).",
+                "description": "FNDR's privacy posture for agents: local-only defaults, read-only default mode, redaction defaults and blocklist state.",
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
@@ -2631,7 +2579,6 @@ async fn call_tool(
                 })?;
             run_agent_run(app_state, args).await
         }
-        "agent.privacy_status" => run_agent_privacy_status(app_state).await,
         "agent.explain_retrieval" => {
             let args: ExplainRetrievalRequest =
                 serde_json::from_value(params.arguments).unwrap_or_default();
@@ -2776,15 +2723,6 @@ async fn call_tool(
                 });
             run_memory_recent_changes(app_state, args).await
         }
-        "ask_fndr" => {
-            let args: AskFndrArgs =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid ask_fndr args: {err}"),
-                })?;
-            run_ask_fndr(app_state, args).await
-        }
-        "get_fndr_stats" => run_get_stats(app_state).await,
         "start_meeting" => {
             let args: StartMeetingArgs =
                 serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
@@ -2816,14 +2754,6 @@ async fn call_tool(
                     limit: default_ambient_limit(),
                 });
             run_get_ambient_context(app_state, args).await
-        }
-        "fndr_context" => {
-            let args: ContextRequest =
-                serde_json::from_value(params.arguments).map_err(|err| JsonRpcError {
-                    code: -32602,
-                    message: format!("Invalid fndr_context args: {err}"),
-                })?;
-            run_fndr_context(app_state, args).await
         }
         "fndr_search_code_context" => {
             let args: CodeContextRequest =
@@ -2867,125 +2797,12 @@ async fn call_tool(
         "fndr.get_related_memories" => {
             run_fndr_namespace_related_memories(app_state, params.arguments).await
         }
-        "fndr.get_memory_subgraph" => {
-            run_fndr_namespace_subgraph(app_state, params.arguments).await
-        }
         "fndr.timeline" => run_fndr_namespace_timeline(app_state, params.arguments).await,
         "fndr.quality_status" => run_fndr_namespace_quality_status(app_state).await,
         "fndr.privacy_status" => run_agent_privacy_status(app_state).await,
         "fndr.open_target" => run_fndr_namespace_open_target(app_state, params.arguments).await,
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
-}
-
-async fn run_ask_fndr(app_state: Arc<AppState>, args: AskFndrArgs) -> Result<Value, JsonRpcError> {
-    let pack = context_runtime::build_context_pack(
-        &app_state,
-        ContextRequest {
-            query: args.query.clone(),
-            agent_type: "chat_agent".to_string(),
-            budget_tokens: 1600,
-            session_id: None,
-            active_files: Vec::new(),
-            project: None,
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    let (_, results) = context_runtime::retrieve_search_results(
-        &app_state,
-        &context_runtime::RetrieveRequest {
-            query: args.query.clone(),
-            limit: 8,
-            ..Default::default()
-        },
-    )
-    .await
-    .map_err(internal_tool_error)?;
-
-    if results.is_empty() && pack.evidence.is_empty() && pack.relevant_files.is_empty() {
-        return Ok(tool_success(json!({
-            "answer": "I couldn't find relevant memories for that question yet.",
-            "sources": [],
-            "context_pack": pack
-        })));
-    }
-
-    let mut context_sections = Vec::new();
-    context_sections.push(context_runtime::render_pack_markdown(&pack));
-    if !results.is_empty() {
-        context_sections.push(
-            results
-                .iter()
-                .take(8)
-                .map(|r| {
-                    format!(
-                        "[{}] App: {} | Window: {} | Snippet: {} | URL: {}",
-                        r.timestamp,
-                        r.app_name,
-                        r.window_title,
-                        r.snippet,
-                        r.url.clone().unwrap_or_else(|| "n/a".to_string())
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
-    let context = context_sections.join("\n\n");
-
-    let answer_future = async {
-        match app_state.ensure_inference_engine().await {
-            Ok(Some(engine)) => engine.answer(&args.query, &context).await,
-            Ok(None) => pack.summary.clone(),
-            Err(err) => format!("AI intelligence is temporarily unavailable: {}", err),
-        }
-    };
-
-    // 30-second timeout on LLM inference so slow models don't block forever
-    let answer = tokio::time::timeout(Duration::from_secs(30), answer_future)
-        .await
-        .unwrap_or_else(|_| "Inference timed out after 30 seconds.".to_string());
-
-    let sources: Vec<Value> = results
-        .iter()
-        .take(5)
-        .map(|r| {
-            json!({
-                "id": r.id,
-                "timestamp": r.timestamp,
-                "app_name": r.app_name,
-                "window_title": r.window_title,
-                "snippet": r.snippet,
-                "url": r.url
-            })
-        })
-        .collect();
-
-    Ok(tool_success(json!({
-        "answer": answer,
-        "sources": sources,
-        "context_pack": pack
-    })))
-}
-
-async fn run_get_stats(app_state: Arc<AppState>) -> Result<Value, JsonRpcError> {
-    let stats = app_state
-        .store
-        .get_stats()
-        .await
-        .map_err(internal_tool_error)?;
-
-    Ok(tool_success(json!({
-        "stats": stats,
-        "capture": {
-            "is_capturing": app_state.is_capturing(),
-            "is_paused": app_state.is_paused.load(std::sync::atomic::Ordering::SeqCst),
-            "frames_captured": app_state.frames_captured.load(std::sync::atomic::Ordering::Relaxed),
-            "frames_dropped": app_state.frames_dropped.load(std::sync::atomic::Ordering::Relaxed)
-        }
-    })))
 }
 
 async fn run_start_meeting(args: StartMeetingArgs) -> Result<Value, JsonRpcError> {
@@ -3050,16 +2867,6 @@ async fn run_get_ambient_context(
         "summary": working_state.summary,
         "working_state": working_state
     })))
-}
-
-async fn run_fndr_context(
-    app_state: Arc<AppState>,
-    args: ContextRequest,
-) -> Result<Value, JsonRpcError> {
-    let pack = context_runtime::build_context_pack(&app_state, args)
-        .await
-        .map_err(internal_tool_error)?;
-    Ok(tool_success(json!({ "context_pack": pack })))
 }
 
 async fn run_fndr_search_code_context(
@@ -3186,6 +2993,10 @@ struct FndrBuildContextPackArgs {
     project: Option<String>,
     #[serde(default)]
     budget_tokens: Option<u32>,
+    #[serde(default)]
+    agent_type: String,
+    #[serde(default)]
+    active_files: Vec<String>,
 }
 
 async fn run_fndr_namespace_build_context_pack(
@@ -3201,8 +3012,8 @@ async fn run_fndr_namespace_build_context_pack(
         query: args.query,
         session_id: args.session_id,
         project: args.project,
-        agent_type: String::new(),
-        active_files: Vec::new(),
+        agent_type: args.agent_type,
+        active_files: args.active_files,
         budget_tokens: args.budget_tokens.unwrap_or(0),
     };
     let pack = crate::context_runtime::build_context_pack(&app_state, request)
@@ -3236,28 +3047,6 @@ async fn run_fndr_namespace_related_memories(
     .await
     .map_err(internal_tool_error)?;
     Ok(tool_success(json!({ "cards": cards })))
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct FndrSubgraphArgs {
-    #[serde(default)]
-    seed_ids: Vec<String>,
-    #[serde(default)]
-    max_hops: Option<u8>,
-}
-
-async fn run_fndr_namespace_subgraph(
-    _app_state: Arc<AppState>,
-    arguments: Value,
-) -> Result<Value, JsonRpcError> {
-    let args: FndrSubgraphArgs = serde_json::from_value(arguments).unwrap_or_default();
-    Ok(tool_success(json!({
-        "seed_ids": args.seed_ids,
-        "max_hops": args.max_hops.unwrap_or(1),
-        "node_count": 0,
-        "edge_count": 0,
-        "note": "typed insight-graph persistence pending; subgraph is empty.",
-    })))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3297,9 +3086,24 @@ async fn run_fndr_namespace_timeline(
 async fn run_fndr_namespace_quality_status(
     app_state: Arc<AppState>,
 ) -> Result<Value, JsonRpcError> {
+    let stats = app_state
+        .store
+        .get_stats()
+        .await
+        .map_err(internal_tool_error)?;
+    let dropped = app_state
+        .frames_dropped
+        .load(std::sync::atomic::Ordering::Relaxed);
     Ok(tool_success(json!({
         "stored_count": app_state.capture_stats.total_stored(),
-        "dropped_count": app_state.frames_dropped.load(std::sync::atomic::Ordering::Relaxed),
+        "dropped_count": dropped,
+        "stats": stats,
+        "capture": {
+            "is_capturing": app_state.is_capturing(),
+            "is_paused": app_state.is_paused.load(std::sync::atomic::Ordering::SeqCst),
+            "frames_captured": app_state.frames_captured.load(std::sync::atomic::Ordering::Relaxed),
+            "frames_dropped": dropped
+        }
     })))
 }
 

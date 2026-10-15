@@ -15,11 +15,6 @@ vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     findVisuallySimilarMemories: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
-    fndrGetMemorySubgraph: vi.fn().mockResolvedValue({
-        seed_ids: [],
-        node_count: 0,
-        edge_count: 0,
-    }),
     fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrGetRelatedMemories: vi.fn().mockResolvedValue([]),
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),

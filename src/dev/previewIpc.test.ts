@@ -107,16 +107,6 @@ describe("development UI preview IPC", () => {
             ]),
         );
         await expect(
-            invoke("fndr_get_memory_subgraph", {
-                seedIds: ["memory-design-review"],
-                maxHops: 2,
-            }),
-        ).resolves.toMatchObject({
-            seed_ids: ["memory-design-review"],
-            node_count: 3,
-            edge_count: 2,
-        });
-        await expect(
             invoke("find_visually_similar_memories", {
                 seedMemoryId: "memory-design-review",
                 limit: 6,
