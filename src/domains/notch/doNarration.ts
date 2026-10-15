@@ -115,9 +115,11 @@ function planned(next: DoState): Narration {
 
 function finished(next: DoState): Narration {
     const result = next.result;
+    // FNDR's summary of a run that ended well already leads with "Done:".
+    const summary = (result?.summary ?? "").replace(/^\s*done:\s*/i, "");
     const parts = [
         result?.ok ? "Done." : "I could not finish.",
-        result?.summary ? `${sentence(result.summary)}.` : "",
+        summary ? `${sentence(summary)}.` : "",
         leftOut(next.steps),
         checkedNote(next.steps),
         next.steps.some((step) => step.status === "done") ? "Nothing is undone automatically." : "",

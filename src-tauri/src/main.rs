@@ -637,9 +637,19 @@ fn main() {
             ipc::commands::create_screen_guide_notch_companion(app.handle());
             ipc::commands::create_screen_guide_overlay_window(app.handle());
 
-            // Alpha demo: Auto-Fill and the Alt+Space Omnibar are not part of
-            // the demo surface, so their windows and global shortcuts are not
-            // registered.
+            // The command bar (Alt+Space): memory search, and a request to do
+            // something handed to Notch Do. It was off for the Alpha demo
+            // (2026-09-18); back on as the command bar (2026-10-14). Auto-Fill
+            // stays off.
+            ipc::commands::create_omnibar_window(app.handle());
+            if let Err(err) = ipc::commands::register_omnibar_shortcut(app.handle()) {
+                tracing::warn!("Command bar shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Command bar global shortcut registered: {}",
+                    ipc::commands::OMNIBAR_SHORTCUT
+                );
+            }
 
             // Pre-create the notch HUD (hidden) and register its toggle.
             ipc::commands::create_notch_hud_window(app.handle());
