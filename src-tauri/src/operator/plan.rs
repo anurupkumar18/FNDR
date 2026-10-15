@@ -21,7 +21,8 @@ pub enum StepAction {
     /// a model: the schema does not offer it and `parse_plan` refuses it.
     ReopenMemory,
     /// FNDR pastes `text` into the focused field of `app` (or of the app in
-    /// front) once the person has tapped Allow on the exact text.
+    /// front) once the person has tapped Allow on the exact text. Empty
+    /// `text` pastes what is on the clipboard, which an earlier step copied.
     Paste,
 }
 
@@ -55,7 +56,7 @@ pub struct PlanStep {
     #[serde(default)]
     pub goal: String,
     /// What a `paste` step puts into the focused field, exactly as the
-    /// person sees it before tapping Allow.
+    /// person sees it before tapping Allow; empty for the clipboard.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     pub check: StepCheck,
@@ -237,6 +238,38 @@ fn query_encoded(query: &str) -> String {
         .collect()
 }
 
+/// Browsers as people name them in a request ("in Safari", "in Chrome").
+const BROWSER_NAMES: &[&str] = &[
+    "safari",
+    "chrome",
+    "google chrome",
+    "arc",
+    "dia",
+    "firefox",
+    "brave",
+    "brave browser",
+    "edge",
+    "microsoft edge",
+    "opera",
+    "vivaldi",
+    "orion",
+    "zen",
+];
+
+/// Whether a name, as said, is a web browser.
+pub fn is_browser_name(name: &str) -> bool {
+    BROWSER_NAMES.contains(&name.trim().to_lowercase().as_str())
+}
+
+/// "github.com in Safari": the text before a browser named at the end, and
+/// that browser, when it is one and is installed.
+fn in_browser(text: &str, is_app: &dyn Fn(&str) -> bool) -> Option<(String, String)> {
+    let at = text.to_lowercase().rfind(" in ")?;
+    let (head, place) = (text[..at].trim(), text[at + 4..].trim());
+    (!head.is_empty() && is_browser_name(place) && is_app(place))
+        .then(|| (head.to_string(), place.to_string()))
+}
+
 /// A clause that opens an app, opens a link or searches the web, as a step.
 /// None for anything else, so the request goes to the planner.
 fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
@@ -263,6 +296,10 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
             .filter(|rest| !rest.is_empty())
     };
     if let Some(query) = SEARCH_VERBS.iter().find_map(|verb| after(verb)) {
+        let (query, browser) = match in_browser(&query, is_app) {
+            Some((query, browser)) => (query, browser),
+            None => (query, String::new()),
+        };
         let encoded = query_encoded(&query);
         let label = format!(
             "Look up {}",
@@ -275,7 +312,7 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
         return Some(PlanStep {
             action: StepAction::OpenUrl,
             label,
-            app: String::new(),
+            app: browser,
             url: format!("https://www.google.com/search?q={encoded}"),
             goal: String::new(),
             text: String::new(),
@@ -284,7 +321,11 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
         });
     }
     let target = OPEN_VERBS.iter().find_map(|verb| after(verb))?;
-    // "in Safari", "on my phone": a place the planner has to reason about.
+    let (target, browser) = match in_browser(&target, is_app) {
+        Some((target, browser)) => (target, browser),
+        None => (target, String::new()),
+    };
+    // "in Notes", "on my phone": a place the planner has to reason about.
     if target
         .split_whitespace()
         .any(|word| matches!(word.to_lowercase().as_str(), "in" | "on" | "with" | "from"))
@@ -316,7 +357,7 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
         return Some(PlanStep {
             action: StepAction::OpenUrl,
             label: format!("Open {target}"),
-            app: String::new(),
+            app: browser,
             url,
             goal: String::new(),
             text: String::new(),
@@ -324,7 +365,8 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
             item: None,
         });
     }
-    is_app(target).then(|| PlanStep {
+    // A browser is named only for a link: "open Notes in Safari" goes on.
+    (browser.is_empty() && is_app(target)).then(|| PlanStep {
         action: StepAction::OpenApp,
         label: format!("Open {target}"),
         app: target.to_string(),
@@ -387,13 +429,13 @@ pub fn leaves_something_out(request: &str) -> bool {
 }
 
 /// Words that ask for something Notch Do never does wherever they stand.
-const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|reply|replies|forward|delete|deletes|deleting|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
+const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|forward|delete|deletes|deleting|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
 
 /// Words that ask for it only as the verb a request or a clause starts with:
-/// "text Sam", "email the team", "order a pizza", "pay the bill". As nouns
-/// ("this email", "the text of", "in order", "the pay range doc") they are
-/// what the person wants to read or open.
-const NEVER_AS_VERB: &[&str] = &["text", "message", "email", "order", "pay"];
+/// "text Sam", "email the team", "reply to Ana", "order a pizza", "pay the
+/// bill". As nouns ("this email", "the text of", "paste a reply", "in order",
+/// "the pay range doc") they are what the person wants to read, open or paste.
+const NEVER_AS_VERB: &[&str] = &["text", "message", "email", "reply", "order", "pay"];
 
 /// Words before a clause's verb that change nothing.
 const CLAUSE_LEAD: &[&str] = &[
@@ -472,6 +514,10 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 if !(lower.starts_with("https://") || lower.starts_with("http://")) {
                     return Err(format!("Step \"{}\" is not a web link.", step.label));
                 }
+                // A link opens in the browser it names, else in the default one.
+                if !is_browser_name(&step.app) {
+                    step.app.clear();
+                }
             }
             StepAction::ReopenMemory => {
                 return Err(format!(
@@ -480,9 +526,7 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 ));
             }
             StepAction::Paste => {
-                if step.text.trim().is_empty() {
-                    return Err(format!("Step \"{}\" has nothing to paste.", step.label));
-                }
+                step.text = step.text.trim().to_string();
                 if step.text.chars().count() > MAX_PASTE_CHARS {
                     return Err(format!(
                         "Step \"{}\" pastes more than {MAX_PASTE_CHARS} characters.",
@@ -994,6 +1038,12 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
             None => verdict(seen.reported_done == Some(true), REPORTED_ONLY),
         },
         StepCheck::PageLoaded => {
+            if !step.app.is_empty() && !same_app(&step.app, seen) {
+                return verdict(
+                    false,
+                    format!("{} is not in front ({} is)", step.app, seen.frontmost_app),
+                );
+            }
             if !is_browser(seen) {
                 return verdict(
                     false,
@@ -1140,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_needs_its_text_is_always_checked_by_reading_the_field_and_names_its_app() {
+    fn a_paste_is_checked_by_reading_the_field_names_its_app_and_may_paste_what_was_copied() {
         let paste = |text: &str, app: &str| {
             format!(
                 r#"{{"steps":[{{"action":"paste","label":"","app":"{app}","url":"","goal":"","text":"{text}","check":"none"}}]}}"#
@@ -1157,7 +1207,11 @@ mod tests {
             parse_plan(&paste("hi", "")).unwrap().steps[0].label,
             "Paste the text"
         );
-        assert!(parse_plan(&paste("  ", "Notes")).is_err());
+        let copied = parse_plan(&paste("  ", "Notes")).unwrap();
+        assert!(
+            copied.steps[0].text.is_empty(),
+            "empty text pastes what was copied"
+        );
         assert!(parse_plan(&paste(&"x".repeat(MAX_PASTE_CHARS + 1), "Notes")).is_err());
         let open = parse_plan(
             r#"{"steps":[{"action":"open_app","label":"","app":"Notes","url":"","goal":"","text":"stray","check":"frontmost"}]}"#,

@@ -99,6 +99,31 @@ pub fn open_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens an http(s) link in the named browser, or in the default one when
+/// `browser` is empty.
+pub fn open_url_in(url: &str, browser: &str) -> Result<(), String> {
+    if browser.trim().is_empty() {
+        return open_url(url);
+    }
+    let lower = url.trim().to_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("Only web links can be opened.".to_string());
+    }
+    let path = resolve_app(browser, &app_roots())
+        .ok_or_else(|| format!("No app called {browser} is installed."))?;
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg(&path)
+        .arg(url.trim())
+        .status()
+        .map_err(|error| format!("macOS would not open that link: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{browser} would not open that link."))
+    }
+}
+
 /// What is in front right now, plus playback for a media app.
 pub async fn observe(media_app: Option<&str>) -> Observation {
     let (media_playing, media_track) = match media_app {

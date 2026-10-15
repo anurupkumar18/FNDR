@@ -22,10 +22,17 @@ pub(crate) struct Suite {
 }
 
 impl Suite {
+    /// As `native::resolve_app` finds an app by name: the whole name, its
+    /// first words, or one of its words ("Chrome" is Google Chrome).
     pub fn is_installed(&self, app: &str) -> bool {
-        self.installed_apps
-            .iter()
-            .any(|installed| installed.eq_ignore_ascii_case(app.trim()))
+        let wanted = app.trim().to_lowercase();
+        !wanted.is_empty()
+            && self.installed_apps.iter().any(|installed| {
+                let installed = installed.to_lowercase();
+                installed == wanted
+                    || installed.starts_with(&format!("{wanted} "))
+                    || installed.split_whitespace().any(|word| word == wanted)
+            })
     }
 }
 
@@ -54,6 +61,37 @@ pub(crate) struct Case {
     pub skill: Option<String>,
     #[serde(default)]
     pub plan: Option<PlanExpectation>,
+    /// Synthetic memories the live planner gets with the request, standing in
+    /// for what FNDR would find on the Mac. Made up; never copied from a vault.
+    #[serde(default)]
+    pub snippets: Vec<CaseSnippet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CaseSnippet {
+    pub app: String,
+    pub title: String,
+    /// Local time, `YYYY-MM-DD HH:MM`.
+    pub when: String,
+    pub text: String,
+}
+
+impl Case {
+    /// The case's synthetic memories, as the planner request carries them.
+    pub fn synthetic_snippets(&self) -> Vec<crate::operator::memory::MemorySnippet> {
+        self.snippets
+            .iter()
+            .enumerate()
+            .map(|(index, snippet)| crate::operator::memory::MemorySnippet {
+                memory_id: format!("{}-{index}", self.id),
+                app: snippet.app.clone(),
+                title: snippet.title.clone(),
+                when: snippet.when.clone(),
+                timestamp: 0,
+                text: snippet.text.clone(),
+            })
+            .collect()
+    }
 }
 
 /// What a correct planner answer holds. Steps are matched in order and need
@@ -82,6 +120,9 @@ pub(crate) struct StepExpectation {
     pub url_host: Option<String>,
     #[serde(default)]
     pub url_has: Option<String>,
+    /// Part of what a `paste` step puts in, ignoring case.
+    #[serde(default)]
+    pub text_has: Option<String>,
 }
 
 pub(crate) fn repo_path(relative: &str) -> PathBuf {
@@ -158,6 +199,9 @@ pub(crate) fn routing_mismatches(suite: &Suite, case: &Case) -> Vec<String> {
             wrong.push(format!("memory snippets {got}, labeled {want}"));
         }
     }
+    if !case.snippets.is_empty() && snippets != Some(true) {
+        wrong.push("carries snippets that this request never sends".to_string());
+    }
     if route == "work_set" && case.route == "work_set" && layout_name(layout) != case.layout {
         wrong.push(format!(
             "layout {:?}, labeled {:?}",
@@ -206,6 +250,25 @@ fn step_fits(want: &StepExpectation, step: &plan::PlanStep) -> bool {
             .url_has
             .as_deref()
             .is_none_or(|wanted| url.contains(&wanted.to_lowercase()))
+        && want
+            .text_has
+            .as_deref()
+            .is_none_or(|wanted| step.text.to_lowercase().contains(&wanted.to_lowercase()))
+}
+
+/// Whether the planner is asked about this case at all: the live run records
+/// only these, and a recording is rescored only on these.
+pub(crate) fn goes_to_planner(suite: &Suite, case: &Case) -> bool {
+    let is_app = |app: &str| suite.is_installed(app);
+    let known = plan::Known {
+        saved_sets: &case.saved_sets,
+        skills: &case.skills,
+        is_app: &is_app,
+    };
+    matches!(
+        plan::route(&case.request, &known),
+        plan::Route::Planner { .. }
+    )
 }
 
 /// A planner answer, as text, against a case's plan labels. A refused answer
@@ -381,7 +444,11 @@ mod tests {
                 .unwrap_or_default();
             let mut passed = 0usize;
             let mut failures = Vec::new();
-            for case in suite.cases.iter().filter(|case| case.plan.is_some()) {
+            for case in suite
+                .cases
+                .iter()
+                .filter(|case| case.plan.is_some() && goes_to_planner(&suite, case))
+            {
                 let Some(answer) = answers.get(&case.id).and_then(|value| value.as_str()) else {
                     continue;
                 };

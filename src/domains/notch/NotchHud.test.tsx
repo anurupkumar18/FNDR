@@ -911,7 +911,7 @@ describe("NotchHud", () => {
 
             it("names who is speaking under the caption", async () => {
                 await toRunning();
-                expect(await screen.findByText(/^On-device voice/)).toBeInTheDocument();
+                expect(await screen.findByText(/^(Mac voice|Basic system voice)$/)).toBeInTheDocument();
             });
 
             it("mute silences speech now and keeps it off, and the switch comes back", async () => {

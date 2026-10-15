@@ -40,6 +40,19 @@ pub fn note_self_copy(text: &str) {
     LAST_SELF_COPY_FP.store(clipboard_fingerprint(text.trim()), Ordering::SeqCst);
 }
 
+/// The text on the clipboard, for a Notch Do paste of what an earlier step
+/// copied. A copy marked secret (password managers mark theirs) is refused.
+pub fn copied_text() -> Result<String, String> {
+    if pasteboard_is_concealed() {
+        return Err(
+            "What is on the clipboard is marked secret, so FNDR does not paste it".to_string(),
+        );
+    }
+    read_pasteboard_string()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| "Nothing is on the clipboard to paste".to_string())
+}
+
 /// Start the clipboard watcher as a background loop.
 ///
 /// Polls `NSPasteboard.generalPasteboard` for `changeCount` changes, extracts
