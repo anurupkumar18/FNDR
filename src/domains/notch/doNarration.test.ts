@@ -90,6 +90,15 @@ describe("narrate", () => {
         )[4];
         expect(allChecked?.text).toBe("Done. Playing Blinding Lights. I checked every step myself. Nothing is undone automatically.");
 
+        // FNDR's own summary of a run it checked already leads with "Done:".
+        const opened = lines(
+            ...start,
+            event({ kind: "stepDone", runId: "r1", index: 0, ok: true, detail: "", checked: true }),
+            event({ kind: "stepDone", runId: "r1", index: 1, ok: true, detail: "", checked: true }),
+            event({ kind: "finished", runId: "r1", ok: true, summary: "Done: Open Notes." }),
+        )[4];
+        expect(opened?.text).toBe("Done. Open Notes. I checked every step myself. Nothing is undone automatically.");
+
         const reported = lines(
             ...start,
             event({ kind: "stepDone", runId: "r1", index: 0, ok: true, detail: "", checked: true }),

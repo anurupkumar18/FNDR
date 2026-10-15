@@ -53,6 +53,7 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-14 | Requests made only of opening apps, opening links and web searches are planned on the Mac by code (`plan::local_plan`) and run with no Codex session; only requests that operate an app's UI go to the cloud planner. | The on-device 2B model as planner; keep the cloud planner for everything | Owner, in the 2026-10-14 Q&A | AG-06, `scripts/operator/notch-do-cases.json` |
 | 2026-10-14 | Notch Do learns from its runs: a wrong run becomes a suite case (request and labels, never screen text), a good run can be saved as a named skill and replayed through the same policy, and each run can be rated. | Any one of the three alone | Owner, in the 2026-10-14 Q&A | AG-08 |
 | 2026-10-14 | "Remove" on a button or in a request waits for the person's tap instead of being refused; delete, erase, trash, send and buy stay refused. | Allow remove in media apps only; keep refusing | Owner, in the second 2026-10-14 Q&A | `scripts/operator/notch-do-policy-cases.json` |
+| 2026-10-15 | The command bar (Alt+Space) is registered again as a way into Notch Do and memory search; Auto-Fill stays off. | Keep it off and reach Notch Do only from the notch | Owner (delegated) | AG-07, `src-tauri/src/main.rs` |
 
 ## Earlier accepted ADRs (background, before this log)
 
