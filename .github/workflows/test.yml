@@ -66,6 +66,13 @@ jobs:
       - name: Install protobuf
         run: brew install protobuf
 
+      # llama.cpp's bundled HTTP client does not compile against OpenSSL 4,
+      # which the macOS image carries since 2026-10-13; CMake finds 3 here.
+      - name: Use OpenSSL 3
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
       # tauri::generate_context! in the fndr bin requires frontendDist
       # ("../dist") to exist; tests don't need real frontend assets.
       - name: Create empty frontend dist

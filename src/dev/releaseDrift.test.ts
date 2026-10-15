@@ -33,6 +33,16 @@ describe("release workflow", () => {
         expect(runner(job(release, "build-release"))).toBe(tested);
     });
 
+    it("builds Rust against OpenSSL 3 wherever the macOS image is used", () => {
+        // The image carries OpenSSL 4 since 2026-10-13, and llama.cpp's bundled
+        // HTTP client does not compile against it.
+        const pinned = 'OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)';
+        const gate = read(".github/workflows/retrieval-gate.yml");
+        for (const macJob of [job(test, "rust"), job(release, "build-release"), gate]) {
+            expect(macJob).toContain(pinned);
+        }
+    });
+
     it("can be run by hand without publishing", () => {
         expect(release).toMatch(/\n {2}workflow_dispatch:/);
         const build = job(release, "build-release");
