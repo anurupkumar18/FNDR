@@ -554,6 +554,39 @@
       "route": "planner",
       "memory_snippets": false,
       "left_out": false
+    },
+    {
+      "id": "paste-link-from-this-morning",
+      "request": "paste the Zoom link from this morning into Slack",
+      "route": "planner",
+      "memory_snippets": true,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "paste",
+            "app": "Slack",
+            "check": "pasted"
+          }
+        ],
+        "max_steps": 2
+      }
+    },
+    {
+      "id": "paste-given-words-here",
+      "request": "paste see you at five here",
+      "route": "planner",
+      "memory_snippets": false,
+      "left_out": false,
+      "plan": {
+        "steps": [
+          {
+            "action": "paste",
+            "check": "pasted"
+          }
+        ],
+        "max_steps": 1
+      }
     }
   ],
   "installed_apps": [

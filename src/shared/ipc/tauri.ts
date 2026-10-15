@@ -2552,11 +2552,6 @@ export async function omnibarOpenMemory(memoryId: string): Promise<void> {
     return invoke("omnibar_open_memory", { memoryId });
 }
 
-/** Hands a typed request to Notch Do, which opens and plans it. Refused while "Operate my Mac" is off. */
-export async function omnibarDo(text: string): Promise<void> {
-    return invoke("omnibar_do", { text });
-}
-
 export interface ClipboardEntry {
     id: string;
     text: string;
@@ -2776,7 +2771,7 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
-export type ComputerUseStepAction = "open_app" | "open_url" | "operate" | "reopen_memory";
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate" | "reopen_memory" | "paste";
 
 // Work sets (ADR 027): the places of one thread of work, resolved on the Mac.
 
@@ -2935,6 +2930,47 @@ export async function computerUsePlan(text: string): Promise<string> {
 }
 
 /** Starts a planned run (the plan card's countdown, "go", or a tap). */
+export async function computerUseStart(runId: string): Promise<void> {
+    return invoke("computer_use_start", { runId });
+}
+
+/** Hands a request to Notch Do, which opens and plans it: from the command bar, or a skill run from Settings. Refused while "Operate my Mac" is off. */
+export async function notchDoRequest(text: string): Promise<void> {
+    return invoke("notch_do_request", { text });
+}
+
+/** A Notch Do run as Settings lists it. */
+export interface NotchDoRun {
+    runId: string;
+    /** RFC 3339. */
+    at: string;
+    request: string;
+    /** `local` (on this Mac), `planner` (the cloud planner) or `skill`. */
+    plannedBy: string;
+    /** Step labels, in order. */
+    steps: string[];
+    /** null while the run has not ended. */
+    ok: boolean | null;
+    summary: string;
+    rating: "worked" | "did_not_work" | null;
+    /** Whether a skill could repeat it: it worked and reopened no memories. */
+    repeatable: boolean;
+}
+
+export interface NotchDoSkill {
+    id: string;
+    name: string;
+    /** The request it was saved from. */
+    request: string;
+    steps: string[];
+    savedAt: string;
+}
+
+/** The newest Notch Do runs, newest first. */
+export async function notchDoRuns(): Promise<NotchDoRun[]> {
+    return invoke<NotchDoRun[]>("notch_do_runs");
+}
+
 /** Rates a Notch Do run that ended; a run that did not work becomes a draft case for the evaluation suite. */
 export async function notchDoRateRun(runId: string, worked: boolean): Promise<void> {
     return invoke("notch_do_rate_run", { runId, worked });
@@ -2945,8 +2981,13 @@ export async function notchDoSaveSkill(runId: string, name: string): Promise<str
     return invoke<string>("notch_do_save_skill", { runId, name });
 }
 
-export async function computerUseStart(runId: string): Promise<void> {
-    return invoke("computer_use_start", { runId });
+export async function notchDoSkills(): Promise<NotchDoSkill[]> {
+    return invoke<NotchDoSkill[]>("notch_do_skills");
+}
+
+/** Deletes a skill; false when it was already gone. */
+export async function notchDoDeleteSkill(id: string): Promise<boolean> {
+    return invoke<boolean>("notch_do_delete_skill", { id });
 }
 
 export async function computerUseRespond(requestKey: string, approve: boolean): Promise<void> {

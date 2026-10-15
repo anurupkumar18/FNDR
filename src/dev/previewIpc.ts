@@ -19,6 +19,8 @@ import type {
     ResumeThread,
     Task,
     WeeklyWrapped,
+    NotchDoRun,
+    NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
 
@@ -846,6 +848,37 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewBlocklist = ["1Password", "bank.example"];
     let previewAgentNotesEnabled = false;
     let previewNotchDoMuted: boolean | null = null;
+    const previewSkills: NotchDoSkill[] = [{
+        id: "preview-skill-1",
+        name: "Monday setup",
+        request: "open Notes, Slack and the sprint board",
+        steps: ["Open Notes", "Open Slack", "Open linear.app/team/sprint"],
+        savedAt: "2026-10-13T15:00:00Z",
+    }];
+    let previewRuns: NotchDoRun[] = [
+        {
+            runId: "preview-run-1",
+            at: "2026-10-15T15:20:00Z",
+            request: "open Notes and look up the weather in Paris",
+            plannedBy: "local",
+            steps: ["Open Notes", "Search the web for the weather in Paris"],
+            ok: true,
+            summary: "Done: Open Notes, Search the web for the weather in Paris.",
+            rating: null,
+            repeatable: true,
+        },
+        {
+            runId: "preview-run-2",
+            at: "2026-10-15T14:05:00Z",
+            request: "add the next song to the queue in Spotify",
+            plannedBy: "planner",
+            steps: ["Add the next song to the queue"],
+            ok: false,
+            summary: "Stopped at the first step.",
+            rating: null,
+            repeatable: false,
+        },
+    ];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let calendarMeetingPrep = false;
@@ -947,6 +980,32 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "notch_do_skills":
+                return previewSkills.map((skill) => ({ ...skill }));
+            case "notch_do_runs":
+                return previewRuns.map((run) => ({ ...run }));
+            case "notch_do_rate_run": {
+                const { runId, worked } = payload as { runId: string; worked: boolean };
+                previewRuns = previewRuns.map((run) => run.runId === runId
+                    ? { ...run, rating: worked ? "worked" : "did_not_work", repeatable: worked && run.repeatable }
+                    : run);
+                return undefined;
+            }
+            case "notch_do_save_skill": {
+                const { runId, name } = payload as { runId: string; name: string };
+                const run = previewRuns.find((each) => each.runId === runId);
+                if (!run?.repeatable) throw new Error("Only a run that worked can be saved as a skill.");
+                previewSkills.push({ id: `preview-skill-${previewSkills.length + 1}`, name, request: run.request, steps: run.steps, savedAt: new Date().toISOString() });
+                return name;
+            }
+            case "notch_do_delete_skill": {
+                const { id } = payload as { id: string };
+                const index = previewSkills.findIndex((skill) => skill.id === id);
+                if (index >= 0) previewSkills.splice(index, 1);
+                return index >= 0;
+            }
+            case "notch_do_request":
+                throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
             case "get_notch_do_muted":
                 return previewNotchDoMuted;
             case "set_notch_do_muted": {

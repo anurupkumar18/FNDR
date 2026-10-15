@@ -36,6 +36,29 @@ pub struct RunRecord {
     pub rating: Option<Rating>,
 }
 
+impl RunRecord {
+    /// Whether a skill could repeat this run: it ended well, the person did
+    /// not rate it as wrong, and it reopened no memories (a work set opens
+    /// again by its name). Read by the step's action: a step's resolved item
+    /// is never kept, so a stored step has none.
+    pub fn repeatable(&self) -> bool {
+        self.ok == Some(true)
+            && self.rating != Some(Rating::DidNotWork)
+            && !self.steps.is_empty()
+            && self
+                .steps
+                .iter()
+                .all(|step| step.action != StepAction::ReopenMemory)
+    }
+}
+
+/// The newest runs, newest first.
+pub fn recent(store: &StateStore, limit: usize) -> Result<Vec<RunRecord>, String> {
+    let mut runs = load(store)?;
+    runs.truncate(limit);
+    Ok(runs)
+}
+
 fn load(store: &StateStore) -> Result<Vec<RunRecord>, String> {
     Ok(store
         .load_json::<Vec<RunRecord>>(RUNS_KEY)?
@@ -109,15 +132,6 @@ pub fn get(store: &StateStore, run_id: &str) -> Result<Option<RunRecord>, String
     Ok(load(store)?.into_iter().find(|run| run.run_id == run_id))
 }
 
-fn action_name(action: StepAction) -> &'static str {
-    match action {
-        StepAction::OpenApp => "open_app",
-        StepAction::OpenUrl => "open_url",
-        StepAction::Operate => "operate",
-        StepAction::ReopenMemory => "reopen_memory",
-    }
-}
-
 /// Every run rated as not working, as a case for the suite to be labeled:
 /// the request and what FNDR planned, with `route` and `plan` left for the
 /// person to fill in with what should have happened. Newest first.
@@ -133,7 +147,7 @@ pub fn case_drafts(store: &StateStore) -> Result<Vec<serde_json::Value>, String>
                 "observed": {
                     "planned_by": run.planned_by,
                     "steps": run.steps.iter().map(|step| serde_json::json!({
-                        "action": action_name(step.action),
+                        "action": step.action,
                         "app": step.app,
                         "url": step.url,
                     })).collect::<Vec<_>>(),
@@ -156,6 +170,7 @@ mod tests {
             app: app.into(),
             url: String::new(),
             goal: String::new(),
+            text: String::new(),
             check: StepCheck::Frontmost,
             item: None,
         }
@@ -189,6 +204,41 @@ mod tests {
         assert_eq!(drafts[0]["request"], "open the Messages app");
         assert_eq!(drafts[0]["observed"]["steps"][0]["app"], "Messages");
         assert_eq!(get(&store, "r1").unwrap().unwrap().ok, Some(true));
+    }
+
+    #[test]
+    fn a_run_is_repeatable_only_when_it_worked_and_reopened_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::new(dir.path()).unwrap();
+        let reopen = PlanStep {
+            action: StepAction::ReopenMemory,
+            label: "Reopen the essay".into(),
+            app: String::new(),
+            url: String::new(),
+            goal: String::new(),
+            text: String::new(),
+            check: StepCheck::Frontmost,
+            item: None,
+        };
+        record_plan(&store, "apps", "open Notes", "local", &[step("Notes")]).unwrap();
+        record_plan(&store, "set", "pull up the essay", "work_set", &[reopen]).unwrap();
+        record_plan(&store, "failed", "open Notes", "local", &[step("Notes")]).unwrap();
+        for id in ["apps", "set"] {
+            record_outcome(&store, id, true, "Done").unwrap();
+        }
+        record_outcome(&store, "failed", false, "Stopped").unwrap();
+
+        // Read back from the store, as Settings and a skill save see them.
+        let kept = recent(&store, 10).unwrap();
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[0].run_id, "failed", "newest first");
+        let repeatable = |id: &str| get(&store, id).unwrap().unwrap().repeatable();
+        assert!(repeatable("apps"));
+        assert!(!repeatable("set"), "a work set opens again by its name");
+        assert!(!repeatable("failed"));
+        rate(&store, "apps", Rating::DidNotWork).unwrap();
+        assert!(!repeatable("apps"));
+        assert_eq!(recent(&store, 1).unwrap().len(), 1);
     }
 
     #[test]

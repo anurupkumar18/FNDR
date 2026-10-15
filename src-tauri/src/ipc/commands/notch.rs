@@ -519,6 +519,35 @@ pub async fn dismiss_notch_hud(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The event that hands a typed request to Notch Do; the notch opens in Do
+/// and plans it as if it had been typed there.
+pub const NOTCH_HUD_DO_EVENT: &str = "notch-hud://do";
+
+/// Hands a request to Notch Do, the one action layer, from the command bar
+/// or from a skill run in Settings: the command bar closes, the notch opens
+/// in Do and plans and runs the request with its own card, policy, Stop and
+/// journal. Refused while "Operate my Mac" is off.
+#[tauri::command]
+pub async fn notch_do_request(
+    app: AppHandle,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    text: String,
+) -> Result<(), String> {
+    let request = text.trim().to_string();
+    if request.is_empty() {
+        return Err("Type what FNDR should do.".to_string());
+    }
+    if !state.inner().config.read().operator.enabled {
+        return Err("Turn on \"Operate my Mac\" in Settings for FNDR to do this.".to_string());
+    }
+    if let Some(command_bar) = app.get_webview_window(super::omnibar::OMNIBAR_LABEL) {
+        let _ = command_bar.hide();
+    }
+    show_notch_hud(&app);
+    app.emit_to(NOTCH_HUD_LABEL, NOTCH_HUD_DO_EVENT, request)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn toggle_notch_hud(app: AppHandle) -> Result<(), String> {
     toggle_notch_hud_window(&app);

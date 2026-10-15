@@ -4,7 +4,7 @@
 //! the same executor, `operator::policy`, verification and journal.
 
 use crate::operator::plan::PlanStep;
-use crate::operator::runs::{self, Rating};
+use crate::operator::runs;
 use crate::storage::StateStore;
 use serde::{Deserialize, Serialize};
 
@@ -46,11 +46,14 @@ pub fn save_from_run(store: &StateStore, run_id: &str, name: &str) -> Result<Ski
         ));
     }
     let run = runs::get(store, run_id)?.ok_or_else(|| "That run is no longer kept.".to_string())?;
-    if run.ok != Some(true) || run.rating == Some(Rating::DidNotWork) {
-        return Err("Only a run that worked can be saved as a skill.".to_string());
-    }
-    if run.steps.is_empty() || run.steps.iter().any(|step| step.item.is_some()) {
-        return Err("That run has no steps a skill can repeat.".to_string());
+    if !run.repeatable() {
+        let worked = run.ok == Some(true) && run.rating != Some(runs::Rating::DidNotWork);
+        return Err(if worked && !run.steps.is_empty() {
+            "A work set opens again by its name; it is not saved as a skill."
+        } else {
+            "Only a run that worked can be saved as a skill."
+        }
+        .to_string());
     }
     let mut skills = list(store)?;
     if skills.iter().any(|skill| words(&skill.name) == words(name)) {
@@ -128,6 +131,7 @@ mod tests {
             app: app.into(),
             url: String::new(),
             goal: String::new(),
+            text: String::new(),
             check: StepCheck::Frontmost,
             item: None,
         }
@@ -186,7 +190,7 @@ mod tests {
         assert!(save_from_run(&store, "bad", "Notes").is_err());
         runs::record_plan(&store, "wrong", "open Notes", "local", &[open("Notes")]).unwrap();
         runs::record_outcome(&store, "wrong", true, "Done").unwrap();
-        runs::rate(&store, "wrong", Rating::DidNotWork).unwrap();
+        runs::rate(&store, "wrong", runs::Rating::DidNotWork).unwrap();
         assert!(save_from_run(&store, "wrong", "Notes").is_err());
     }
 }

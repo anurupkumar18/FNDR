@@ -9,7 +9,7 @@
 //! is recorded by the ignored live test in `ipc::commands::computer_use`.
 
 use crate::operator::layout::Layout;
-use crate::operator::plan::{self, Route, StepAction, StepCheck};
+use crate::operator::plan::{self, Route};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -174,23 +174,12 @@ pub(crate) fn routing_mismatches(suite: &Suite, case: &Case) -> Vec<String> {
     wrong
 }
 
-fn action_name(action: StepAction) -> &'static str {
-    match action {
-        StepAction::OpenApp => "open_app",
-        StepAction::OpenUrl => "open_url",
-        StepAction::Operate => "operate",
-        StepAction::ReopenMemory => "reopen_memory",
-    }
-}
-
-fn check_name(check: StepCheck) -> &'static str {
-    match check {
-        StepCheck::Frontmost => "frontmost",
-        StepCheck::MediaPlaying => "media_playing",
-        StepCheck::PageLoaded => "page_loaded",
-        StepCheck::None => "none",
-        StepCheck::Reopened => "reopened",
-    }
+/// A step's action or check as plans and the suite spell it ("open_app").
+fn wire(value: impl serde::Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 fn step_fits(want: &StepExpectation, step: &plan::PlanStep) -> bool {
@@ -206,9 +195,9 @@ fn step_fits(want: &StepExpectation, step: &plan::PlanStep) -> bool {
         .and_then(|rest| rest.split(['/', '?', '#']).next())
         .unwrap_or_default()
         .to_string();
-    same(&want.action, action_name(step.action))
+    same(&want.action, &wire(step.action))
         && same(&want.app, &step.app)
-        && same(&want.check, check_name(step.check))
+        && same(&want.check, &wire(step.check))
         && want
             .url_host
             .as_deref()
@@ -242,11 +231,11 @@ pub(crate) fn plan_mismatches(case: &Case, answer: &str) -> Vec<String> {
         if want
             .forbid_actions
             .iter()
-            .any(|forbidden| forbidden == action_name(step.action))
+            .any(|forbidden| *forbidden == wire(step.action))
         {
             wrong.push(format!(
                 "plans {} ({}), which is forbidden",
-                action_name(step.action),
+                wire(step.action),
                 step.label
             ));
         }

@@ -8,7 +8,7 @@
 //! updated in the same change.
 
 /// Stamped on every LLM trace except extraction. Bump when a prompt below changes.
-pub(crate) const LLM_PROMPT_VERSION: &str = "v9";
+pub(crate) const LLM_PROMPT_VERSION: &str = "v10";
 
 /// Extraction is measured on its own fixtures and carries its own tag.
 pub(crate) const EXTRACTION_PROMPT_VERSION: &str = "source_refs_v4";
@@ -304,6 +304,7 @@ Turn one spoken request into the ordered steps that carry it out on a Mac. Answe
 - open_app: launch or bring an app to the front. Use it before operating an app. check: frontmost.
 - open_url: open a web page in the default browser. To look something up on the web, use https://www.google.com/search?q= with the words URL-encoded, unless a specific site was named. check: page_loaded.
 - operate: one goal inside one app's interface, such as playing a named song. app is the app's name; goal is what must be true afterward, using the request's own words. check: media_playing when the goal is playback, otherwise none.
+- paste: put text into the focused field of app; leave app empty for the app in front. text is exactly what goes in: words the request gives, or a link, address or name found in the memory snippets. Never compose a message to paste. check: pasted.
 - 'In front', when present, names the app the person is looking at. When the request says this page, this window, this app, here or on screen, plan an operate step in that app; do not turn it into a web search.
 - Keep the request's order. Use the fewest steps that do the whole request. label is at most 5 words, imperative, with no pronouns.
 - Never plan sending messages or email, deleting, buying, entering passwords or codes, password managers, or system settings. Leave those parts out.
@@ -388,7 +389,7 @@ mod tests {
         ]
     }
 
-    /// Recorded at `LLM_PROMPT_VERSION` v9 and `EXTRACTION_PROMPT_VERSION` source_refs_v4.
+    /// Recorded at `LLM_PROMPT_VERSION` v10 and `EXTRACTION_PROMPT_VERSION` source_refs_v4.
     const FINGERPRINTS: &[(&str, u64)] = &[
         ("memory_extraction", 0x2ba2266d06f4a45c),
         ("memory_snippet", 0x3de252de547d2332),
@@ -402,7 +403,7 @@ mod tests {
         ("todo_extraction", 0xc07a95f3b2b771ba),
         ("task_suggestion", 0x77de0f208306860c),
         ("meeting_breakdown", 0x2151d54fcb2190a3),
-        ("operator_plan", 0x418e50bab740fda7),
+        ("operator_plan", 0xa4ea446525f65ff5),
         ("operator_step", 0x34e0dd88c784ab31),
         ("hermes_memory_context", 0x6a6ecf6986fe9ea6),
         ("hermes_chat", 0x197651572101168f),
