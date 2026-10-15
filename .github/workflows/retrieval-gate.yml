@@ -52,9 +52,8 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
 
-      # lance-encoding's build script requires protoc.
-      - name: Install protobuf
-        run: brew install protobuf
+      - name: Prepare native build dependencies
+        run: bash scripts/bootstrap/prepare-macos-ci.sh
 
       # tauri::generate_context! requires frontendDist ("../dist") to exist.
       - name: Create empty frontend dist

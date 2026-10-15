@@ -64,9 +64,8 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # lance-encoding's build script requires protoc.
-      - name: Install protobuf
-        run: brew install protobuf
+      - name: Prepare native build dependencies
+        run: bash scripts/bootstrap/prepare-macos-ci.sh
 
       - name: Install dependencies
         run: npm ci

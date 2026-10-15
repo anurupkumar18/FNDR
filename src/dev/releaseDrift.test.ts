@@ -33,6 +33,13 @@ describe("release workflow", () => {
         expect(runner(job(release, "build-release"))).toBe(tested);
     });
 
+    it("prepares the same native dependencies for tests, retrieval and release", () => {
+        const retrieval = read(".github/workflows/retrieval-gate.yml");
+        for (const build of [job(test, "rust"), job(retrieval, "gate"), job(release, "build-release")]) {
+            expect(build).toContain("bash scripts/bootstrap/prepare-macos-ci.sh");
+        }
+    });
+
     it("can be run by hand without publishing", () => {
         expect(release).toMatch(/\n {2}workflow_dispatch:/);
         const build = job(release, "build-release");
