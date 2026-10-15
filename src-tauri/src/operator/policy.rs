@@ -633,6 +633,8 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
             }
         }
         "drag" => decision(Risk::Confirm, "drags"),
+        // A step FNDR carries out itself; the person sees the exact text first.
+        "paste" => decision(Risk::Confirm, "puts text into an app"),
         _ => decision(Risk::Never, "unknown tool"),
     }
 }

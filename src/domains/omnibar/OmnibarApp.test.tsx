@@ -11,7 +11,8 @@ const ipcMocks = vi.hoisted(() => ({
     fndrAnswer: vi.fn(),
     getClipboardHistory: vi.fn(),
     omnibarOpenMemory: vi.fn(),
-    omnibarDo: vi.fn(),
+    notchDoRequest: vi.fn(),
+    notchDoSkills: vi.fn(),
     pasteClipboardEntry: vi.fn(),
     searchMemoryCards: vi.fn(),
 }));
@@ -62,7 +63,8 @@ describe("OmnibarApp", () => {
         ipcMocks.pasteClipboardEntry.mockResolvedValue(undefined);
         ipcMocks.dismissOmnibar.mockResolvedValue(undefined);
         ipcMocks.omnibarOpenMemory.mockResolvedValue(undefined);
-        ipcMocks.omnibarDo.mockResolvedValue(undefined);
+        ipcMocks.notchDoRequest.mockResolvedValue(undefined);
+        ipcMocks.notchDoSkills.mockResolvedValue([]);
     });
 
     it("hands a request to do something to Notch Do from a first row, and searches the rest", async () => {
@@ -74,7 +76,7 @@ describe("OmnibarApp", () => {
         expect(await screen.findByRole("option", { name: /Do it: open Notes/ })).toHaveAttribute("aria-selected", "true");
         await screen.findByText("Notes from Monday");
         fireEvent.keyDown(box, { key: "Enter" });
-        await waitFor(() => expect(ipcMocks.omnibarDo).toHaveBeenCalledWith("open Notes"));
+        await waitFor(() => expect(ipcMocks.notchDoRequest).toHaveBeenCalledWith("open Notes"));
         expect(ipcMocks.omnibarOpenMemory).not.toHaveBeenCalled();
 
         // Down past the action opens the memory instead.
@@ -92,10 +94,33 @@ describe("OmnibarApp", () => {
         await waitFor(() => expect(ipcMocks.searchMemoryCards).toHaveBeenCalled());
         expect(screen.queryByRole("option", { name: /Do it/ })).toBeNull();
 
-        ipcMocks.omnibarDo.mockRejectedValue('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+        ipcMocks.notchDoRequest.mockRejectedValue('Turn on "Operate my Mac" in Settings for FNDR to do this.');
         fireEvent.change(box, { target: { value: "look up the weather" } });
         fireEvent.click(await screen.findByRole("option", { name: /Do it: look up the weather/ }));
         expect(await screen.findByText('Turn on "Operate my Mac" in Settings for FNDR to do this.')).toBeInTheDocument();
+    });
+
+    it("runs a saved skill from its name, or the start of it", async () => {
+        ipcMocks.notchDoSkills.mockResolvedValue([
+            { id: "s1", name: "Monday setup", request: "open Notes and Slack", steps: ["Open Notes", "Open Slack"], savedAt: "" },
+        ]);
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        await waitFor(() => expect(ipcMocks.notchDoSkills).toHaveBeenCalled());
+
+        for (const typed of ["mon", "run my Monday setup", "monday SETUP"]) {
+            fireEvent.change(box, { target: { value: typed } });
+            const row = await screen.findByRole("option", { name: /Run skill: Monday setup/ });
+            expect(row).toHaveTextContent("Open Notes · Open Slack");
+        }
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.notchDoRequest).toHaveBeenCalledWith("Monday setup"));
+
+        for (const typed of ["mo", "monday standup notes", "open Notes"]) {
+            fireEvent.change(box, { target: { value: typed } });
+            await waitFor(() => expect(screen.queryByRole("option", { name: /Run skill/ })).toBeNull());
+        }
+        expect(screen.getByRole("option", { name: /Do it: open Notes/ })).toBeInTheDocument();
     });
 
     afterEach(() => cleanup());

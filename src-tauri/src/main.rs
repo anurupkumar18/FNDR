@@ -839,6 +839,10 @@ fn main() {
             ipc::commands::computer_use_start,
             ipc::commands::notch_do_rate_run,
             ipc::commands::notch_do_save_skill,
+            ipc::commands::notch_do_runs,
+            ipc::commands::notch_do_skills,
+            ipc::commands::notch_do_delete_skill,
+            ipc::commands::notch_do_request,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
             ipc::commands::resolve_work_set,
@@ -870,7 +874,6 @@ fn main() {
             // Omnibar
             ipc::commands::dismiss_omnibar,
             ipc::commands::omnibar_open_memory,
-            ipc::commands::omnibar_do,
             // Notch HUD
             ipc::commands::get_notch_hud_geometry,
             ipc::commands::set_notch_hud_hit_rect,

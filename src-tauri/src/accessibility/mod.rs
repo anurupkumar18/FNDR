@@ -7,6 +7,7 @@
 mod operate;
 mod text_tree;
 
+pub(crate) use operate::paste_into_app;
 pub use operate::AxDesktop;
 
 use crate::ocr::{OcrConfig, OcrEngine};
@@ -441,6 +442,8 @@ fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
     child
         .wait()
         .map_err(|e| format!("pbcopy did not finish: {e}"))?;
+    // FNDR's own paste is not something the person copied.
+    crate::capture::clipboard::note_self_copy(text);
 
     std::thread::sleep(Duration::from_millis(30));
 

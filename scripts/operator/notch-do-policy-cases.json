@@ -235,6 +235,42 @@
         "element_index": "8"
       },
       "risk": "confirm"
+    },
+    {
+      "id": "paste-into-notes-asks",
+      "tool": "paste",
+      "args": {
+        "app": "Notes",
+        "text": "https://zoom.us/j/123"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "paste-into-slack-asks-and-never-sends",
+      "tool": "paste",
+      "args": {
+        "app": "Slack",
+        "text": "See you at 5"
+      },
+      "risk": "confirm"
+    },
+    {
+      "id": "paste-into-terminal-never",
+      "tool": "paste",
+      "args": {
+        "app": "Terminal",
+        "text": "rm -rf ~/Documents"
+      },
+      "risk": "never"
+    },
+    {
+      "id": "paste-into-password-manager-never",
+      "tool": "paste",
+      "args": {
+        "app": "1Password",
+        "text": "hunter2"
+      },
+      "risk": "never"
     }
   ]
 }

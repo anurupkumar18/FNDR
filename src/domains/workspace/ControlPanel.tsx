@@ -1,6 +1,7 @@
 import { HOME_SECTIONS, setHomeSection, useHomeSections } from "@/shared/home/homeSections";
 import { SettingsTabList, SettingsTabPanel, type SettingsTab } from "./SettingsTabs";
 import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
+import { NotchDoSettings } from "@/domains/notch/NotchDoSettings";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -827,6 +828,7 @@ export function ControlPanel({
                                         </p>
                                     )}
                                 </section>
+                                <NotchDoSettings />
                                 <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
                                     <h3 id="settings-models-title">Models</h3>
                                     <p className="section-hint">

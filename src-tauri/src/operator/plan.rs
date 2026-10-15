@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const MAX_STEPS: usize = 8;
+/// The most a `paste` step puts into a field: a link, an address, a short
+/// paragraph, small enough to read in full on the approval card.
+pub const MAX_PASTE_CHARS: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +20,9 @@ pub enum StepAction {
     /// FNDR reopens a memory it resolved itself (ADR 027). Never planned by
     /// a model: the schema does not offer it and `parse_plan` refuses it.
     ReopenMemory,
+    /// FNDR pastes `text` into the focused field of `app` (or of the app in
+    /// front) once the person has tapped Allow on the exact text.
+    Paste,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +38,8 @@ pub enum StepCheck {
     None,
     /// The reopen core's typed outcome says the target opened.
     Reopened,
+    /// The focused field holds the pasted text.
+    Pasted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +54,10 @@ pub struct PlanStep {
     /// What `operate` should achieve, in the person's words.
     #[serde(default)]
     pub goal: String,
+    /// What a `paste` step puts into the focused field, exactly as the
+    /// person sees it before tapping Allow.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
     pub check: StepCheck,
     /// The memory a `reopen_memory` step opens. Only FNDR's code sets it:
     /// it is never read from a model's plan.
@@ -71,14 +83,15 @@ pub fn plan_output_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["action", "label", "app", "url", "goal", "check"],
+                    "required": ["action", "label", "app", "url", "goal", "text", "check"],
                     "properties": {
-                        "action": { "type": "string", "enum": ["open_app", "open_url", "operate"] },
+                        "action": { "type": "string", "enum": ["open_app", "open_url", "operate", "paste"] },
                         "label": { "type": "string" },
                         "app": { "type": "string" },
                         "url": { "type": "string" },
                         "goal": { "type": "string" },
-                        "check": { "type": "string", "enum": ["frontmost", "media_playing", "page_loaded", "none"] }
+                        "text": { "type": "string" },
+                        "check": { "type": "string", "enum": ["frontmost", "media_playing", "page_loaded", "pasted", "none"] }
                     }
                 }
             }
@@ -265,6 +278,7 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
             app: String::new(),
             url: format!("https://www.google.com/search?q={encoded}"),
             goal: String::new(),
+            text: String::new(),
             check: StepCheck::PageLoaded,
             item: None,
         });
@@ -305,6 +319,7 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
             app: String::new(),
             url,
             goal: String::new(),
+            text: String::new(),
             check: StepCheck::PageLoaded,
             item: None,
         });
@@ -315,6 +330,7 @@ fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
         app: target.to_string(),
         url: String::new(),
         goal: String::new(),
+        text: String::new(),
         check: StepCheck::Frontmost,
         item: None,
     })
@@ -394,7 +410,7 @@ fn asks_for_something_never_done(request: &str) -> bool {
     }
     let lower = request.to_lowercase();
     lower
-        .split(|c: char| matches!(c, ',' | ';' | '.' | '!' | '?'))
+        .split([',', ';', '.', '!', '?'])
         .flat_map(|clause| clause.split(" and ").flat_map(|part| part.split(" then ")))
         .any(|clause| {
             let words: Vec<&str> = clause
@@ -463,7 +479,23 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                     step.label
                 ));
             }
+            StepAction::Paste => {
+                if step.text.trim().is_empty() {
+                    return Err(format!("Step \"{}\" has nothing to paste.", step.label));
+                }
+                if step.text.chars().count() > MAX_PASTE_CHARS {
+                    return Err(format!(
+                        "Step \"{}\" pastes more than {MAX_PASTE_CHARS} characters.",
+                        step.label
+                    ));
+                }
+                // Whatever the model said, a paste is checked by reading the field.
+                step.check = StepCheck::Pasted;
+            }
             _ => {}
+        }
+        if step.action != StepAction::Paste {
+            step.text.clear();
         }
         if step.label.is_empty() {
             step.label = match step.action {
@@ -471,6 +503,8 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 StepAction::OpenUrl => "Open the page".to_string(),
                 StepAction::Operate => step.goal.clone(),
                 StepAction::ReopenMemory => String::new(),
+                StepAction::Paste if step.app.is_empty() => "Paste the text".to_string(),
+                StepAction::Paste => format!("Paste into {}", step.app),
             };
         }
     }
@@ -697,6 +731,7 @@ pub fn from_work_set(set: &crate::workset::WorkSet) -> Plan {
                 app: item.app_name.clone(),
                 url: String::new(),
                 goal: String::new(),
+                text: String::new(),
                 check: StepCheck::Reopened,
                 item: Some(item.clone()),
             })
@@ -906,7 +941,25 @@ const REPORTED_ONLY: &str = "Playback could not be read; went by the operator's 
 /// model's word that it was done. Only a frontmost app, playing media and an
 /// open page can be seen; every other step is a report.
 pub fn checked_by_fndr(step: &PlanStep, verdict: &Verdict) -> bool {
-    verdict.ok && step.check != StepCheck::None && verdict.detail != REPORTED_ONLY
+    verdict.ok
+        && step.check != StepCheck::None
+        && verdict.detail != REPORTED_ONLY
+        && verdict.detail != PASTE_UNREAD
+}
+
+const PASTE_UNREAD: &str = "Pasted; the field does not show its text to FNDR";
+
+/// Whether a paste landed, from the focused field's text read right after
+/// it (`None` when the field exposes none, as some apps' editors do).
+pub fn verify_paste(app: &str, text: &str, field: Option<&str>) -> Verdict {
+    let flat = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    match field {
+        Some(field) if flat(field).contains(&flat(text)) => {
+            verdict(true, format!("Pasted into {app}"))
+        }
+        Some(_) => verdict(false, format!("The field in {app} does not show the text")),
+        None => verdict(true, PASTE_UNREAD),
+    }
 }
 
 pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
@@ -969,6 +1022,7 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
             _ => verdict(false, "The operator could not finish this step"),
         },
         StepCheck::Reopened => verdict(false, "A reopen is judged by its outcome"),
+        StepCheck::Pasted => verdict(false, "A paste is judged by reading the field"),
     }
 }
 
@@ -1079,9 +1133,53 @@ mod tests {
             app: app.into(),
             url: url.into(),
             goal: "g".into(),
+            text: String::new(),
             check,
             item: None,
         }
+    }
+
+    #[test]
+    fn a_paste_needs_its_text_is_always_checked_by_reading_the_field_and_names_its_app() {
+        let paste = |text: &str, app: &str| {
+            format!(
+                r#"{{"steps":[{{"action":"paste","label":"","app":"{app}","url":"","goal":"","text":"{text}","check":"none"}}]}}"#
+            )
+        };
+        let plan = parse_plan(&paste("https://zoom.us/j/123", "Notes")).unwrap();
+        assert_eq!(
+            plan.steps[0].check,
+            StepCheck::Pasted,
+            "the model's check is not taken"
+        );
+        assert_eq!(plan.steps[0].label, "Paste into Notes");
+        assert_eq!(
+            parse_plan(&paste("hi", "")).unwrap().steps[0].label,
+            "Paste the text"
+        );
+        assert!(parse_plan(&paste("  ", "Notes")).is_err());
+        assert!(parse_plan(&paste(&"x".repeat(MAX_PASTE_CHARS + 1), "Notes")).is_err());
+        let open = parse_plan(
+            r#"{"steps":[{"action":"open_app","label":"","app":"Notes","url":"","goal":"","text":"stray","check":"frontmost"}]}"#,
+        )
+        .unwrap();
+        assert!(open.steps[0].text.is_empty(), "only a paste keeps text");
+
+        let link = "https://zoom.us/j/123";
+        assert!(verify_paste("Notes", link, Some(&format!("Call:\n{link}  "))).ok);
+        let missing = verify_paste("Notes", link, Some("Call:"));
+        assert!(!missing.ok);
+        let unread = verify_paste("Slack", link, None);
+        assert!(unread.ok);
+        let pasted = step(StepAction::Paste, "Notes", "", StepCheck::Pasted);
+        assert!(
+            !checked_by_fndr(&pasted, &unread),
+            "a field FNDR cannot read is not a check"
+        );
+        assert!(checked_by_fndr(
+            &pasted,
+            &verify_paste("Notes", link, Some(link))
+        ));
     }
 
     #[test]

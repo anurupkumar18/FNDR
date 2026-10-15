@@ -7,11 +7,13 @@ import {
     copyClipboardEntry,
     dismissOmnibar,
     fndrAnswer,
-    omnibarDo,
+    notchDoRequest,
+    notchDoSkills,
     getClipboardHistory,
     omnibarOpenMemory,
     pasteClipboardEntry,
     searchMemoryCards,
+    type NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import {
@@ -79,6 +81,21 @@ export function requestToDo(query: string): string | null {
     return asks && text.split(/\s+/).length >= 2 ? text : null;
 }
 
+/** The saved skill a query names: its name, or at least its first three
+ *  letters, alone or after "run", "do" or "start" and "my" or "the". */
+export function skillNamed(query: string, skills: NotchDoSkill[]): NotchDoSkill | null {
+    const said = query
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[.!?]+$/, "")
+        .replace(/^(please|hey fndr|fndr) /, "")
+        .replace(/^(run|do|start) /, "")
+        .replace(/^(my|the) /, "");
+    if (said.length < 3) return null;
+    return skills.find((skill) => skill.name.toLowerCase().replace(/^(my|the) /, "").startsWith(said)) ?? null;
+}
+
 function matchCountLabel(count: number): string {
     return `${count} ${count === 1 ? "match" : "matches"}`;
 }
@@ -133,8 +150,19 @@ export function OmnibarApp() {
         setActivityTrace(null);
     }, []);
 
+    // Skills are read each time the command bar opens, so one saved in the
+    // notch or Settings is offered at once.
+    const [skills, setSkills] = useState<NotchDoSkill[]>([]);
+    const loadSkills = useCallback(() => {
+        void notchDoSkills()
+            .then(setSkills)
+            .catch(() => setSkills([]));
+    }, []);
+    useEffect(loadSkills, [loadSkills]);
+
     useTauriEvent<void>(OMNIBAR_FOCUS_EVENT, () => {
         reset();
+        loadSkills();
         inputRef.current?.focus();
     });
 
@@ -360,7 +388,7 @@ export function OmnibarApp() {
     const doIt = useCallback((text: string) => {
         const seq = ++actionSeq.current;
         setFeedback(null);
-        void omnibarDo(text)
+        void notchDoRequest(text)
             .then(() => {
                 if (actionSeq.current === seq) reset();
             })
@@ -548,8 +576,11 @@ export function OmnibarApp() {
         inputRef.current?.focus();
     }, []);
 
-    // A request to do something gets a first row that hands it to Notch Do.
-    const doText = surface === "memory" && mode.kind === "search" ? requestToDo(query) : null;
+    // A saved skill's name, or a request to do something, gets a first row
+    // that hands it to Notch Do.
+    const typingSearch = surface === "memory" && mode.kind === "search";
+    const skill = typingSearch ? skillNamed(query, skills) : null;
+    const doText = skill ? skill.name : typingSearch ? requestToDo(query) : null;
     const actionRows = doText ? 1 : 0;
 
     const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -697,8 +728,14 @@ export function OmnibarApp() {
                             onMouseEnter={() => setSelectedIndex(0)}
                             onClick={() => doIt(doText)}
                         >
-                            <span className="omnibar-result-title">Do it: {doText}</span>
-                            <span className="omnibar-result-meta">Notch Do plans it, and asks before anything that needs a yes</span>
+                            <span className="omnibar-result-title">
+                                {skill ? `Run skill: ${skill.name}` : `Do it: ${doText}`}
+                            </span>
+                            <span className="omnibar-result-meta">
+                                {skill
+                                    ? skill.steps.join(" · ")
+                                    : "Notch Do plans it, and asks before anything that needs a yes"}
+                            </span>
                         </button>
                     )}
                     {results.map((card, index) => (

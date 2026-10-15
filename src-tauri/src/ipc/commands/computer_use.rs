@@ -982,6 +982,8 @@ fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
         StepAction::Operate => {
             !(guards.off_limits)(&step.app) && crate::operator::policy::is_media_app(&step.app)
         }
+        // The person sees the exact text and taps Allow at the step itself.
+        StepAction::Paste => false,
         StepAction::ReopenMemory => {
             plan.steps.len() <= MAX_AUTO_REOPENS
                 && plan
@@ -1047,9 +1049,12 @@ fn asks_no_more(declined_in_this_step: bool) -> bool {
 }
 
 /// Whether a failed step gets its second attempt. Asking again after the
-/// person declined would put the same question to them twice.
-fn worth_retrying(verdict: &plan::Verdict) -> bool {
-    !verdict.ok && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
+/// person declined would put the same question to them twice, and a second
+/// paste would put the text in twice.
+fn worth_retrying(step: &PlanStep, verdict: &plan::Verdict) -> bool {
+    !verdict.ok
+        && step.action != StepAction::Paste
+        && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
 }
 
 /// One attempt at one step; returns what FNDR saw afterward.
@@ -1159,6 +1164,63 @@ async fn attempt_step(
             ok: false,
             detail: "A reopen runs only in a work set FNDR planned".to_string(),
         }),
+        StepAction::Paste => {
+            let app = if step.app.is_empty() {
+                app_in_front(&native::observe(None).await, &ctx.guards)
+            } else {
+                Some(step.app.clone())
+            };
+            let Some(app) = app else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "No app is in front to paste into".to_string(),
+                });
+            };
+            let args = json!({ "app": app, "text": step.text });
+            if (ctx.guards.off_limits)(&app)
+                || classify("paste", &args, observed).risk == Risk::Never
+            {
+                native_entry("paste", args, "blocked", None);
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: format!("FNDR does not paste into {app}"),
+                });
+            }
+            let summary = format!("Paste \u{201c}{}\u{201d} into {app}", step.text.trim());
+            let approved = ask_person(ctx, commands, "paste", summary).await?;
+            native_entry(
+                "paste",
+                args.clone(),
+                if approved { "approved" } else { "declined" },
+                None,
+            );
+            if !approved {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: plan::ACTION_DECLINED.to_string(),
+                });
+            }
+            let (target, text) = (app.clone(), step.text.clone());
+            let pasted = tokio::task::spawn_blocking(move || {
+                crate::accessibility::paste_into_app(&target, &text)
+            })
+            .await
+            .map_err(|error| RunError::Failed(format!("The paste did not finish: {error}")))?;
+            let verdict = match pasted {
+                Ok(field) => plan::verify_paste(&app, &step.text, field.as_deref()),
+                Err(error) => plan::Verdict {
+                    ok: false,
+                    detail: error,
+                },
+            };
+            native_entry(
+                "paste",
+                args,
+                if verdict.ok { "ok" } else { "failed" },
+                Some(verdict.detail.clone()),
+            );
+            Ok(verdict)
+        }
         StepAction::Operate => {
             let Some(session) = session else {
                 return Ok(plan::Verdict {
@@ -1658,7 +1720,7 @@ async fn carry_out(
             )
             .await?;
             // A no from the person is an answer, not a failure to retry.
-            if verdict.ok || !worth_retrying(&verdict) {
+            if verdict.ok || !worth_retrying(&plan.steps[index], &verdict) {
                 break;
             }
             retry_note = Some(verdict.detail.clone());
@@ -1960,6 +2022,85 @@ pub async fn notch_do_save_skill(
 ) -> Result<String, String> {
     crate::operator::skills::save_from_run(&state.inner().state_store, &run_id, &name)
         .map(|skill| skill.name)
+}
+
+/// How many recent runs Settings lists.
+const RUNS_LISTED: usize = 20;
+
+/// A Notch Do run as Settings lists it: the request, how it was planned, its
+/// steps by label, how it ended, the person's rating and whether a skill
+/// could repeat it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoRun {
+    pub run_id: String,
+    pub at: String,
+    pub request: String,
+    pub planned_by: String,
+    pub steps: Vec<String>,
+    pub ok: Option<bool>,
+    pub summary: String,
+    pub rating: Option<crate::operator::runs::Rating>,
+    pub repeatable: bool,
+}
+
+/// A saved skill as Settings lists it, its steps by label.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoSkill {
+    pub id: String,
+    pub name: String,
+    pub request: String,
+    pub steps: Vec<String>,
+    pub saved_at: String,
+}
+
+fn step_labels(steps: &[PlanStep]) -> Vec<String> {
+    steps.iter().map(|step| step.label.clone()).collect()
+}
+
+/// The newest Notch Do runs, so a run can be rated or saved as a skill after
+/// the notch has closed.
+#[tauri::command]
+pub async fn notch_do_runs(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoRun>, String> {
+    Ok(
+        crate::operator::runs::recent(&state.inner().state_store, RUNS_LISTED)?
+            .into_iter()
+            .map(|run| NotchDoRun {
+                repeatable: run.repeatable(),
+                steps: step_labels(&run.steps),
+                run_id: run.run_id,
+                at: run.at,
+                request: run.request,
+                planned_by: run.planned_by,
+                ok: run.ok,
+                summary: run.summary,
+                rating: run.rating,
+            })
+            .collect(),
+    )
+}
+
+#[tauri::command]
+pub async fn notch_do_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoSkill>, String> {
+    Ok(crate::operator::skills::list(&state.inner().state_store)?
+        .into_iter()
+        .map(|skill| NotchDoSkill {
+            steps: step_labels(&skill.steps),
+            id: skill.id,
+            name: skill.name,
+            request: skill.request,
+            saved_at: skill.saved_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn notch_do_delete_skill(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    crate::operator::skills::delete(&state.inner().state_store, &id)
 }
 
 /// Starts the planned run (the plan card's countdown, "go", or a tap).
@@ -2308,15 +2449,51 @@ mod tests {
     }
 
     #[test]
-    fn a_declined_link_is_not_asked_about_twice() {
+    fn a_declined_step_is_not_asked_about_twice_and_a_paste_is_never_repeated() {
         let verdict = |ok: bool, detail: &str| plan::Verdict {
             ok,
             detail: detail.to_string(),
         };
-        assert!(!worth_retrying(&verdict(false, plan::LINK_DECLINED)));
-        assert!(!worth_retrying(&verdict(false, plan::ACTION_DECLINED)));
-        assert!(worth_retrying(&verdict(false, "Spotify is not in front")));
-        assert!(!worth_retrying(&verdict(true, "")));
+        let step = |action: StepAction| PlanStep {
+            action,
+            label: "x".into(),
+            app: "Notes".into(),
+            url: String::new(),
+            goal: String::new(),
+            text: "https://zoom.us/j/123".into(),
+            check: StepCheck::Frontmost,
+            item: None,
+        };
+        let open = step(StepAction::OpenApp);
+        assert!(!worth_retrying(&open, &verdict(false, plan::LINK_DECLINED)));
+        assert!(!worth_retrying(
+            &open,
+            &verdict(false, plan::ACTION_DECLINED)
+        ));
+        assert!(worth_retrying(
+            &open,
+            &verdict(false, "Notes is not in front")
+        ));
+        assert!(!worth_retrying(&open, &verdict(true, "")));
+        assert!(
+            !worth_retrying(
+                &step(StepAction::Paste),
+                &verdict(false, "The field in Notes does not show the text")
+            ),
+            "a second paste would put the text in twice"
+        );
+        let paste = Plan {
+            steps: vec![step(StepAction::Paste)],
+        };
+        let guards = Guards {
+            off_limits: Arc::new(|_| false),
+            halt: Arc::new(|| None),
+        };
+        assert!(!plan_starts_by_itself(
+            &paste,
+            "paste the zoom link into Notes",
+            &guards
+        ));
     }
 
     #[test]
@@ -2327,6 +2504,7 @@ mod tests {
             app: "Spotify".into(),
             url: String::new(),
             goal: "play Blinding Lights".into(),
+            text: String::new(),
             check: StepCheck::MediaPlaying,
             item: None,
         };
