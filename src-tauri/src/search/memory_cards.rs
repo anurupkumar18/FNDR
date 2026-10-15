@@ -947,8 +947,22 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
 
 /// Insight text as a card shows it: nothing that reads like instructions to a
 /// summarizer, and no narrator left over from records written by older prompts.
-fn safe_insight(value: &str) -> String {
-    if crate::summariser::narration_filter::is_summary_instruction(value)
+pub(crate) fn safe_insight(value: &str) -> String {
+    // Older metadata fallbacks wrote enum values into this display sentence.
+    // They explain nothing to a person, so leave the row out.
+    let machine_goal = value
+        .trim()
+        .split_once(':')
+        .filter(|(label, _)| label.trim().eq_ignore_ascii_case("goal"))
+        .map(|(_, goal)| goal.trim().trim_end_matches('.'))
+        .is_some_and(|goal| {
+            !goal.is_empty()
+                && goal
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        });
+    if machine_goal
+        || crate::summariser::narration_filter::is_summary_instruction(value)
         || (!value.trim().is_empty()
             && crate::summariser::narration_filter::is_placeholder_summary(value))
     {
@@ -960,7 +974,7 @@ fn safe_insight(value: &str) -> String {
 
 /// Older records stored a session-id fragment as their thread. That is an
 /// internal identifier, not something to show.
-fn safe_thread(value: &str) -> String {
+pub(crate) fn safe_thread(value: &str) -> String {
     if value.trim_start().starts_with("session …") {
         String::new()
     } else {
@@ -1932,6 +1946,38 @@ mod tests {
             "Reviewed IPL highlights on YouTube while comparing match statistics."
         )
         .is_some());
+    }
+
+    #[test]
+    fn fallback_card_hides_a_stored_goal_identifier() {
+        let result = SearchResult {
+            id: "checklist".into(),
+            window_title: "Launch checklist".into(),
+            snippet: "The launch checklist was updated".into(),
+            insight_why_mattered: "Goal: organizing_information.".into(),
+            ..Default::default()
+        };
+        let card = fallback_card_for_result("launch", &result);
+        assert!(card.insight_why_mattered.is_empty());
+        assert_eq!(card.window_title, "Launch checklist");
+        assert_eq!(card.evidence_ids, vec!["checklist"]);
+
+        let bare_intent = SearchResult {
+            insight_why_mattered: "Goal: planning.".into(),
+            ..result.clone()
+        };
+        assert!(fallback_card_for_result("launch", &bare_intent)
+            .insight_why_mattered
+            .is_empty());
+
+        let natural = SearchResult {
+            insight_why_mattered: "Goal: review the launch PR.".into(),
+            ..result
+        };
+        assert_eq!(
+            fallback_card_for_result("launch", &natural).insight_why_mattered,
+            "Goal: review the launch PR."
+        );
     }
 
     #[tokio::test]
