@@ -24,7 +24,9 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, OnceLock};
+use std::thread::JoinHandle;
 
 /// Where the visual-semantics path was invoked from (product / analytics).
 /// `ScreenCapture` is the screen-capture pipeline using the same VLM as
@@ -1142,44 +1144,82 @@ fn lightweight_entities_from_text(text: &str, max_entities: usize) -> Vec<String
 
 // --- Runtime (singleton) ----------------------------------------------------
 
-struct LlamaMtmdPair {
-    llama: LlamaContext<'static>,
+struct LlamaMtmdPair<'model> {
+    llama: LlamaContext<'model>,
     mtmd: MtmdContext,
 }
 
-struct MtmdVlmRuntime {
-    model: &'static LlamaModel,
+struct VisionSession<'model> {
+    model: &'model LlamaModel,
     chat_template: LlamaChatTemplate,
-    _backend: Arc<LlamaBackend>,
-    inner: Mutex<LlamaMtmdPair>,
+    inner: LlamaMtmdPair<'model>,
     model_family: MtmdModelFamily,
 }
 
-/// [`LlamaContext`] is not `Send` in the Rust bindings, but this runtime is only used behind
-/// `Arc` + [`Mutex`] from blocking import tasks (same pattern as [`super::InferenceEngine`]).
-unsafe impl Send for MtmdVlmRuntime {}
-unsafe impl Sync for MtmdVlmRuntime {}
+enum VisionRequest {
+    Run {
+        image: Vec<u8>,
+        filename: String,
+        reply: mpsc::Sender<Result<ImageSemanticInsight, String>>,
+    },
+    Shutdown,
+}
+
+struct MtmdVlmRuntime {
+    requests: mpsc::Sender<VisionRequest>,
+    stopping: Arc<AtomicBool>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
 
 static IMPORT_VISION: OnceLock<Mutex<Option<Arc<MtmdVlmRuntime>>>> = OnceLock::new();
+static VISION_STOPPING: AtomicBool = AtomicBool::new(false);
 
-/// True when the pixel runtime (Qwen3-VL with its projector) is resident.
-/// A held lock means the runtime is loading or in use, which counts as loaded.
+/// True while the pixel runtime is resident or loading.
 pub fn pixel_vlm_loaded() -> bool {
     IMPORT_VISION
         .get()
         .is_some_and(|slot| slot.try_lock().map_or(true, |runtime| runtime.is_some()))
 }
 
+/// Reject future loads before waiting for any current initialization or work.
+pub(super) fn stop_pixel_admission() {
+    VISION_STOPPING.store(true, Ordering::SeqCst);
+    if let Some(slot) = IMPORT_VISION.get() {
+        if let Some(guard) = slot.try_lock() {
+            if let Some(runtime) = guard.as_ref() {
+                runtime.request_shutdown();
+            }
+        }
+    }
+}
+
+pub(super) fn shutdown_pixel_runtime() {
+    stop_pixel_admission();
+    if let Some(slot) = IMPORT_VISION.get() {
+        let runtime = slot.lock().take();
+        if let Some(runtime) = runtime {
+            runtime.shutdown();
+        }
+    }
+}
+
 impl MtmdVlmRuntime {
-    fn instance(app_data_dir: &Path) -> Result<Arc<MtmdVlmRuntime>, String> {
+    fn instance(app_data_dir: &Path) -> Result<Arc<Self>, String> {
         let cell = IMPORT_VISION.get_or_init(|| Mutex::new(None));
         let mut slot = cell.lock();
-        if let Some(ref arc) = *slot {
-            return Ok(Arc::clone(arc));
+        if VISION_STOPPING.load(Ordering::SeqCst) {
+            return Err("Vision runtime is stopped".into());
         }
-        let arc = Arc::new(Self::load(app_data_dir)?);
-        *slot = Some(arc.clone());
-        Ok(arc)
+        if let Some(runtime) = &*slot {
+            return Ok(runtime.clone());
+        }
+        let runtime = Arc::new(Self::load(app_data_dir)?);
+        if VISION_STOPPING.load(Ordering::SeqCst) {
+            runtime.shutdown();
+            return Err("Vision runtime is stopped".into());
+        }
+        *slot = Some(runtime.clone());
+        Ok(runtime)
     }
 
     fn load(app_data_dir: &Path) -> Result<Self, String> {
@@ -1200,21 +1240,121 @@ impl MtmdVlmRuntime {
             (qwen_model.path, mmproj, MtmdModelFamily::Qwen3Vl2B)
         };
 
-        let backend = get_or_init_backend().map_err(|e| e.to_string())?;
-        let load_path = model_path.clone();
+        let backend = get_or_init_backend().map_err(|error| error.to_string())?;
+        let (requests, receiver) = mpsc::channel();
+        let (ready, initialized) = mpsc::channel();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stop = stopping.clone();
+        let thread = std::thread::Builder::new()
+            .name("fndr-vision-model".into())
+            .spawn(move || {
+                let model = match LlamaModel::load_from_file(
+                    &backend,
+                    &model_path,
+                    &LlamaModelParams::default(),
+                ) {
+                    Ok(model) => model,
+                    Err(error) => {
+                        let _ = ready.send(Err(format!("load MTMD model: {error}")));
+                        return;
+                    }
+                };
+                if VISION_STOPPING.load(Ordering::SeqCst) || worker_stop.load(Ordering::SeqCst) {
+                    let _ = ready.send(Err("Vision runtime is stopped".into()));
+                    return;
+                }
+                let mut session = match VisionSession::new(
+                    &model,
+                    &backend,
+                    &model_path,
+                    &mmproj,
+                    model_family,
+                ) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                        return;
+                    }
+                };
+                let _ = ready.send(Ok(()));
+                while let Ok(request) = receiver.recv() {
+                    if worker_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    match request {
+                        VisionRequest::Run {
+                            image,
+                            filename,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(session.run_blocking(&image, &filename, &worker_stop));
+                        }
+                        VisionRequest::Shutdown => break,
+                    }
+                }
+                // The session's projector and context drop before the borrowed model.
+            })
+            .map_err(|error| format!("Vision model thread failed to start: {error}"))?;
+        let runtime = Self {
+            requests,
+            stopping,
+            thread: Mutex::new(Some(thread)),
+        };
+        initialized
+            .recv()
+            .map_err(|error| format!("Vision initialization stopped: {error}"))??;
+        Ok(runtime)
+    }
 
-        let backend_clone = Arc::clone(&backend);
-        let model_ref = std::thread::spawn(move || -> Result<&'static LlamaModel, String> {
-            let params = LlamaModelParams::default();
-            let model = LlamaModel::load_from_file(&backend_clone, &load_path, &params)
-                .map_err(|e| format!("load MTMD model: {e}"))?;
-            let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
-            Ok(model_ref)
-        })
-        .join()
-        .map_err(|_| "model load thread panicked".to_string())??;
+    fn run_blocking(&self, image: &[u8], filename: &str) -> Result<ImageSemanticInsight, String> {
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("Vision runtime is stopped".into());
+        }
+        let (reply, result) = mpsc::channel();
+        self.requests
+            .send(VisionRequest::Run {
+                image: image.to_vec(),
+                filename: filename.to_string(),
+                reply,
+            })
+            .map_err(|_| "Vision runtime is stopped".to_string())?;
+        result
+            .recv()
+            .map_err(|_| "Vision runtime is stopped".to_string())?
+    }
 
-        let chat_template = match model_ref.chat_template(None) {
+    fn request_shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        let _ = self.requests.send(VisionRequest::Shutdown);
+    }
+
+    fn shutdown(&self) {
+        self.request_shutdown();
+        let mut owner = self.thread.lock();
+        if let Some(thread) = owner.take() {
+            if let Err(error) = thread.join() {
+                tracing::error!("Vision model thread panicked: {error:?}");
+            }
+        }
+    }
+}
+
+impl Drop for MtmdVlmRuntime {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl<'model> VisionSession<'model> {
+    fn new(
+        model: &'model LlamaModel,
+        backend: &LlamaBackend,
+        model_path: &Path,
+        mmproj: &Path,
+        model_family: MtmdModelFamily,
+    ) -> Result<Self, String> {
+        let chat_template = match model.chat_template(None) {
             Ok(t) => t,
             Err(err) => {
                 tracing::warn!(
@@ -1233,8 +1373,8 @@ impl MtmdVlmRuntime {
             .with_n_batch(n_batch)
             .with_n_ubatch(256.min(n_batch));
 
-        let llama = model_ref
-            .new_context(&backend, ctx_params)
+        let llama = model
+            .new_context(backend, ctx_params)
             .map_err(|e| format!("llama context: {e}"))?;
 
         let mmproj_str = mmproj.to_str().ok_or("mmproj path is not UTF-8")?;
@@ -1242,7 +1382,7 @@ impl MtmdVlmRuntime {
         mparams.use_gpu = true;
         mparams.print_timings = false;
         let model_path_str = model_path.display().to_string();
-        let mtmd = MtmdContext::init_from_file(mmproj_str, model_ref, &mparams).map_err(|e| {
+        let mtmd = MtmdContext::init_from_file(mmproj_str, model, &mparams).map_err(|e| {
             let detail = e.to_string();
             let mut msg = format!("mtmd init: {detail}");
             if detail.contains("returned null") {
@@ -1265,21 +1405,23 @@ impl MtmdVlmRuntime {
         );
 
         Ok(Self {
-            model: model_ref,
+            model,
             chat_template,
-            _backend: backend,
-            inner: Mutex::new(LlamaMtmdPair { llama, mtmd }),
+            inner: LlamaMtmdPair { llama, mtmd },
             model_family,
         })
     }
 
     fn run_blocking(
-        &self,
+        &mut self,
         image_bytes: &[u8],
         filename: &str,
+        stopping: &AtomicBool,
     ) -> Result<ImageSemanticInsight, String> {
-        let mut guard = self.inner.lock();
-        let LlamaMtmdPair { llama, mtmd } = &mut *guard;
+        if stopping.load(Ordering::SeqCst) {
+            return Err("Vision runtime is stopped".into());
+        }
+        let LlamaMtmdPair { llama, mtmd } = &mut self.inner;
         llama.clear_kv_cache();
 
         let marker = mtmd_default_marker();
@@ -1315,6 +1457,9 @@ impl MtmdVlmRuntime {
             )
             .map_err(|e| format!("mtmd tokenize: {e}"))?;
 
+        if stopping.load(Ordering::SeqCst) {
+            return Err("Vision runtime is stopped".into());
+        }
         let n_batch = llama.n_batch().max(1) as i32;
         let mut n_past = 0i32;
         n_past = chunks
@@ -1331,6 +1476,9 @@ impl MtmdVlmRuntime {
         let mut batch = LlamaBatch::new(llama.n_batch().max(512) as usize, 1);
 
         for _ in 0..max_new {
+            if stopping.load(Ordering::SeqCst) {
+                return Err("Vision runtime is stopped".into());
+            }
             let tok = sampler.sample(llama, -1);
             sampler.accept(tok);
             if self.model.is_eog_token(tok) {

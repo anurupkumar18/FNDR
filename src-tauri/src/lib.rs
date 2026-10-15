@@ -410,6 +410,7 @@ pub struct AppState {
     pub capture_stats: CapturePipelineStats,
     pub inference: RwLock<Option<Arc<InferenceEngine>>>,
     inference_init: AsyncMutex<()>,
+    inference_stopping: AtomicBool,
     /// One-frame-at-a-time gate. Any code path that drives the LLM, VLM,
     /// MTMD, BGE batch embedding, or CLIP batch embedding must hold this
     /// lock for the duration of the call. This serializes heavy model
@@ -504,6 +505,7 @@ impl AppState {
             capture_stats: CapturePipelineStats::default(),
             inference: RwLock::new(inference),
             inference_init: AsyncMutex::new(()),
+            inference_stopping: AtomicBool::new(false),
             model_pipeline_lock: AsyncMutex::new(()),
             stats_cache: RwLock::new(None),
             stats_dirty: AtomicBool::new(false),
@@ -655,10 +657,15 @@ impl AppState {
     }
 
     pub fn is_capturing(&self) -> bool {
-        !self.is_paused.load(Ordering::SeqCst) && !self.is_incognito.load(Ordering::SeqCst)
+        !self.inference_stopping.load(Ordering::SeqCst)
+            && !self.is_paused.load(Ordering::SeqCst)
+            && !self.is_incognito.load(Ordering::SeqCst)
     }
 
     pub fn inference_engine(&self) -> Option<Arc<InferenceEngine>> {
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            return None;
+        }
         self.inference.read().clone()
     }
 
@@ -694,7 +701,15 @@ impl AppState {
     }
 
     pub fn replace_ai_engines(&self, inference: Option<Arc<InferenceEngine>>) {
-        *self.inference.write() = inference;
+        let mut slot = self.inference.write();
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            drop(slot);
+            if let Some(engine) = inference {
+                engine.shutdown();
+            }
+        } else {
+            *slot = inference;
+        }
     }
 
     pub fn invalidate_memory_derived_caches(&self) {
@@ -703,7 +718,54 @@ impl AppState {
         *self.app_names_cache.write() = None;
     }
 
+    /// All model loads share this gate with shutdown, including Settings reloads.
+    pub async fn reload_ai_engines(&self) -> Result<LoadedAiEngines, String> {
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            return Err("Inference is shutting down".into());
+        }
+        let _guard = self.inference_init.lock().await;
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            return Err("Inference is shutting down".into());
+        }
+        let config = self.config.read().clone();
+        let loaded = load_ai_engines(&self.app_data_dir, &config).await;
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            if let Some(engine) = loaded.inference {
+                engine.shutdown();
+            }
+            return Err("Inference is shutting down".into());
+        }
+        self.replace_ai_engines(loaded.inference.clone());
+        Ok(loaded)
+    }
+
+    /// Set the admission flag before awaiting any initialization already running.
+    pub async fn shutdown_models(&self) {
+        self.inference_stopping.store(true, Ordering::SeqCst);
+        inference::stop_pixel_admission();
+        if let Some(engine) = self.inference.read().as_ref() {
+            engine.request_shutdown();
+        }
+        self.is_paused.store(true, Ordering::SeqCst);
+        let _guard = self.inference_init.lock().await;
+        let engine = self.inference.write().take();
+        // Blocking resource joins belong off the app's event thread.
+        let joined = tokio::task::spawn_blocking(move || {
+            if let Some(engine) = engine {
+                engine.shutdown();
+            }
+            inference::shutdown_pixel_runtime();
+        })
+        .await;
+        if let Err(error) = joined {
+            tracing::error!("Model shutdown task failed: {error}");
+        }
+    }
+
     pub async fn ensure_inference_engine(&self) -> Result<Option<Arc<InferenceEngine>>, String> {
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            return Err("Inference is shutting down".into());
+        }
         if let Some(engine) = self.inference_engine() {
             return Ok(Some(engine));
         }
@@ -719,6 +781,9 @@ impl AppState {
         }
 
         let _guard = self.inference_init.lock().await;
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            return Err("Inference is shutting down".into());
+        }
         if let Some(engine) = self.inference_engine() {
             return Ok(Some(engine));
         }
@@ -727,12 +792,16 @@ impl AppState {
             .await
             .map_err(|err| err.to_string())?;
         let engine = Arc::new(engine);
-        *self.inference.write() = Some(engine.clone());
+        if self.inference_stopping.load(Ordering::SeqCst) {
+            engine.shutdown();
+            return Err("Inference is shutting down".into());
+        }
+        self.replace_ai_engines(Some(engine.clone()));
         Ok(Some(engine))
     }
 }
 
-pub async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEngines {
+async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEngines {
     let preferred_model_id = models::inference_preferred_model_id(app_data_dir, config);
     let inference =
         match InferenceEngine::new(Some(app_data_dir.to_path_buf()), preferred_model_id).await {
@@ -756,6 +825,42 @@ pub async fn load_ai_engines(app_data_dir: &Path, config: &Config) -> LoadedAiEn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_closes_admission_before_waiting_for_initialization() {
+        use futures::FutureExt;
+        let dir = tempfile::tempdir().expect("isolated state");
+        let store = Arc::new(Store::new(dir.path()).expect("store"));
+        let state = AppState::new(
+            dir.path().to_path_buf(),
+            Config::default(),
+            store.clone(),
+            Arc::new(StateStore::new(dir.path()).expect("state store")),
+            GraphStore::new(store),
+            None,
+        );
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let initializing = state.inference_init.lock().await;
+            let mut shutdown = Box::pin(state.shutdown_models());
+            assert!(
+                shutdown.as_mut().now_or_never().is_none(),
+                "drain must wait for the initializer"
+            );
+            assert!(state.inference_stopping.load(Ordering::SeqCst));
+            state.is_paused.store(false, Ordering::SeqCst);
+            assert!(
+                !state.is_capturing(),
+                "resuming capture must not reopen shutdown admission"
+            );
+            assert!(state.ensure_inference_engine().await.is_err());
+            assert!(state.reload_ai_engines().await.is_err());
+            drop(initializing);
+            shutdown.await;
+            state.shutdown_models().await;
+            assert!(state.inference_engine().is_none());
+        });
+    }
 
     #[test]
     fn capture_stats_record_skip_increments_correct_counter_and_last_entry() {

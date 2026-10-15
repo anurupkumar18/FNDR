@@ -35,7 +35,47 @@ const APP_SWITCH_UNIQUE_THRESHOLD: usize = 6;
 const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
-fn main() {
+// The predefined macOS Quit calls AppKit terminate directly, bypassing
+// ExitRequested. Keep the native menu and route its Quit through Tauri instead.
+#[cfg(target_os = "macos")]
+fn configure_quit_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let menu = Menu::default(app.handle())?;
+    let label = PredefinedMenuItem::quit(app, None)?.text()?;
+    let quit = MenuItem::with_id(app, "fndr-quit", &label, true, Some("CmdOrCtrl+Q"))?;
+    let mut replaced = false;
+    for item in menu.items()? {
+        if let Some(submenu) = item.as_submenu() {
+            for (position, item) in submenu.items()?.into_iter().enumerate() {
+                if let Some(native) = item.as_predefined_menuitem() {
+                    if native.text()? == label {
+                        submenu.remove(&item)?;
+                        submenu.insert(&quit, position)?;
+                        replaced = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(replaced, "the native app menu must have a Quit item");
+    app.set_menu(menu)?;
+    app.on_menu_event(|handle, event| {
+        if event.id().as_ref() == "fndr-quit" {
+            handle.exit(0);
+        }
+    });
+    Ok(())
+}
+
+fn shutdown_native_helpers(app_handle: &tauri::AppHandle) {
+    ipc::commands::shutdown_screen_guide(app_handle);
+    ipc::commands::shutdown_computer_use();
+    ipc::commands::shutdown_hermes_gateway();
+    fndr_lib::voice::shutdown(app_handle);
+    fndr_lib::speech::shutdown_speech();
+}
+
+fn main() -> std::process::ExitCode {
     // `fndr operator-mcp`: Notch Do's computer-use tools, started by Codex as
     // a child process. It must not initialise the app, and stdout is the protocol.
     if std::env::args().nth(1).as_deref() == Some("operator-mcp") {
@@ -76,9 +116,8 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime");
-    // Leak so it lives for the process lifetime; tauri holds the handle only.
-    let rt_ref: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
-    tauri::async_runtime::set(rt_ref.handle().clone());
+    // Keep ownership until the app loop and model drain have finished.
+    tauri::async_runtime::set(rt.handle().clone());
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -91,6 +130,8 @@ fn main() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            configure_quit_menu(app)?;
             // Load configuration
             let config = Config::load_or_create()?;
             tracing::info!("Configuration loaded");
@@ -208,9 +249,9 @@ fn main() {
                         "Restoring last-session AI engine ({:?}) eagerly so capture starts hot",
                         preferred
                     );
-                    let loaded =
-                        fndr_lib::load_ai_engines(restore_data_dir.as_path(), &config).await;
-                    restore_state.replace_ai_engines(loaded.inference);
+                    if let Err(error) = restore_state.ensure_inference_engine().await {
+                        tracing::warn!("AI eager restore stopped: {error}");
+                    }
                 });
             }
 
@@ -949,16 +990,43 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
-    app.run(|app_handle, event| {
-        if matches!(
-            event,
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-        ) {
-            ipc::commands::shutdown_screen_guide(app_handle);
-            ipc::commands::shutdown_computer_use();
-            ipc::commands::shutdown_hermes_gateway();
-            fndr_lib::voice::shutdown(app_handle);
-            fndr_lib::speech::shutdown_speech();
+    // 0: running, 1: draining, 2: resources joined. Repeated Quit cannot skip drain.
+    let quit_phase = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let shutdown_runtime = rt.handle().clone();
+    let exit_code = app.run_return(move |app_handle, event| {
+        use std::sync::atomic::Ordering;
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if quit_phase.load(Ordering::SeqCst) == 2 {
+                return;
+            }
+            api.prevent_exit();
+            if quit_phase
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            tracing::info!("Quit requested; draining model resources");
+            shutdown_native_helpers(app_handle);
+            let state = app_handle.state::<Arc<AppState>>().inner().clone();
+            let handle = app_handle.clone();
+            let phase = quit_phase.clone();
+            tauri::async_runtime::spawn(async move {
+                state.shutdown_models().await;
+                phase.store(2, Ordering::SeqCst);
+                tracing::info!("Model resources drained; exiting FNDR");
+                handle.exit(0);
+            });
+        } else if matches!(event, tauri::RunEvent::Exit) && quit_phase.load(Ordering::SeqCst) != 2 {
+            // Dock/system termination can reach Exit without ExitRequested.
+            // AppKit will exit after this callback, so join before returning.
+            shutdown_native_helpers(app_handle);
+            let state = app_handle.state::<Arc<AppState>>().inner().clone();
+            shutdown_runtime.block_on(state.shutdown_models());
+            quit_phase.store(2, Ordering::SeqCst);
+            tracing::info!("Model resources drained during system termination");
         }
     });
+    drop(rt);
+    std::process::ExitCode::from(exit_code as u8)
 }

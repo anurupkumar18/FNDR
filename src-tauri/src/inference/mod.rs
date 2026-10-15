@@ -4,20 +4,10 @@
 //! runtime do not compete over Metal/CPU runtime initialization. Prompt text
 //! lives in `prompts.rs`.
 
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-#[allow(deprecated)]
-use llama_cpp_2::model::Special;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
-use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -27,6 +17,7 @@ pub mod extraction_evidence;
 mod image_semantics;
 pub mod model_config;
 pub(crate) mod prompts;
+mod text_runtime;
 pub mod vlm_router;
 
 pub(crate) use prompts::SCREEN_GUIDE_SYSTEM_PROMPT;
@@ -64,6 +55,14 @@ pub fn get_or_init_backend() -> Result<Arc<LlamaBackend>, Box<dyn std::error::Er
     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
     Ok(backend)
 }
+pub(crate) fn stop_pixel_admission() {
+    image_semantics::stop_pixel_admission();
+}
+
+pub fn shutdown_pixel_runtime() {
+    image_semantics::shutdown_pixel_runtime();
+}
+
 pub use image_semantics::{
     build_import_raw_evidence, compose_import_memory_context,
     compose_import_memory_context_with_title, compose_visual_metadata_fallback_import,
@@ -822,33 +821,14 @@ pub fn parse_expansion_terms(raw: &str) -> Vec<String> {
 // ============================================================================
 
 /// AI Inference Engine for FNDR using llama-cpp-2.
-/// Persists the LlamaContext to prevent Metal resource exhaustion crashes.
-///
-/// After a GPU OOM cascade, quit and relaunch the app before expecting stable Metal behaviour.
-///
-/// # Lifetime safety
-///
-/// The model is intentionally leaked (`Box::leak`) to obtain the `'static`
-/// reference borrowed by `LlamaContext`. Context and backend ownership are
-/// shared by engine handles; every blocking completion retains its own handle
-/// until it finishes, even if its waiting future is cancelled or the app
-/// replaces its engine. Cloning does not allocate a second context or model.
-///
-/// This does not reclaim model weights. Repeated construction still retains
-/// each loaded model for process lifetime; real unload needs a separate owned
-/// model/context design and verified destruction order.
-///
-/// Thread-safety: the model is immutable after loading, context access is
-/// serialized by its shared mutex, and each handle retains the shared backend.
+/// Cloneable text inference handle. The model and its context are owned by
+/// one worker; handles and cancelled waiters carry no borrowed FFI resources.
 #[derive(Clone)]
 pub struct InferenceEngine {
-    model: &'static LlamaModel,
-    context: Arc<Mutex<LlamaContext<'static>>>,
-    _backend: Arc<LlamaBackend>,
-    chat_template: LlamaChatTemplate,
+    runtime: Arc<text_runtime::TextRuntime>,
     model_id: String,
     model_path: PathBuf,
-    /// `<app data dir>/llm_traces.jsonl`; `None` when the engine has no app data dir (tests, evals).
+    /// Local trace file; absent in tests/evals without an application directory.
     trace_path: Option<PathBuf>,
 }
 
@@ -865,37 +845,6 @@ struct InferenceRunControl {
     deadline: Instant,
 }
 
-struct KvCacheClearGuard<'guard, 'context> {
-    context: parking_lot::MutexGuard<'guard, LlamaContext<'context>>,
-}
-
-impl<'guard, 'context> KvCacheClearGuard<'guard, 'context> {
-    fn new(mut context: parking_lot::MutexGuard<'guard, LlamaContext<'context>>) -> Self {
-        context.clear_kv_cache();
-        Self { context }
-    }
-}
-
-impl<'guard, 'context> Deref for KvCacheClearGuard<'guard, 'context> {
-    type Target = LlamaContext<'context>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.context
-    }
-}
-
-impl<'guard, 'context> DerefMut for KvCacheClearGuard<'guard, 'context> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.context
-    }
-}
-
-impl Drop for KvCacheClearGuard<'_, '_> {
-    fn drop(&mut self) {
-        self.context.clear_kv_cache();
-    }
-}
-
 fn inference_should_stop(control: Option<&InferenceRunControl>) -> bool {
     control
         .map(|control| {
@@ -903,9 +852,6 @@ fn inference_should_stop(control: Option<&InferenceRunControl>) -> bool {
         })
         .unwrap_or(false)
 }
-
-unsafe impl Send for InferenceEngine {}
-unsafe impl Sync for InferenceEngine {}
 
 /// Prepare the actual tokenized prompt using the loaded context's budget.
 fn prepare_prompt_tokens(
@@ -970,22 +916,6 @@ impl InferenceEngine {
 
         tracing::info!("Loading model {} from {:?}", model_id, model_path);
 
-        let backend_clone = Arc::clone(&backend);
-        let model_path_clone = model_path.clone();
-
-        let model_ref = tokio::task::spawn_blocking(move || {
-            let model_params = LlamaModelParams::default();
-            let model =
-                LlamaModel::load_from_file(&backend_clone, &model_path_clone, &model_params)?;
-
-            // See struct-level doc for the `Box::leak` rationale.
-            let model_ref: &'static LlamaModel = Box::leak(Box::new(model));
-            Ok::<&'static LlamaModel, Box<dyn std::error::Error + Send + Sync>>(model_ref)
-        })
-        .await
-        .map_err(|e| format!("Join error during model load: {}", e))?
-        .map_err(|e| format!("Model load failed: {}", e))?;
-
         // The window holds prompt plus output. Extraction rejects oversized
         // tokenized prompts; other jobs retain their leading-token truncation.
         // Override via env when debugging long-context behaviour.
@@ -1008,42 +938,35 @@ impl InferenceEngine {
             .unwrap_or(256)
             .min(n_batch);
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(n_ctx))
-            .with_n_batch(n_batch)
-            .with_n_ubatch(n_ubatch);
-
-        let context = model_ref.new_context(&backend, ctx_params)?;
-
-        let chat_template = match model_ref.chat_template(None) {
-            Ok(template) => template,
-            Err(err) => {
-                tracing::warn!(
-                    "Model {} has no baked chat template ({}); falling back to chatml",
-                    model_id,
-                    err
-                );
-                LlamaChatTemplate::new("chatml").map_err(
-                    |fallback_err| -> Box<dyn std::error::Error + Send + Sync> {
-                        Box::new(fallback_err)
-                    },
-                )?
-            }
-        };
+        let runtime = text_runtime::TextRuntime::new(
+            backend,
+            model_path.clone(),
+            model_id.clone(),
+            n_ctx,
+            n_batch,
+            n_ubatch,
+        )
+        .await?;
 
         let trace_path = app_data_dir
             .as_ref()
             .map(|dir| dir.join("llm_traces.jsonl"));
 
         Ok(Self {
-            model: model_ref,
-            context: Arc::new(Mutex::new(context)),
-            _backend: backend,
-            chat_template,
+            runtime: Arc::new(runtime),
             model_id,
             model_path,
             trace_path,
         })
+    }
+
+    pub(crate) fn request_shutdown(&self) {
+        self.runtime.request_shutdown();
+    }
+
+    /// Stop admission, cancel current decoding, and join the resource owner.
+    pub fn shutdown(&self) {
+        self.runtime.shutdown();
     }
 
     pub fn model_id(&self) -> &str {
@@ -1087,7 +1010,7 @@ impl InferenceEngine {
             &format!(
                 "{evidence}\n\nTASK: Return only the best memory snippet with useful details for future search recall."
             ),
-        ) {
+        ).await {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Prompt build failed: {}", err);
@@ -1121,17 +1044,20 @@ impl InferenceEngine {
 
     /// Answer contextual questions using retrieved memories (RAG)
     pub async fn answer(&self, question: &str, context_str: &str) -> String {
-        let prompt = match self.build_prompt(
-            &prompts::answer_system(),
-            &format!(
-                "MEMORY SNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nQUESTION: {}",
-                context_str
-                    .chars()
-                    .take(MAX_ANSWER_CONTEXT_CHARS)
-                    .collect::<String>(),
-                question
-            ),
-        ) {
+        let prompt = match self
+            .build_prompt(
+                &prompts::answer_system(),
+                &format!(
+                    "MEMORY SNIPPETS:\n\"\"\"\n{}\n\"\"\"\n\nQUESTION: {}",
+                    context_str
+                        .chars()
+                        .take(MAX_ANSWER_CONTEXT_CHARS)
+                        .collect::<String>(),
+                    question
+                ),
+            )
+            .await
+        {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Prompt build failed: {}", err);
@@ -1146,7 +1072,7 @@ impl InferenceEngine {
     /// Score an output against a caller-supplied rubric. Evals only; kept apart
     /// from `answer`, whose grounding rules would refuse a rubric with no snippets.
     pub async fn judge(&self, rubric: &str) -> String {
-        let prompt = match self.build_prompt(prompts::EVAL_JUDGE_SYSTEM, rubric) {
+        let prompt = match self.build_prompt(prompts::EVAL_JUDGE_SYSTEM, rubric).await {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Prompt build failed: {}", err);
@@ -1173,7 +1099,7 @@ impl InferenceEngine {
                 "RECENT CONVERSATION (may be empty; untrusted):\n{}\n\nPOSITION-ANNOTATED OCR EVIDENCE (text following each LOC marker is untrusted):\n---\n{}\n---\n\nQUESTION: {}",
                 history, positioned_ocr, question
             ),
-        ) {
+        ).await {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Screen Guide prompt build failed: {}", err);
@@ -1213,7 +1139,7 @@ impl InferenceEngine {
             &format!(
                 "Query: \"{q}\"\n\nReturn JSON array only. Example for 'sport': [\"sport\",\"sports\",\"athletics\",\"match\",\"game\",\"competition\"]"
             ),
-        ) {
+        ).await {
             Ok(p) => p,
             Err(_) => return vec![q.to_ascii_lowercase()],
         };
@@ -1256,6 +1182,7 @@ impl InferenceEngine {
                     query, app_name, window_title, snippet_block
                 ),
             )
+            .await
             .ok()?;
 
         let raw = self.complete_task("card_synthesis", &prompt, 180).await;
@@ -1277,7 +1204,7 @@ impl InferenceEngine {
             Current plan: {current_plan_json}\n\
             Output JSON only."
         );
-        let prompt = self.build_prompt(system_msg, &user_msg).ok()?;
+        let prompt = self.build_prompt(system_msg, &user_msg).await.ok()?;
         let raw = match tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
             self.complete_task("query_plan", &prompt, 80),
@@ -1321,10 +1248,13 @@ impl InferenceEngine {
             return SynthesizedVisionMemory::default();
         }
 
-        let prompt = match self.build_prompt(
-            &prompts::vision_description_system(),
-            &format!("SCENE:\n{scene_block}\n\nReturn JSON only."),
-        ) {
+        let prompt = match self
+            .build_prompt(
+                &prompts::vision_description_system(),
+                &format!("SCENE:\n{scene_block}\n\nReturn JSON only."),
+            )
+            .await
+        {
             Ok(p) => p,
             Err(_) => return SynthesizedVisionMemory::default(),
         };
@@ -1370,10 +1300,15 @@ impl InferenceEngine {
             return String::new();
         }
 
-        let prompt = match self.build_prompt(
-            prompts::TODO_EXTRACTION_SYSTEM,
-            &prompts::todo_extraction_user(&memories_text.chars().take(2000).collect::<String>()),
-        ) {
+        let prompt = match self
+            .build_prompt(
+                prompts::TODO_EXTRACTION_SYSTEM,
+                &prompts::todo_extraction_user(
+                    &memories_text.chars().take(2000).collect::<String>(),
+                ),
+            )
+            .await
+        {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Prompt build failed: {}", err);
@@ -1391,10 +1326,13 @@ impl InferenceEngine {
         if screen_text.trim().is_empty() {
             return String::new();
         }
-        let prompt = match self.build_prompt(
-            prompts::TASK_SUGGESTION_SYSTEM,
-            &prompts::task_suggestion_user(screen_text),
-        ) {
+        let prompt = match self
+            .build_prompt(
+                prompts::TASK_SUGGESTION_SYSTEM,
+                &prompts::task_suggestion_user(screen_text),
+            )
+            .await
+        {
             Ok(prompt) => prompt,
             Err(err) => {
                 tracing::error!("Prompt build failed: {}", err);
@@ -1424,7 +1362,7 @@ impl InferenceEngine {
             extraction_evidence::numbered_source_text(ocr_text)
         );
 
-        let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
+        let prompt = self.build_prompt(&system_msg, &user_msg).await.ok()?;
         let raw = self
             .complete_task(
                 "memory_extraction",
@@ -1448,7 +1386,7 @@ impl InferenceEngine {
                     "Fix this JSON to match the schema. source_refs arrays contain exact numbered source lines; other arrays contain short strings. Use only the original source; output JSON only.\nORIGINAL SOURCE:\n{}\nINVALID JSON:\n{}",
                     extraction_evidence::numbered_source_text(ocr_text), candidate
                 );
-                if let Ok(repair_prompt) = self.build_prompt(&system_msg, &repair_msg) {
+                if let Ok(repair_prompt) = self.build_prompt(&system_msg, &repair_msg).await {
                     let repaired_raw = self
                         .complete_task(
                             "memory_extraction_repair",
@@ -1533,7 +1471,7 @@ impl InferenceEngine {
             input.synthesis_branch,
         );
 
-        let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
+        let prompt = self.build_prompt(&system_msg, &user_msg).await.ok()?;
         let raw = self
             .complete_task("memory_review", &prompt, MEMORY_REVIEW_MAX_TOKENS)
             .await;
@@ -1551,7 +1489,7 @@ impl InferenceEngine {
                 let repair_msg = format!(
                     "Fix this invalid JSON to match the strict schema. Output ONLY JSON.\nINVALID JSON:\n{candidate}",
                 );
-                let repair_prompt = self.build_prompt(&system_msg, &repair_msg).ok()?;
+                let repair_prompt = self.build_prompt(&system_msg, &repair_msg).await.ok()?;
                 let repaired_raw = self
                     .complete_task(
                         "memory_review_repair",
@@ -1586,6 +1524,7 @@ impl InferenceEngine {
                     &transcript.chars().take(7000).collect::<String>(),
                 ),
             )
+            .await
             .ok()?;
 
         let raw = self.complete_task("meeting_breakdown", &prompt, 360).await;
@@ -1645,39 +1584,18 @@ impl InferenceEngine {
         Some(draft)
     }
 
-    fn build_prompt(&self, system_message: &str, user_message: &str) -> Result<String, String> {
-        // Null bytes in input indicate a real upstream data issue (broken OCR,
-        // bad decode) rather than something to silently paper over. Log and strip.
-        let sys = if system_message.contains('\0') {
-            tracing::warn!("build_prompt: null byte in system message (stripping)");
-            system_message.replace('\0', " ")
-        } else {
-            system_message.to_string()
-        };
-        let usr = if user_message.contains('\0') {
-            tracing::warn!("build_prompt: null byte in user message (stripping)");
-            user_message.replace('\0', " ")
-        } else {
-            user_message.to_string()
-        };
-
-        let messages = vec![
-            LlamaChatMessage::new("system".to_string(), sys).map_err(|err| err.to_string())?,
-            LlamaChatMessage::new("user".to_string(), usr).map_err(|err| err.to_string())?,
-        ];
-
-        self.model
-            .apply_chat_template(&self.chat_template, &messages, true)
-            .map_err(|err| err.to_string())
+    async fn build_prompt(
+        &self,
+        system_message: &str,
+        user_message: &str,
+    ) -> Result<String, String> {
+        self.runtime
+            .format(system_message.to_string(), user_message.to_string())
+            .await
     }
 
-    /// Run generation. Offloads the full blocking section (mutex + decode loop)
-    /// onto `spawn_blocking` so we don't stall the tokio runtime during long
-    /// generations.
-    ///
-    /// NOTE: Only one generation runs at a time across the whole engine because
-    /// `LlamaContext` is protected by a single `Mutex`. This is intentional —
-    /// the underlying KV cache is shared state.
+    /// Run generation on the owning model thread. Each engine serializes work
+    /// around one context without blocking the waiting async executor.
     async fn complete(&self, prompt: &str, max_tokens: i32) -> String {
         self.complete_with_control(prompt, max_tokens, None).await
     }
@@ -1699,62 +1617,40 @@ impl InferenceEngine {
         max_tokens: i32,
         control: Option<InferenceRunControl>,
     ) -> String {
-        // A cancelled waiter does not stop spawn_blocking. Move an owned
-        // handle into the job so its shared context and trace metadata remain
-        // valid even when the caller releases or replaces the engine.
-        let worker_engine = self.clone();
-
-        let prompt_owned = prompt.to_string();
-        // Task labels are tokio task-locals and do not cross into `spawn_blocking`, so read them here.
         let (task, prompt_version) = crate::telemetry::llm_trace::current_task();
-        #[cfg(debug_assertions)]
-        let memory_journey = crate::telemetry::llm_trace::current_memory_journey();
-        let started = Instant::now();
-
-        tokio::task::spawn_blocking(move || {
-            let mut usage = TokenUsage::default();
-            let output = worker_engine.complete_blocking(
-                &prompt_owned,
-                max_tokens,
-                control.as_ref(),
-                &mut usage,
-                task,
-            );
-            worker_engine.record_trace(
-                task,
-                prompt_version,
-                &prompt_owned,
-                &output,
-                usage,
-                max_tokens,
-                started,
-                #[cfg(debug_assertions)]
-                memory_journey,
-            );
-            output
-        })
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("complete: spawn_blocking join failed: {}", e);
-            String::new()
-        })
+        let trace = CompletionTrace {
+            model_id: self.model_id.clone(),
+            trace_path: self.trace_path.clone(),
+            task,
+            prompt_version,
+            started: Instant::now(),
+            #[cfg(debug_assertions)]
+            memory_journey: crate::telemetry::llm_trace::current_memory_journey(),
+        };
+        self.runtime
+            .complete(prompt.to_string(), max_tokens, control, trace)
+            .await
     }
+}
 
-    /// Append one line to `llm_traces.jsonl` (hash and lengths only unless `FNDR_TRACE_CONTENT=1`).
-    fn record_trace(
-        &self,
-        task: &'static str,
-        prompt_version: &'static str,
-        prompt: &str,
-        output: &str,
-        usage: TokenUsage,
-        max_tokens: i32,
-        started: Instant,
-        #[cfg(debug_assertions)] memory_journey: Option<(
-            std::sync::Arc<crate::memory_journey::MemoryJourneyRecorder>,
-            String,
-        )>,
-    ) {
+struct CompletionTrace {
+    model_id: String,
+    trace_path: Option<PathBuf>,
+    task: &'static str,
+    prompt_version: &'static str,
+    started: Instant,
+    #[cfg(debug_assertions)]
+    memory_journey: Option<(Arc<crate::memory_journey::MemoryJourneyRecorder>, String)>,
+}
+
+impl CompletionTrace {
+    /// The worker records actual completion even if its waiting future was dropped.
+    fn record(self, prompt: &str, output: &str, usage: TokenUsage, max_tokens: i32) {
+        let task = self.task;
+        let prompt_version = self.prompt_version;
+        let started = self.started;
+        #[cfg(debug_assertions)]
+        let memory_journey = self.memory_journey;
         let trace = crate::telemetry::llm_trace::build_trace(
             &crate::telemetry::llm_trace::TraceInput {
                 ts_ms: chrono::Utc::now().timestamp_millis(),
@@ -1799,138 +1695,6 @@ impl InferenceEngine {
             }
         }
     }
-
-    /// Synchronous generation core. Called from inside `spawn_blocking`.
-    fn complete_blocking(
-        &self,
-        prompt: &str,
-        max_tokens: i32,
-        control: Option<&InferenceRunControl>,
-        usage: &mut TokenUsage,
-        task: &str,
-    ) -> String {
-        let t0 = std::time::Instant::now();
-        let ctx = loop {
-            if inference_should_stop(control) {
-                return String::new();
-            }
-            if control.is_none() {
-                break self.context.lock();
-            }
-            if let Some(context) = self.context.try_lock_for(Duration::from_millis(50)) {
-                break context;
-            }
-        };
-        // Clear both before and after every request. The exit guard covers
-        // success, decode errors, cancellation, and timeout, so transient
-        // Screen Guide OCR/history cannot remain in the shared Llama KV cache.
-        let mut ctx = KvCacheClearGuard::new(ctx);
-
-        let n_batch = ctx.n_batch().max(1) as usize;
-        let n_ctx = ctx.n_ctx() as usize;
-
-        let mut tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Tokenization failed: {}", e);
-                return "AI Error: Tokenization failed.".to_string();
-            }
-        };
-
-        if tokens_list.is_empty() {
-            tracing::error!("Tokenization produced empty output");
-            return String::new();
-        }
-
-        usage.prompt_tokens = tokens_list.len() as u32;
-        if !prepare_prompt_tokens(&mut tokens_list, n_ctx, max_tokens, task) {
-            return String::new();
-        }
-
-        let prompt_len = tokens_list.len();
-        usage.prompt_tokens = prompt_len as u32;
-        // llama.cpp asserts n_tokens_all <= n_batch for each decode; chunk the prefill.
-        let mut batch = LlamaBatch::new(n_batch, 1);
-        let mut offset = 0usize;
-        while offset < prompt_len {
-            if inference_should_stop(control) {
-                return String::new();
-            }
-            let end = (offset + n_batch).min(prompt_len);
-            batch.clear();
-            for pos in offset..end {
-                let logits = pos == prompt_len - 1;
-                if let Err(e) = batch.add(tokens_list[pos], pos as i32, &[0], logits) {
-                    tracing::error!("Batch add failed during prefill: {:?}", e);
-                    return "AI Error: LLM batch setup failed.".to_string();
-                }
-            }
-            if let Err(e) = ctx.decode(&mut batch) {
-                tracing::error!("Decode failed: {}", e);
-                return "AI Error: LLM Decode failed.".to_string();
-            }
-            offset = end;
-        }
-
-        // Proper sampler chain: repetition penalty + greedy.
-        //
-        // - Penalties: last-64 window, repeat=1.1, freq=0.0, presence=0.0.
-        //   This kills the "summary summary summary" loops that pure-argmax
-        //   greedy was prone to on smaller models.
-        // - Greedy: deterministic argmax over the post-penalty distribution.
-        //   Keeps behavior close to the previous implementation for summarization
-        //   and JSON-extraction paths (which want determinism).
-        //
-        // If temperature/top-p sampling is ever wanted per-call, expose it via
-        // an argument; for now all callers want deterministic output.
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
-            LlamaSampler::greedy(),
-        ]);
-
-        let mut result = String::new();
-        let mut n_cur = tokens_list.len() as i32;
-
-        for _ in 0..max_tokens {
-            if inference_should_stop(control) {
-                return String::new();
-            }
-            let token = sampler.sample(&ctx, -1);
-            sampler.accept(token);
-
-            if self.model.is_eog_token(token) {
-                break;
-            }
-
-            #[allow(deprecated)]
-            let piece = self
-                .model
-                .token_to_str(token, Special::Plaintext)
-                .unwrap_or_default();
-            result.push_str(&piece);
-            usage.output_tokens += 1;
-
-            batch.clear();
-            let _ = batch.add(token, n_cur, &[0], true);
-            if let Err(e) = ctx.decode(&mut batch) {
-                tracing::error!("Incremental decode failed: {}", e);
-                break;
-            }
-            n_cur += 1;
-        }
-
-        // Completion text may contain screen OCR or other private local data.
-        tracing::debug!(
-            "Completion finished ({} tokens, {} chars)",
-            n_cur - tokens_list.len() as i32,
-            result.trim().chars().count()
-        );
-        crate::telemetry::runtime_metrics::record_ms(
-            "llm.complete_ms",
-            t0.elapsed().as_millis() as u64,
-        );
-        result.trim().to_string()
-    }
 }
 
 #[cfg(test)]
@@ -1965,11 +1729,9 @@ mod tests {
         assert_eq!(tokens, (1..6).map(LlamaToken::new).collect::<Vec<_>>());
     }
 
-    /// Uses installed model weights but no owner captures/store. Cancellation
-    /// occurs before decoding. Keep the engine alive through runtime shutdown
-    /// so a regression to borrowed jobs fails without dereferencing freed data.
+    /// Uses installed model weights, with isolated traces and no capture/store.
     #[test]
-    #[ignore = "loads the real GGUF; known Metal teardown abort after test completion"]
+    #[ignore = "loads the real GGUF; run explicitly and serially"]
     fn cancelled_completion_keeps_context_owned_until_blocking_job_finishes() {
         use std::future::Future;
         use std::task::{Context, Poll};
@@ -1983,64 +1745,36 @@ mod tests {
             .expect("installed text model");
         let traces = tempfile::tempdir().expect("isolated traces");
         engine.trace_path = Some(traces.path().join("llm_traces.jsonl"));
-        let context = Arc::clone(&engine.context);
-        let weak_context = Arc::downgrade(&context);
-        let guard = context.lock();
-        let baseline_owners = Arc::strong_count(&context);
+        let release = engine.runtime.hold_for_test();
         let cancelled = Arc::new(AtomicBool::new(false));
         let control = InferenceRunControl {
-            cancelled: Arc::clone(&cancelled),
+            cancelled: cancelled.clone(),
             deadline: Instant::now() + Duration::from_secs(30),
         };
-        let (was_pending, owned_while_waiting, owned_after_cancel) = {
+        let was_pending = {
             let _entered = runtime.enter();
             let mut waiter = Box::pin(engine.complete_with_control("synthetic", 1, Some(control)));
-            let waker = futures::task::noop_waker();
             let was_pending = matches!(
-                waiter.as_mut().poll(&mut Context::from_waker(&waker)),
+                waiter
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&futures::task::noop_waker())),
                 Poll::Pending
             );
-            let owned_while_waiting = Arc::strong_count(&context) > baseline_owners;
             drop(waiter);
-            let owned_after_cancel = Arc::strong_count(&context) > baseline_owners;
-            (was_pending, owned_while_waiting, owned_after_cancel)
+            was_pending
         };
-        // Exercise caller destruction only after observing owned job state.
-        // On the old borrowed path retain the caller through drain, so the
-        // negative test never turns its lifetime failure into undefined behavior.
-        let (engine, owned_without_caller) = if owned_after_cancel {
-            drop(engine);
-            (None, Arc::strong_count(&context) > 1)
-        } else {
-            (Some(engine), false)
-        };
-        // Release and drain before any assertion. Cancellation prevents
-        // generation after the held lock opens.
         cancelled.store(true, Ordering::SeqCst);
-        drop(guard);
-        drop(runtime);
-        let owners_after_finish = Arc::strong_count(&context);
+        engine.request_shutdown();
+        assert!(
+            runtime
+                .block_on(engine.build_prompt("synthetic", "after stop"))
+                .is_err(),
+            "shutdown must reject formatting before the worker drain completes"
+        );
+        drop(release);
         drop(engine);
-        drop(context);
-        assert!(was_pending, "held context must suspend the completion");
-        assert!(owned_while_waiting, "blocking job must own its context");
-        assert!(
-            owned_after_cancel,
-            "cancelled waiter must not release job ownership"
-        );
-        assert!(
-            owned_without_caller,
-            "job survives external engine destruction"
-        );
-        assert_eq!(
-            owners_after_finish,
-            baseline_owners - usize::from(owned_after_cancel),
-            "finished job releases ownership"
-        );
-        assert!(
-            weak_context.upgrade().is_none(),
-            "last owner releases context"
-        );
+        drop(runtime);
+        assert!(was_pending, "held model worker must suspend the completion");
     }
 
     #[test]
@@ -2381,13 +2115,13 @@ mod tests {
 
     /// Manual check (loads the real text model): `cargo test --lib complete_writes_labeled -- --ignored --nocapture`.
     ///
-    /// Read the `test ... ok` line, not the process exit code: after the test passes the process aborts at
-    /// exit (`GGML_ASSERT([rsets->data count] == 0)`), because the model is leaked on purpose and ggml's
-    /// Metal teardown finds it still alive. This is existing behavior (finding F9), not caused by tracing.
+    /// Normal process exit is required as well as the test assertions.
     #[tokio::test]
     #[ignore = "loads the real GGUF from the app data dir; run by hand"]
     async fn complete_writes_labeled_trace_lines_with_token_counts() {
-        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let app_data_dir = std::env::var_os("FNDR_INFERENCE_TEST_APP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::data_dir().expect("data dir").join("com.fndr.app"));
         let mut engine = InferenceEngine::new(Some(app_data_dir), None)
             .await
             .expect("a text model must be installed in the app data dir");
@@ -2397,6 +2131,7 @@ mod tests {
 
         let prompt = engine
             .build_prompt("You answer in one short sentence.", "Say hello.")
+            .await
             .expect("prompt");
         let output = crate::telemetry::llm_trace::with_task(
             "trace_smoke_test",
@@ -2445,14 +2180,16 @@ mod tests {
     /// Manual check (loads the real text model): `cargo test --lib extraction_fits_default_token_budget -- --ignored --nocapture`.
     /// Eight synthetic captures must parse under the cap. A positive request
     /// retains exact observations, and an oversized prompt fails before decoding.
-    /// Read the `test ... ok` line: the process aborts at exit afterwards (finding F9).
+    /// Normal process exit is required as well as the extraction assertions.
     #[tokio::test]
     #[ignore = "loads the real GGUF from the app data dir; run by hand"]
     async fn extraction_fits_default_token_budget() {
         let cases: Vec<(String, String, String, String)> =
             serde_json::from_str(include_str!("../../tests/fixtures/extraction_cases.json"))
                 .expect("fixtures parse");
-        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let app_data_dir = std::env::var_os("FNDR_INFERENCE_TEST_APP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::data_dir().expect("data dir").join("com.fndr.app"));
         let mut engine = InferenceEngine::new(Some(app_data_dir), None)
             .await
             .expect("a text model must be installed in the app data dir");
@@ -2608,7 +2345,9 @@ mod tests {
 
     async fn run_task_suggestion_screens(screens: Vec<(String, String, bool)>) {
         use crate::tasks::suggest::parse_suggestions;
-        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let app_data_dir = std::env::var_os("FNDR_INFERENCE_TEST_APP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::data_dir().expect("data dir").join("com.fndr.app"));
         let mut engine = InferenceEngine::new(Some(app_data_dir), None)
             .await
             .expect("a text model must be installed in the app data dir");
@@ -2660,7 +2399,9 @@ mod tests {
         let cases: Vec<(String, String, String, String)> =
             serde_json::from_str(include_str!("../../tests/fixtures/extraction_cases.json"))
                 .expect("fixtures parse");
-        let app_data_dir = dirs::data_dir().expect("data dir").join("com.fndr.app");
+        let app_data_dir = std::env::var_os("FNDR_INFERENCE_TEST_APP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::data_dir().expect("data dir").join("com.fndr.app"));
         let mut engine = InferenceEngine::new(Some(app_data_dir), None)
             .await
             .expect("a text model must be installed in the app data dir");
