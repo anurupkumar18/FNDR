@@ -81,19 +81,22 @@ export function requestToDo(query: string): string | null {
     return asks && text.split(/\s+/).length >= 2 ? text : null;
 }
 
-/** The saved skill a query names: its name, or at least its first three
- *  letters, alone or after "run", "do" or "start" and "my" or "the". */
+/** The saved skill a query asks to run: its whole name ("Monday setup"),
+ *  or, after "run", "do" or "start", its first three letters or more ("run
+ *  mon"). A bare prefix stays a memory search, so typing "notes" never runs a
+ *  skill called "Notes setup". */
 export function skillNamed(query: string, skills: NotchDoSkill[]): NotchDoSkill | null {
-    const said = query
+    const words = query
         .trim()
         .toLowerCase()
         .replace(/\s+/g, " ")
         .replace(/[.!?]+$/, "")
-        .replace(/^(please|hey fndr|fndr) /, "")
-        .replace(/^(run|do|start) /, "")
-        .replace(/^(my|the) /, "");
+        .replace(/^(please|hey fndr|fndr) /, "");
+    const asked = /^(run|do|start) /.test(words);
+    const said = words.replace(/^(run|do|start) /, "").replace(/^(my|the) /, "");
     if (said.length < 3) return null;
-    return skills.find((skill) => skill.name.toLowerCase().replace(/^(my|the) /, "").startsWith(said)) ?? null;
+    const name = (skill: NotchDoSkill) => skill.name.toLowerCase().replace(/^(my|the) /, "");
+    return skills.find((skill) => (asked ? name(skill).startsWith(said) : name(skill) === said)) ?? null;
 }
 
 function matchCountLabel(count: number): string {
