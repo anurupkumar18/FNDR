@@ -238,35 +238,12 @@ fn query_encoded(query: &str) -> String {
         .collect()
 }
 
-/// Browsers as people name them in a request ("in Safari", "in Chrome").
-const BROWSER_NAMES: &[&str] = &[
-    "safari",
-    "chrome",
-    "google chrome",
-    "arc",
-    "dia",
-    "firefox",
-    "brave",
-    "brave browser",
-    "edge",
-    "microsoft edge",
-    "opera",
-    "vivaldi",
-    "orion",
-    "zen",
-];
-
-/// Whether a name, as said, is a web browser.
-pub fn is_browser_name(name: &str) -> bool {
-    BROWSER_NAMES.contains(&name.trim().to_lowercase().as_str())
-}
-
 /// "github.com in Safari": the text before a browser named at the end, and
 /// that browser, when it is one and is installed.
 fn in_browser(text: &str, is_app: &dyn Fn(&str) -> bool) -> Option<(String, String)> {
     let at = text.to_lowercase().rfind(" in ")?;
     let (head, place) = (text[..at].trim(), text[at + 4..].trim());
-    (!head.is_empty() && is_browser_name(place) && is_app(place))
+    (!head.is_empty() && crate::browsers::is_browser(place) && is_app(place))
         .then(|| (head.to_string(), place.to_string()))
 }
 
@@ -515,7 +492,7 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                     return Err(format!("Step \"{}\" is not a web link.", step.label));
                 }
                 // A link opens in the browser it names, else in the default one.
-                if !is_browser_name(&step.app) {
+                if !crate::browsers::is_browser(&step.app) {
                     step.app.clear();
                 }
             }
@@ -861,24 +838,8 @@ fn same_app(wanted: &str, seen: &Observation) -> bool {
 }
 
 fn is_browser(seen: &Observation) -> bool {
-    let name = seen.frontmost_app.to_lowercase();
-    let bundle = seen.frontmost_bundle.to_lowercase();
-    [
-        "safari", "chrome", "arc", "dia", "firefox", "brave", "edge", "opera", "vivaldi", "orion",
-        "zen",
-    ]
-    .iter()
-    .any(|browser| name.contains(browser))
-        || [
-            "com.apple.safari",
-            "com.google.chrome",
-            "company.thebrowser",
-            "org.mozilla",
-            "com.brave",
-            "com.microsoft.edgemac",
-        ]
-        .iter()
-        .any(|prefix| bundle.starts_with(prefix))
+    crate::browsers::is_browser(&seen.frontmost_app)
+        || crate::browsers::is_browser(&seen.frontmost_bundle)
 }
 
 /// Search words in a link's query (`q=looped+transformers`).
