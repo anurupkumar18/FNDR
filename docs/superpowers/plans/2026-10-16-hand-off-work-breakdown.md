@@ -29,6 +29,8 @@ Parts 1, 2 and 6 have no dependencies on each other and can run in parallel sess
 
 ## Part 0: spikes
 
+**Status 2026-10-16:** S1 to S5 done, S6 pending (the plan's window was full). Results and what they changed: [evidence](../../evidence/W05/hand-off-spikes.md). Parts 1, 7 and 8 below already include the changes.
+
 Evidence file: `docs/evidence/W05/hand-off-spikes.md`. Synthetic inputs only; a throwaway `CODEX_HOME` for config, the real `~/.codex/auth.json` only for S1 and S6 (they make model calls on the owner's plan; ask before the first one).
 
 | Spike | Question | Method | Pass |
@@ -60,9 +62,15 @@ pub fn worker_config_args(inputs: &ProfileInputs) -> Vec<String>;
 pub fn check_effective(asked: &ProfileInputs, effective: &serde_json::Value) -> Result<(), Vec<Mismatch>>;
 ```
 
-Config written: `default_permissions="fndr_hand_off"`; filesystem `:minimal=read`, toolchain `read`, job folder `write`; network `enabled=false`; `web_search=<mode>`; `mcp_servers={}`; features off: `computer_use`, `browser_use`, `browser_use_external`, `in_app_browser`, `apps`, `plugins`, `memories`, `hooks`, `image_generation`, `multi_agent`.
+Config written: `default_permissions="fndr_hand_off"`; filesystem `:minimal=read`, toolchain `read`, job folder `write`; network `enabled=false`; `web_search=<mode>`; features off: `computer_use`, `browser_use`, `browser_use_external`, `in_app_browser`, `apps`, `plugins`, `memories`, `hooks`, `image_generation`, `multi_agent`; `sqlite_home` and `log_dir` set to the job's Codex state folder in app data; `history.persistence="none"`; then, from a first `config/read` and `skills/list` on a throwaway app-server, `mcp_servers.<name>.enabled=false` and `plugins.<name>.enabled=false` for every configured name (bare keys: S1 showed quoted keys are taken literally) and one `skills.config=[...]` disabling every user and system skill. `mcp_servers={}` and `features.plugins=false` do not detach anything (S1).
 
-Tests: args are stable for the same input; paths with spaces and quotes are escaped as TOML; a missing feature-off, an extra writable root, network on, a non-empty `mcp_servers` and an unknown profile each produce a named mismatch; an effective config from S1 (saved as a fixture) passes.
+```rust
+pub struct PersonCodexConfig { pub mcp_servers: Vec<String>, pub plugins: Vec<String>, pub skill_paths: Vec<PathBuf> }
+/// Refuses names that cannot be written as a bare key (a dot, a quote, whitespace).
+pub fn disable_args(found: &PersonCodexConfig) -> Result<Vec<String>, Vec<String>>;
+```
+
+Tests: args are stable for the same input; paths with spaces and quotes are escaped as TOML; a missing feature-off, an extra writable root, network on, any MCP server or plugin still enabled, any skill other than FNDR's enabled, and an unknown profile each produce a named mismatch; a server named `a.b` is refused by `disable_args`; the effective config and skills list from S1 (saved as fixtures) pass.
 
 **Gate:** all unit tests; the S1 fixture passes `check_effective`.
 
@@ -191,7 +199,7 @@ Tests: one per check, both directions; a manifest naming `../../.ssh/id_rsa`; a 
 
 Files: `src-tauri/src/handoff/toolchain.rs`; `src-tauri/sidecars/hand-off/skills/` (new, added to `bundle.resources` in `tauri.conf.json` beside the other sidecars: `readout-docx/`, `table-xlsx/`, `slides-pptx/`, `brief-md/`, each a `SKILL.md` plus one script); `src-tauri/sidecars/hand-off/requirements.lock`.
 
-Toolchain: reuse the Hermes installer pattern (`hermes_agent.rs:508`): `uv venv` in app data, install from the hash-pinned lock, mark the version. Install only on enabling Hand-off; Uninstall removes the folder. The worker profile makes it read-only.
+Toolchain: reuse the Hermes installer pattern (`hermes_agent.rs:508`): `uv venv --python 3.12 --python-preference only-managed` with `UV_PYTHON_INSTALL_DIR` inside the toolchain folder (no Homebrew needed), install from the hash-pinned lock, mark the version, delete the download cache. Measured in S5: 199 MB, 45 s on the M1. Install only on enabling Hand-off; Uninstall removes the folder. The worker profile makes it read-only.
 
 Skills are FNDR's own text and scripts (no third-party skill text copied). Each script takes a JSON spec the worker writes in `work/` and renders the file, so formatting quality comes from tested code and the model writes content. Example: `readout-docx/render.py spec.json out/readout.docx` with title, sections, a table and an optional chart from a CSV column pair.
 
@@ -211,7 +219,7 @@ Commands: `hand_off_draft(source)`, `hand_off_update_draft(draft_id, ticks, goal
 
 `hand_off_open` opens only a path that is a verified deliverable of that job. `hand_off_keep` writes through the existing agent-note path with provenance `hand-off:<job id>` and refuses when agent notes are off.
 
-`hand_off_self_test` runs S1's probes as a job with no model turn (`codex sandbox` with the same profile) and stores pass or fail with the Codex version.
+`hand_off_self_test` runs S1's 17 probes through `command/exec` on an app-server started with the worker's exact arguments (no model turn, no plan usage, about 1.5 s) and stores each probe's result with the Codex version. `/private/tmp` is expected open and shown as the known gap; any other probe that does not match turns Hand-off off with the probe named. `hand_off_start` also reads `account/rateLimits/read` and refuses while a window is at 100 percent (PRD FR16).
 
 Tests: store bounds and restart; each command refuses under the kill switch and Private Mode; `ipcDrift` stays green with no baseline growth; a Privacy Activity row after restart.
 

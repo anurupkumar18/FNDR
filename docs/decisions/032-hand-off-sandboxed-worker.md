@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed 2026-10-16.** Drafted under the owner's delegation of product and architecture decisions (2026-10-08); it becomes Accepted when the owner approves the plan, and a row is added to `docs/team/decision-log.md` in that change.
+**Accepted 2026-10-16, by the owner** (plan approved in conversation). Spikes S1 to S5 measured the same day, [evidence](../evidence/W05/hand-off-spikes.md); they changed items 2 and 3 below. S6 is pending. The decision-log row is added with the first build commit.
 
 - Requirements: [Hand-off PRD](../superpowers/specs/2026-10-16-hand-off-prd.md)
 - Parts and gates: [work breakdown](../superpowers/plans/2026-10-16-hand-off-work-breakdown.md)
@@ -40,7 +40,17 @@ A spike ran `codex sandbox` (the same Seatbelt policy the app-server applies to 
 | `/usr/bin/python3` | blocked: the Command Line Tools path is not readable under `:minimal` |
 | `/opt/homebrew/bin/python3` with that path readable | 3.14.7 ran; `pandas` present; `matplotlib`, `python-docx`, `openpyxl`, `python-pptx` absent |
 
-Not yet measured: the same profile applied through `thread/start` `config` and read back with `config/read`; web search with shell network off; whether an ephemeral thread leaves a rollout under `~/.codex/sessions`; skill discovery from the job folder; a TCC prompt when a FNDR child writes under `~/Documents`. These are spikes S1 to S6 in the work breakdown and gate the parts that depend on them.
+### Spikes S1 to S5, the same day
+
+Full results in the [evidence file](../evidence/W05/hand-off-spikes.md). What changed this decision:
+
+- Through `codex app-server` and `command/exec` (no model), 15 of 17 probes held: the home folder, `~/.codex/auth.json`, `~/.fndr/mcp_token`, FNDR's app data, a symlink out of the folder, the clipboard, AppleScript, opening an app and the network were denied. **`/private/tmp` stayed readable and writable** under every profile tried; it comes from Codex's base policy.
+- `mcp_servers={}` and `features.plugins=false` do not detach the person's own MCP servers and plugins; each must be disabled by its bare name. The person's 38 Codex skills are offered to the worker unless each is disabled.
+- An ephemeral thread writes its prompt and commands to `~/.codex/logs_2.sqlite`. `sqlite_home` and `log_dir` move Codex's stores to a folder FNDR chooses.
+- The model declined, on its own, to run commands outside the folder, so a sandbox test through a model proves nothing; the self-test uses `command/exec`.
+- `thread/start` reported `/tmp` excluded while it was open: a reported policy is not proof.
+- The toolchain is 199 MB installed (S5), not 120 MB.
+- The person's `config.toml` model was refused on the ChatGPT plan, and the plan's 5-hour window was full, with purchasable credits on the account.
 
 ## Options
 
@@ -62,8 +72,8 @@ Scored 1 (poor) to 5 (strong). The total is a guide; the rejections below give t
 **A. FNDR runs Codex app-server as a sandboxed worker for person-approved hand-offs.**
 
 1. **One job, one folder, one thread.** A hand-off is a `codex app-server` child started for that job, with `cwd` set to a new job folder (`inputs/`, `work/`, `out/`), an ephemeral thread, and one turn (a second turn only for Revise).
-2. **The sandbox is FNDR's, and checked.** FNDR writes a permission profile for the job: read `:minimal`, the pinned toolchain and the job folder; write the job folder; network off. It is passed as process config, read back with `config/read`, and compared field by field before `turn/start`. Any mismatch refuses the job. `approvalPolicy` is `never`, so an escape request is denied rather than shown.
-3. **Nothing else is attached.** MCP servers, plugins, apps, hooks, computer use, browser use, Codex memories and image generation are switched off for the worker process and asserted off in the effective config. The worker cannot reach FNDR's own MCP server.
+2. **The sandbox is FNDR's, and checked.** FNDR writes a permission profile for the job: read `:minimal`, the pinned toolchain and the job folder; write the job folder; network off. It is passed as process config, read back with `config/read`, and compared field by field before `turn/start`. Any mismatch refuses the job. The proof is FNDR's probe self-test through `command/exec`, run on enabling, after each Codex version change and before the first job of a day; it uses no model. `/private/tmp` is a named, accepted gap: FNDR keeps nothing there, and the self-test reports it. `approvalPolicy` is `never`, so an escape request is denied rather than shown.
+3. **Nothing else is attached, and nothing stays in Codex.** MCP servers, plugins, apps, hooks, computer use, browser use, Codex memories, image generation and the person's own skills are switched off for the worker process, each server, plugin and skill by name, and asserted off in the effective config and `skills/list`; a name that cannot be disabled refuses the job. The worker cannot reach FNDR's own MCP server. Codex's state and logs for the job live in a per-job folder in FNDR's app data and are deleted when the job ends. The model is the account default from `model/list`, and a job does not start while the plan's window is full.
 4. **The only network is model-side web search,** run by OpenAI on the worker's behalf, mode `cached` by default. The shell has no network.
 5. **Egress is the draft.** What is sent at start is exactly the reviewed hand-off draft (ADR 025 item 3, extended with a local worker destination): the person's words or a checked suggestion quote, the attached memories' current display text, and the attached files copied into `inputs/`. Sources are rechecked against the visibility rule at start. One `HandOff` row per turn goes to the model request log with bytes and kinds. Bytes count the prompt plus the output of every command the worker ran, which is what the model reads back; this is an upper bound because Codex may truncate long output.
 6. **The result is untrusted until FNDR checks it.** The final message must match a manifest schema. FNDR verifies paths, file types, and every claimed source: memories must be attached ids, files must be in the folder, web URLs must have appeared in this job's `webSearch` events. Counts on the result come from this check only. A result enters Memory only when the person taps Keep, as an agent note with provenance.
@@ -92,7 +102,7 @@ Scored 1 (poor) to 5 (strong). The total is a guide; the rejections below give t
 
 - `codex_account::AppServer` gains notification streaming and interrupt, used by the worker; current callers are unchanged.
 - `agent/delegation.rs` gains a destination; peer behavior is unchanged.
-- A pinned Python toolchain (uv venv in app data, about 120 MB, measured in spike S5) is installed only when Hand-off is turned on.
+- A pinned Python toolchain (uv-managed Python 3.12 and a venv in app data, 199 MB measured in S5, plus a download cache deleted after install) is installed only when Hand-off is turned on.
 - A new prompt and schema live in `inference/prompts.rs` with their own version and a row in `docs/product/llm-task-catalog.md`.
 - Hand-off depends on Codex's permission profile keys. The self-test runs on enabling and after each Codex version change; a failure turns Hand-off off with the reason.
 

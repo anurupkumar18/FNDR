@@ -1,6 +1,6 @@
 # PRD: Hand-off
 
-**Status:** Proposed 2026-10-16, for the owner's review. Decision record: [ADR 032](../../decisions/032-hand-off-sandboxed-worker.md). Work breakdown: [2026-10-16 Hand-off work breakdown](../plans/2026-10-16-hand-off-work-breakdown.md).
+**Status:** Approved by the owner 2026-10-16. Spikes S1 to S5 measured the same day ([evidence](../../evidence/W05/hand-off-spikes.md)); S6 is pending. Decision record: [ADR 032](../../decisions/032-hand-off-sandboxed-worker.md). Work breakdown: [2026-10-16 Hand-off work breakdown](../plans/2026-10-16-hand-off-work-breakdown.md).
 
 Read against `origin/main` at `2b39c01` (2026-10-15). The shared checkout is 277 commits behind and was not used as the source of truth.
 
@@ -189,7 +189,7 @@ Trace (Agent > Hand-offs > Q4 readout):
 | Stopped | "Stopped. 2 files were written before Stop." | Revise, delete folder |
 | Failed | One sentence of reason and the next step | Try again, which makes a new draft |
 
-Failure sentences, each with its next step: not signed in to ChatGPT ("Sign in to ChatGPT in Settings > AI"); plan limit reached ("Your ChatGPT plan's limit is reached until 14:00"); the sandbox profile could not be confirmed ("Hand-off is off on this Mac: Codex did not confirm the sandbox"); timeout ("Stopped after 15 minutes; what it wrote is kept"); toolchain missing ("Install the document tools (about 120 MB)"); no deliverable ("It finished without writing a file").
+Failure sentences, each with its next step: not signed in to ChatGPT ("Sign in to ChatGPT in Settings > AI"); plan limit reached ("Your ChatGPT plan's limit is reached until 14:00"); the sandbox profile could not be confirmed ("Hand-off is off on this Mac: Codex did not confirm the sandbox"); timeout ("Stopped after 15 minutes; what it wrote is kept"); toolchain missing ("Install the document tools (about 200 MB)"); no deliverable ("It finished without writing a file").
 
 ## Non-goals
 
@@ -207,8 +207,8 @@ Failure sentences, each with its next step: not signed in to ChatGPT ("Sign in t
 - **FR2. The payload is the draft.** The rendered prompt sent in `turn/start` is byte-for-byte the text the draft rendered, plus the input files listed on it. A golden test compares them.
 - **FR3. Sources are rechecked at start.** Every attached memory goes through the visibility rule (`memory_is_visible`, `memory_is_permitted`) at start. A source removed, soft-deleted, newly blocklisted or now private blocks the start and the card says which one.
 - **FR4. Files.** At most 5 files, 25 MB each, 60 MB total; types `csv`, `tsv`, `xlsx`, `docx`, `pptx`, `pdf`, `md`, `txt`, `json`. Copied into `inputs/` with the original name, after a check that the path still matches the memory's reopen target and the file is a regular file, not a link.
-- **FR5. Sandbox, fail closed.** The worker process starts with FNDR's permission profile: read `:minimal`, the toolchain and the job folder; write the job folder only; shell network off. FNDR reads the effective config back (`config/read`) before the first turn and refuses the job on any mismatch.
-- **FR6. Nothing else attached.** No MCP servers, plugins, apps, hooks, computer use, browser use, Codex memories or image generation. The thread is ephemeral. A test asserts each from the effective config.
+- **FR5. Sandbox, fail closed.** The worker process starts with FNDR's permission profile: read `:minimal`, the toolchain and the job folder; write the job folder only; shell network off. FNDR reads the effective config back (`config/read`) before the first turn and refuses the job on any mismatch. A reported policy is not proof (S1: `thread/start` reported `/tmp` excluded while it was open), so the gate is the probe self-test (FR15), run through `command/exec` with no model. Known gap: `/private/tmp` stays readable and writable under every profile tried; FNDR keeps nothing there (its temp files go to `$TMPDIR`, which is denied) and the self-test reports the gap so a Codex change that closes it is noticed.
+- **FR6. Nothing else attached.** No MCP servers, plugins, apps, hooks, computer use, browser use, Codex memories, image generation or the person's own Codex skills. Feature switches alone are not enough (S1, S3): FNDR reads the person's MCP servers, plugins and skills from `config/read` and `skills/list`, disables each by name for the worker process, and refuses the job when a name cannot be written as a bare `-c` key (a dot in it) or still reads enabled. Codex's own state and logs for the job go to a per-job folder in FNDR's app data (`sqlite_home`, `log_dir`, `history.persistence="none"`) that FNDR deletes when the job ends, because an ephemeral thread still writes its prompt to `~/.codex/logs_2.sqlite` (S2). The thread is ephemeral. A test asserts each from the effective config.
 - **FR7. Approvals never reach the person.** `approvalPolicy: never`: a sandbox escape request is denied, never routed to a prompt.
 - **FR8. Limits.** 15 minutes wall clock, 3 minutes without any event, 60 MB folder, 40 files in `out/`, 200 commands. Hitting one interrupts the turn and keeps the folder.
 - **FR9. Stop.** Stop interrupts, confirms with `turn/completed` status `interrupted`, and kills the process 5 s later if needed. Quitting FNDR stops every job the same way. A job found `working` at launch is marked `stopped`.
@@ -218,6 +218,7 @@ Failure sentences, each with its next step: not signed in to ChatGPT ("Sign in t
 - **FR13. Kill switch and Private Mode.** Both refuse a draft and a start. Private Mode turning on during a job stops it.
 - **FR14. Job record.** Each job is kept in `hand-offs.json` in app data (owner-only, newest 50): id, created, request, goal, attachment ids, folder, status, timings, bytes, verification counts, rating. No memory text, no file content.
 - **FR15. Off by default.** Hand-off is a Labs feature, off until turned on in Settings > AI, and offered only when ChatGPT sign-in is present and the sandbox self-test passed once on this Mac.
+- **FR16. The plan's limit is checked before a job.** Before start, FNDR reads `account/rateLimits/read`. At 100 percent of the 5-hour or weekly window the draft says when it resets and offers no Hand off button, so a job never spends purchased credits without a separate, explicit choice. The model is the account's default from `model/list`, never the `model` in the person's `config.toml` (S1: it named a model the ChatGPT plan refuses).
 
 ## Non-functional requirements
 
@@ -260,7 +261,7 @@ Failure sentences, each with its next step: not signed in to ChatGPT ("Sign in t
 
 ## Acceptance criteria
 
-- [ ] The sandbox self-test passes on the M1 8 GB and on the owner's Mac: reading `~/.zshrc`, listing `~/Documents`, writing outside the folder and a shell `curl` are each denied, while writing in the folder, running the toolchain's Python and a web search succeed.
+- [ ] The sandbox self-test passes on the M1 8 GB through `command/exec`, with the 17 probes of S1: the home folder, the Codex sign-in, FNDR's app data and MCP token, a symlink out of the folder, the clipboard, AppleScript, opening an app and `curl` are each denied, while writing in `out/`, the toolchain's Python and system reads succeed; `/private/tmp` is reported as the known gap. A web search succeeds with shell network off (S6).
 - [ ] The rendered draft equals the sent prompt byte for byte (golden test).
 - [ ] A memory blocklisted after it was attached blocks the start (test on a seeded store).
 - [ ] Stop during a command confirms within 5 s and keeps the folder; quitting FNDR leaves no Codex process behind (native check).
@@ -307,7 +308,10 @@ Labs, off by default (FR15). Turned on for the demo profile only after the eval 
 | ChatGPT plan limits during the demo | Medium | Job fails on stage | Rate-limit event shown plainly; rehearse with plan headroom; recorded fallback |
 | 8 GB memory pressure while capture runs | Medium | Slow job | No local model for Hand-off; measured RSS; at most one job |
 | Folder under `~/Documents` triggers a TCC prompt for FNDR or Codex | Unknown | Prompt on stage | Measured in spike S4; fallback folder under app data with Reveal in Finder |
-| Toolchain size on a small disk | Medium | Install refused | 120 MB estimate measured in S5; install only on enabling; uninstall removes it |
+| Toolchain size on a small disk | Medium | Install refused | Measured 199 MB plus a deletable 162 MB cache (S5); install only on enabling; uninstall removes it |
+| A worker reads other programs' files in `/private/tmp` | Medium | Their content can reach the model | Codex's base policy leaves it open (S1); FNDR stores nothing there; the gap is reported by the self-test and named in the consent copy's details; reported upstream |
+| A job spends purchased credits when the plan window is full | Medium on a busy plan | Cost to the person | FR16 |
+| Tokens per job | High | Plan window fills fast | S1 used 115,000 tokens for a 34-second turn, mostly cached; the eval reports tokens per job |
 | Quality looks like a toy | Medium | Weak demo | The eval set with gold facts decides; FNDR skills with tested templates for each output type |
 
 ## Open questions for the owner
