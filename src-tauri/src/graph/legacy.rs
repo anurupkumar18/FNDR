@@ -382,10 +382,23 @@ impl GraphStore {
         (nodes, edges)
     }
 
-    /// Clear all graph data is managed via store reset/deletion in this version.
+    /// Clear both persisted graph table pairs during delete-all.
     pub async fn clear_all(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Implementation depends on Store's ability to truncate specific tables.
-        // For now, we omit individual clear in favor of consolidated store management.
+        self.store.clear_all_graph_data().await
+    }
+
+    /// [`Self::delete_memory_node`] for many memories in one pass.
+    pub async fn delete_memory_nodes(
+        &self,
+        memory_ids: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let node_ids = memory_ids
+            .iter()
+            .map(|id| memory_node_id(id))
+            .collect::<Vec<_>>();
+        for batch in node_ids.chunks(128) {
+            self.store.delete_graph_nodes(batch).await?;
+        }
         Ok(())
     }
 

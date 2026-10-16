@@ -1,0 +1,98 @@
+.action-approval-panel {
+    color: var(--text-primary, #20242a);
+}
+
+.action-approval-panel.floating {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 10000;
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(76vh, 700px);
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid var(--border, #c9d0d8);
+    border-radius: 16px;
+    background: var(--surface, #fff);
+    box-shadow: 0 18px 55px #0003;
+}
+
+.action-approval-panel.embedded {
+    display: grid;
+    gap: 12px;
+}
+
+.action-approval-settings {
+    display: grid;
+    gap: 10px;
+}
+
+.action-approval-settings label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.action-approval-card {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--border, #c9d0d8);
+    border-radius: 12px;
+    background: var(--surface, #fff);
+}
+
+.action-approval-card + .action-approval-card {
+    margin-top: 12px;
+}
+
+.action-approval-heading,
+.action-approval-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.action-approval-heading span {
+    font-size: 0.8rem;
+    opacity: 0.7;
+}
+
+.action-approval-card p {
+    margin: 0;
+}
+
+.action-approval-card dl {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 5px 12px;
+    margin: 0;
+}
+
+.action-approval-card dt {
+    font-weight: 600;
+}
+
+.action-approval-card dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.action-approval-arg {
+    display: contents;
+}
+
+.action-approval-undo {
+    font-size: 0.88rem;
+}
+
+.action-approval-buttons button {
+    min-width: 90px;
+}
+
+.action-approval-error {
+    color: #a32622;
+}

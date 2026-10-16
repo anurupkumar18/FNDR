@@ -114,6 +114,22 @@ fn npm_action(mut item: SetupComponent, npm_available: bool) -> SetupComponent {
     item
 }
 
+/// Voice search and meeting transcripts run programs FNDR does not ship. The
+/// row says which are missing instead of leaving a recording to fail later.
+fn voice_component(runtime: crate::speech::SpeechRuntime) -> SetupComponent {
+    let mut item = component(
+        "voice_input",
+        "Voice input and transcripts",
+        "Turns speech into text on this Mac for voice search and meetings.",
+        false,
+    );
+    match crate::speech::speech_runtime_gap(runtime) {
+        None => item.state = ComponentState::Ready,
+        Some(gap) => item.detail = Some(gap),
+    }
+    item
+}
+
 fn codex_signed_in() -> bool {
     std::fs::read_to_string(codex_home_dir().join("auth.json"))
         .ok()
@@ -194,6 +210,8 @@ pub async fn setup_components(
     }
     items.push(hermes);
 
+    items.push(voice_component(crate::speech::speech_runtime()));
+
     Ok(items)
 }
 
@@ -264,6 +282,26 @@ mod tests {
         assert_eq!(installer_for("hermes"), Some(Installer::Hermes));
         assert_eq!(installer_for("anything-else"), None);
         assert!(CODEX_INSTALL_SCRIPT_URL.starts_with("https://chatgpt.com/"));
+    }
+
+    #[test]
+    fn voice_row_is_ready_with_both_programs_and_otherwise_says_what_is_missing() {
+        use crate::speech::SpeechRuntime;
+        let ready = voice_component(SpeechRuntime {
+            ffmpeg: true,
+            whisper_cli: true,
+        });
+        assert_eq!(ready.state, ComponentState::Ready);
+        assert_eq!(ready.detail, None);
+
+        let gap = voice_component(SpeechRuntime {
+            ffmpeg: false,
+            whisper_cli: true,
+        });
+        assert_eq!(gap.state, ComponentState::Missing);
+        assert!(gap.detail.as_deref().is_some_and(|d| d.contains("ffmpeg")));
+        assert_eq!(gap.action, None);
+        assert!(!gap.required);
     }
 
     #[test]

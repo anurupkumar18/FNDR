@@ -382,10 +382,14 @@ impl GraphStore {
     }
 
     /// Merge by exact `id` (replace row). No fuzzy label merge.
-    pub async fn upsert_node(&self, node: &GraphNode) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn upsert_node(&self, node: &GraphNode) -> Result<(), String> {
         let filter = format!("id = '{}'", escape_sql_literal(&node.id.to_string()));
-        let _ = self.store.graph_nodes_table.delete(&filter).await;
-        let batch = nodes_to_batch(std::slice::from_ref(node))?;
+        self.store
+            .graph_nodes_table
+            .delete(&filter)
+            .await
+            .map_err(|e| e.to_string())?;
+        let batch = nodes_to_batch(std::slice::from_ref(node)).map_err(|e| e.to_string())?;
         let schema = batch.schema();
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         self.store
@@ -393,7 +397,8 @@ impl GraphStore {
             .add(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .mode(AddDataMode::Append)
             .execute()
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -521,16 +526,20 @@ impl GraphStore {
             if n.updated_at.timestamp_millis() < cutoff && !n.stale {
                 n.stale = true;
                 n_stale += 1;
-                self.upsert_node(n).await?;
+                self.upsert_node(n).await.map_err(std::io::Error::other)?;
             }
         }
         Ok(n_stale)
     }
 
-    pub async fn delete_node(&self, id: Uuid) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn delete_node(&self, id: Uuid) -> Result<(), String> {
         let filter = format!("id = '{}'", escape_sql_literal(&id.to_string()));
-        self.store.graph_nodes_table.delete(&filter).await?;
-        let edges = self.all_edges().await?;
+        self.store
+            .graph_nodes_table
+            .delete(&filter)
+            .await
+            .map_err(|e| e.to_string())?;
+        let edges = self.all_edges().await.map_err(|e| e.to_string())?;
         let to_del: Vec<String> = edges
             .iter()
             .filter(|e| e.source_id == id || e.target_id == id)
@@ -542,7 +551,37 @@ impl GraphStore {
                 .map(|id| format!("id = '{}'", escape_sql_literal(id)))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            let _ = self.store.graph_edges_table.delete(&f).await;
+            self.store
+                .graph_edges_table
+                .delete(&f)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Remove erased memories as evidence for insight nodes. Nodes with no
+    /// remaining source are removed with their edges.
+    pub async fn forget_memory_sources(&self, memory_ids: &[String]) -> Result<(), String> {
+        if memory_ids.is_empty() {
+            return Ok(());
+        }
+        let erased = memory_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        for mut node in self.all_nodes().await.map_err(|e| e.to_string())? {
+            let before = node.source_memory_ids.len();
+            node.source_memory_ids
+                .retain(|id| !erased.contains(id.as_str()));
+            if node.source_memory_ids.len() == before {
+                continue;
+            }
+            if node.source_memory_ids.is_empty() {
+                self.delete_node(node.id).await?;
+            } else {
+                self.upsert_node(&node).await?;
+            }
         }
         Ok(())
     }

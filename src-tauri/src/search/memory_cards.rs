@@ -220,7 +220,7 @@ impl MemoryCardSynthesizer {
             let snippets = collect_group_snippets(&group.members);
             let grounded_snippets = collect_grounded_snippets(&group.members);
             let anchor = select_anchor(&group.members);
-            if anchor.is_agent_note() {
+            if anchor.is_leaf_row() {
                 cards.push(fallback_card_for_result(query, &anchor));
                 continue;
             }
@@ -449,7 +449,7 @@ fn grouping_key(result: &SearchResult) -> String {
 }
 
 fn should_group(a: &SearchResult, b: &SearchResult, enforce_query_support: bool) -> bool {
-    if a.is_agent_note() || b.is_agent_note() {
+    if a.is_leaf_row() || b.is_leaf_row() {
         return false;
     }
     let within_time_window = (a.timestamp - b.timestamp).abs() <= 5 * 60 * 1000;
@@ -856,7 +856,7 @@ fn deterministic_fallback(
 
 fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let snippets = collect_group_snippets(std::slice::from_ref(result));
-    let (title, summary, action, context) = if result.is_agent_note() {
+    let (title, summary, action, context) = if result.is_leaf_row() {
         (
             result.window_title.clone(),
             if result.memory_context.is_empty() {
@@ -864,7 +864,12 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
             } else {
                 result.memory_context.clone()
             },
-            "View note".to_string(),
+            if result.is_agent_note() {
+                "View note"
+            } else {
+                "View item"
+            }
+            .to_string(),
             Vec::new(),
         )
     } else {
@@ -873,7 +878,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     let summary = remove_low_confidence_prefix(summary);
     let evidence_ids = vec![result.id.clone()];
     let confidence = grounding_confidence(query, &summary, result.score, &snippets);
-    let low_confidence = !result.is_agent_note() && !query.trim().is_empty() && confidence < 0.42;
+    let low_confidence = !result.is_leaf_row() && !query.trim().is_empty() && confidence < 0.42;
     let activity_type = infer_activity_type(&result.app_name, &result.window_title, &snippets);
     let files_touched = extract_files_touched(&snippets);
     let anchor_memory_context = if !result.memory_context.trim().is_empty() {
@@ -881,7 +886,7 @@ fn fallback_card_for_result(query: &str, result: &SearchResult) -> MemoryCard {
     } else {
         result.internal_context.clone()
     };
-    let continuation_of = if result.is_agent_note() {
+    let continuation_of = if result.is_leaf_row() {
         None
     } else {
         parse_continuation_of(&anchor_memory_context)
@@ -1078,6 +1083,10 @@ pub fn parse_reopen_target(memory_context: &str, result: &SearchResult) -> Optio
             }
         }
         crate::memory::reopen::ReopenKind::Unknown => {}
+    }
+
+    if result.is_import() {
+        return None;
     }
 
     for line in memory_context.lines() {
@@ -1500,7 +1509,7 @@ fn extract_story_facts(snippets: &[String]) -> Vec<String> {
 
 fn apply_story_continuity(cards: &mut [MemoryCard]) {
     for card in cards.iter_mut() {
-        if card.source_type == crate::storage::AGENT_NOTE_SOURCE_TYPE {
+        if crate::storage::is_leaf_source_type(&card.source_type) {
             continue;
         }
         if let Some(cleaned) = sanitize_summary(&card.summary) {
@@ -2195,6 +2204,29 @@ mod tests {
 
         let parsed = parse_reopen_target("Reopen: https://legacy.example/path", &result);
         assert_eq!(parsed.as_deref(), Some("https://legacy.example/path"));
+    }
+
+    #[test]
+    fn imported_reopen_uses_only_typed_provenance() {
+        let imported = SearchResult {
+            source_type: "import:mail".into(),
+            url: Some("https://untrusted.example".into()),
+            memory_context: "Reopen: https://injected.example".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            parse_reopen_target(&imported.memory_context, &imported),
+            None
+        );
+        let typed = SearchResult {
+            reopen_kind: crate::memory::reopen::ReopenKind::BrowserUrl,
+            reopen_url: Some("https://typed.example".into()),
+            ..imported
+        };
+        assert_eq!(
+            parse_reopen_target(&typed.memory_context, &typed).as_deref(),
+            Some("https://typed.example")
+        );
     }
 
     #[test]

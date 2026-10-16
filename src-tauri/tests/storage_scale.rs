@@ -240,6 +240,111 @@ fn compact_and_prune_keeps_a_bounded_version_count_over_batched_writes() {
     assert_eq!(count, 24 * 50, "compaction and pruning must not lose rows");
 }
 
+#[test]
+fn periodic_retention_removes_old_rows_and_compacts_child_chunks() {
+    use fndr_lib::inference::model_config::BGE_V5_DIMENSIONS;
+    use fndr_lib::storage::{EdgeType, GraphEdge, GraphNode, MemoryChunkRecord, NodeType};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::new(dir.path()).expect("store");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut old = synthetic_record(0, now_ms);
+    old.timestamp = now_ms - 91 * 86_400_000;
+    let current = synthetic_record(1, now_ms);
+    runtime
+        .block_on(store.add_batch_preserving_ids(&[old.clone(), current.clone()]))
+        .expect("seed old and current rows");
+    let old_node_id = format!("memory:{}", old.id);
+    let current_node_id = format!("memory:{}", current.id);
+    runtime
+        .block_on(store.upsert_nodes(&[
+            GraphNode {
+                id: old_node_id.clone(),
+                node_type: NodeType::Memory,
+                label: "Synthetic old memory".to_string(),
+                created_at: old.timestamp,
+                metadata: serde_json::Value::Null,
+            },
+            GraphNode {
+                id: current_node_id.clone(),
+                node_type: NodeType::Memory,
+                label: "Synthetic current memory".to_string(),
+                created_at: current.timestamp,
+                metadata: serde_json::Value::Null,
+            },
+        ]))
+        .expect("seed graph nodes");
+    runtime
+        .block_on(store.upsert_edges(&[GraphEdge {
+            id: "synthetic-retention-edge".to_string(),
+            source: old_node_id.clone(),
+            target: current_node_id.clone(),
+            edge_type: EdgeType::InformedBy,
+            timestamp: now_ms,
+            metadata: serde_json::Value::Null,
+        }]))
+        .expect("seed graph edge");
+    for i in 0..6 {
+        let parent = if i == 0 { &old } else { &current };
+        runtime
+            .block_on(store.upsert_memory_chunks(&[MemoryChunkRecord {
+                id: format!("synthetic-chunk-{i}"),
+                memory_id: parent.id.clone(),
+                chunk_index: i,
+                line_kind: "plain".to_string(),
+                text: format!("Synthetic chunk {i}"),
+                embedding: vec![0.0; BGE_V5_DIMENSIONS],
+                created_at: now_ms,
+                app_name: "Terminal".to_string(),
+                window_title: "Synthetic window".to_string(),
+                day_bucket: "2026-10-15".to_string(),
+                content_hash: format!("synthetic-hash-{i}"),
+            }]))
+            .expect("seed chunk batch");
+    }
+    let versions_before = runtime
+        .block_on(store.memory_chunks_table_scale_stats())
+        .expect("chunk versions before")
+        .versions;
+    assert!(versions_before >= 6);
+
+    assert_eq!(runtime.block_on(store.delete_older_than(30)).unwrap(), 1);
+    runtime.block_on(store.compact_and_prune(0)).unwrap();
+
+    assert!(runtime
+        .block_on(store.get_memory_by_id(&old.id))
+        .unwrap()
+        .is_none());
+    assert!(runtime
+        .block_on(store.list_chunks_for_memory(&old.id))
+        .unwrap()
+        .is_empty());
+    assert!(runtime
+        .block_on(store.get_memory_by_id(&current.id))
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        runtime
+            .block_on(store.list_chunks_for_memory(&current.id))
+            .unwrap()
+            .len(),
+        5
+    );
+    let nodes = runtime.block_on(store.get_all_nodes()).unwrap();
+    assert!(!nodes.iter().any(|node| node.id == old_node_id));
+    assert!(nodes.iter().any(|node| node.id == current_node_id));
+    assert!(runtime.block_on(store.get_all_edges()).unwrap().is_empty());
+    let versions_after = runtime
+        .block_on(store.memory_chunks_table_scale_stats())
+        .expect("chunk versions after")
+        .versions;
+    assert!(
+        versions_after <= 3,
+        "chunk versions stayed at {versions_after}"
+    );
+}
+
 /// Deterministic, varied synthetic text so BM25 sees a realistic vocabulary
 /// (the MEM-08 rows above all share one sentence, which matches every row).
 fn varied_text(i: usize) -> String {

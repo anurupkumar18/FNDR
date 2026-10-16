@@ -8,6 +8,16 @@ FNDR MCP exposes local memory to external agents over MCP while preserving local
 - `tunnel`: intended for Cloudflare/ngrok/Tailscale with bearer auth.
 - `public`: controlled non-loopback deployment.
 
+## Connect from Setup
+
+Setup has one Connect button each for Claude Code, Claude Desktop and Cursor. Connecting starts FNDR's local MCP server, saves its port, and writes a bearer-authenticated `fndr` entry in that client's user config. FNDR backs up an existing config before changing it, preserves unrelated entries, refuses a conflicting `fndr` entry and makes repeated Connect clicks idempotent. Claude Code is configured through its CLI; Claude Desktop uses the `mcp-remote` bridge and needs `npx`; Cursor reads a direct HTTP entry from `~/.cursor/mcp.json`.
+
+The Setup card shows the config state, the exact path, a masked preview, a connection test, Disconnect, Rotate token and Revoke all access. Copy setup puts the full tokenized config on the clipboard only after a click. The JSON writer preserves values and unrelated servers, but re-sorts object keys. A backup is made before a changed file is written. Disconnecting the last client stops the server. The **Keep the MCP server running** switch controls whether it resumes at launch after a client is connected.
+
+MCP recall tools withhold Secret and Sensitive memories, sensitive sites and anything excluded by the current blocklist or deletion and quality gates. The default Secret rule uses capture's real credential patterns plus password-manager apps and login pages, so ordinary development text such as "token budget" remains available. **Hide more in AI-tool results** optionally withholds any row containing the words "password", "secret" or "token". The setting starts off and is saved in `config.toml`. Every recall row includes a memory id, source type, app, time and reopen target. A connected assistant may send the memory it reads to its model.
+
+The client config formats were checked against the [Claude Code MCP guide](https://code.claude.com/docs/en/mcp), [Cursor MCP guide](https://docs.cursor.com/context/model-context-protocol) and [`mcp-remote` README](https://github.com/punkpeye/mcp-remote/blob/main/README.md). A live Claude Code CLI config check and a real MCP client tool call through the Claude Desktop bridge, both with synthetic data, are recorded in `docs/evidence/W04/mcp-connect.md`.
+
 Configuration is documented in `README.md`:
 
 - `FNDR_MCP_MODE`

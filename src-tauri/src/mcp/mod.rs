@@ -11,6 +11,11 @@
 //!  - 30-second timeout on LLM inference
 
 mod remember;
+mod provenance;
+mod recall;
+pub mod connect;
+#[cfg(test)]
+mod connect_http_tests;
 #[cfg(test)]
 mod remember_http_tests;
 pub mod tls;
@@ -2182,6 +2187,7 @@ fn tools_list_result() -> Value {
     });
     if let Some(tools) = listing["tools"].as_array_mut() {
         tools.push(remember::tool_listing());
+        tools.extend(recall::tool_listings());
     }
     listing
 }
@@ -2519,6 +2525,7 @@ async fn call_tool(
         "fndr.quality_status" => run_fndr_namespace_quality_status(app_state).await,
         "fndr.privacy_status" => run_agent_privacy_status(app_state).await,
         "fndr.open_target" => run_fndr_namespace_open_target(app_state, params.arguments).await,
+        name if recall::handles(name) => recall::run(name, app_state, params.arguments).await,
         unknown => Ok(tool_error(format!("Unknown tool: {unknown}"))),
     }
 }
@@ -4035,7 +4042,7 @@ fn result_row_to_json(
         "errors": memory.map(|m| m.errors.clone()).unwrap_or_default(),
         "decisions": memory.map(|m| m.decisions.clone()).unwrap_or_default(),
         "next_steps": memory.map(|m| m.next_steps.clone()).unwrap_or_default(),
-        "source_type": if row.is_agent_note() { crate::storage::AGENT_NOTE_SOURCE_TYPE.to_string() } else { infer_source_type(row.url.as_deref(), &row.app_name) },
+        "source_type": if row.is_leaf_row() { row.source_type.clone() } else { infer_source_type(row.url.as_deref(), &row.app_name) },
         "added_by": row.added_by,
     });
     if include_raw {

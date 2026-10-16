@@ -51,6 +51,10 @@ pub const DEFAULT_CAPTURE_SEMANTIC_DEDUP_WINDOW_MS: i64 = 90_000;
 pub const DEFAULT_CAPTURE_NOISE_SKIP_THRESHOLD: f32 = 0.97;
 pub const DEFAULT_CAPTURE_DEEP_IDLE_SECONDS: f64 = 300.0;
 pub const DEFAULT_CAPTURE_IDLE_BLEND_SECONDS: f64 = 30.0;
+pub const DEFAULT_CAPTURE_EVENT_DRIVEN: bool = true;
+pub const DEFAULT_CAPTURE_TRIGGER_FALLBACK_SECS: u64 = 10;
+pub const DEFAULT_CAPTURE_INPUT_SETTLE_MS: u64 = 1_500;
+pub const DEFAULT_CAPTURE_TITLE_COOLDOWN_SECS: u64 = 5;
 pub const DEFAULT_FOCUS_DRIFT_SIMILARITY_THRESHOLD: f32 = 0.30;
 pub const DEFAULT_FOCUS_DRIFT_CAPTURE_COUNT: u32 = 3;
 // Adaptive visual-novelty admission for low-OCR frames. These values are
@@ -312,6 +316,23 @@ pub struct CapturePipelineConfig {
     pub deep_idle_seconds: f64,
     #[serde(default = "default_capture_idle_blend_seconds")]
     pub idle_blend_seconds: f64,
+    /// Look at pixels only when something changed (app switch, window title,
+    /// typing or scrolling that has gone quiet), with a timer as the fallback.
+    /// `false` restores the fixed-rate loop driven by `fps_base` and `idle_fps`.
+    #[serde(default = "default_capture_event_driven")]
+    pub event_driven: bool,
+    /// Longest gap between pixel captures while nothing triggers. Doubled
+    /// once the person has stopped giving input (`idle_pause_seconds`).
+    #[serde(default = "default_capture_trigger_fallback_secs")]
+    pub trigger_fallback_secs: u64,
+    /// Quiet time after the last key press, scroll or click before the
+    /// resulting screen is captured.
+    #[serde(default = "default_capture_input_settle_ms")]
+    pub input_settle_ms: u64,
+    /// Minimum gap between captures caused by a window title change alone,
+    /// so an animated terminal or tab title cannot drive the capture rate.
+    #[serde(default = "default_capture_title_cooldown_secs")]
+    pub title_cooldown_secs: u64,
     #[serde(default = "default_focus_drift_similarity_threshold")]
     pub focus_drift_similarity_threshold: f32,
     #[serde(default = "default_focus_drift_capture_count")]
@@ -351,6 +372,10 @@ impl Default for CapturePipelineConfig {
             noise_skip_threshold: default_capture_noise_skip_threshold(),
             deep_idle_seconds: default_capture_deep_idle_seconds(),
             idle_blend_seconds: default_capture_idle_blend_seconds(),
+            event_driven: default_capture_event_driven(),
+            trigger_fallback_secs: default_capture_trigger_fallback_secs(),
+            input_settle_ms: default_capture_input_settle_ms(),
+            title_cooldown_secs: default_capture_title_cooldown_secs(),
             focus_drift_similarity_threshold: default_focus_drift_similarity_threshold(),
             focus_drift_capture_count: default_focus_drift_capture_count(),
             visual_novelty_base: default_visual_novelty_base(),
@@ -371,6 +396,9 @@ impl CapturePipelineConfig {
         self.noise_skip_threshold = self.noise_skip_threshold.clamp(0.0, 1.0);
         self.deep_idle_seconds = self.deep_idle_seconds.clamp(30.0, 86_400.0);
         self.idle_blend_seconds = self.idle_blend_seconds.clamp(1.0, 3_600.0);
+        self.trigger_fallback_secs = self.trigger_fallback_secs.clamp(2, 600);
+        self.input_settle_ms = self.input_settle_ms.clamp(250, 30_000);
+        self.title_cooldown_secs = self.title_cooldown_secs.clamp(1, 300);
         self.focus_drift_similarity_threshold =
             self.focus_drift_similarity_threshold.clamp(0.0, 1.0);
         self.focus_drift_capture_count = self.focus_drift_capture_count.clamp(1, 60);
@@ -708,6 +736,11 @@ pub struct Config {
     pub forced_capture_interval: u64,
     /// Days to retain records
     pub retention_days: u32,
+    /// Days to keep imported rows (browser history, files, mail, and so on),
+    /// counted from each item's own timestamp. The screen sweep above never
+    /// touches them. 0 = keep forever.
+    #[serde(default = "default_import_retention_days")]
+    pub import_retention_days: u32,
     /// Blocked application names and website/title patterns
     pub blocklist: Vec<String>,
     /// Sensitive sites/titles the user dismissed and does not want alerted about again.
@@ -715,6 +748,9 @@ pub struct Config {
     pub dismissed_privacy_alerts: Vec<String>,
     /// Enable pattern redaction (emails, credit cards)
     pub redact_mode: bool,
+    /// Hide ordinary mentions of passwords, secrets and tokens from MCP reads.
+    #[serde(default)]
+    pub mcp_strict_privacy: bool,
     /// Minimum text length to store
     pub min_text_length: usize,
     /// Enable VLM for intelligent image understanding
@@ -727,7 +763,8 @@ pub struct Config {
     /// Per-call VLM timeout in seconds. Falls back to OCR-only if the model doesn't respond.
     #[serde(default = "default_vlm_timeout_secs")]
     pub vlm_timeout_secs: u64,
-    /// Days to retain screenshot files on disk (records kept; only pixel data deleted). 0 = keep forever.
+    /// Compatibility setting with no effect on stable capture. ADR-004 keeps
+    /// screenshots in memory only; the MCP settings echo is its sole reader.
     #[serde(default = "default_screenshot_retention_days")]
     pub screenshot_retention_days: u32,
     /// Enable proactive surface: nudges when current screen is semantically close to old unresolved context.
@@ -748,6 +785,9 @@ pub struct Config {
     /// Kill switch: every command-surface action is refused while true.
     #[serde(default)]
     pub actions_kill_switch: bool,
+    /// Ask before opening an app that was not named in a person's request.
+    #[serde(default)]
+    pub confirm_unnamed_apps: bool,
     /// "Let assistants add notes": `fndr.remember` stores nothing while false
     /// (VS-68). Off by default, because it widens what memory holds.
     #[serde(default)]
@@ -1088,6 +1128,22 @@ fn default_capture_deep_idle_seconds() -> f64 {
     DEFAULT_CAPTURE_DEEP_IDLE_SECONDS
 }
 
+fn default_capture_event_driven() -> bool {
+    DEFAULT_CAPTURE_EVENT_DRIVEN
+}
+
+fn default_capture_trigger_fallback_secs() -> u64 {
+    DEFAULT_CAPTURE_TRIGGER_FALLBACK_SECS
+}
+
+fn default_capture_input_settle_ms() -> u64 {
+    DEFAULT_CAPTURE_INPUT_SETTLE_MS
+}
+
+fn default_capture_title_cooldown_secs() -> u64 {
+    DEFAULT_CAPTURE_TITLE_COOLDOWN_SECS
+}
+
 fn default_capture_idle_blend_seconds() -> f64 {
     DEFAULT_CAPTURE_IDLE_BLEND_SECONDS
 }
@@ -1212,6 +1268,10 @@ fn default_screenshot_retention_days() -> u32 {
     30
 }
 
+fn default_import_retention_days() -> u32 {
+    90
+}
+
 fn default_proactive_surface_enabled() -> bool {
     true
 }
@@ -1261,14 +1321,19 @@ impl Default for Config {
             dedupe_threshold: 5,
             forced_capture_interval: 60,
             retention_days: 7,
+            import_retention_days: default_import_retention_days(),
             blocklist: vec![
                 "1Password".to_string(),
+                "Bitwarden".to_string(),
+                "Dashlane".to_string(),
+                "LastPass".to_string(),
                 "Keychain Access".to_string(),
                 "System Preferences".to_string(),
                 "System Settings".to_string(),
             ],
             dismissed_privacy_alerts: Vec::new(),
             redact_mode: false,
+            mcp_strict_privacy: false,
             min_text_length: 20,
             use_vlm: true,
             vlm_max_calls_per_minute: default_vlm_max_calls_per_minute(),
@@ -1280,6 +1345,7 @@ impl Default for Config {
             screen_guide: ScreenGuideConfig::default(),
             operator: OperatorConfig::default(),
             actions_kill_switch: false,
+            confirm_unnamed_apps: false,
             agent_notes_enabled: false,
             notch_do_muted: None,
             embedding: EmbeddingConfig::default(),
@@ -1323,6 +1389,7 @@ impl Config {
         self.dedupe_threshold = self.dedupe_threshold.min(64);
         self.forced_capture_interval = self.forced_capture_interval.clamp(5, 3600);
         self.retention_days = self.retention_days.min(3650);
+        self.import_retention_days = self.import_retention_days.min(3650);
         self.min_text_length = self.min_text_length.clamp(1, 2000);
         self.screenshot_retention_days = self.screenshot_retention_days.min(3650);
         self.decay_half_life_days = self.decay_half_life_days.clamp(1, 3650);
@@ -1458,6 +1525,30 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn capture_triggers_default_on_for_an_older_file() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file = current
+            .lines()
+            .filter(|line| {
+                ![
+                    "event_driven =",
+                    "trigger_fallback_secs =",
+                    "input_settle_ms =",
+                    "title_cooldown_secs =",
+                ]
+                .iter()
+                .any(|key| line.starts_with(key))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert!(older.capture_pipeline.event_driven);
+        assert_eq!(older.capture_pipeline.trigger_fallback_secs, 10);
+        assert_eq!(older.capture_pipeline.input_settle_ms, 1_500);
+        assert_eq!(older.capture_pipeline.title_cooldown_secs, 5);
     }
 
     #[test]

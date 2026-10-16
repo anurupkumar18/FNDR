@@ -4,6 +4,7 @@
 #![recursion_limit = "512"]
 
 pub mod accessibility;
+pub mod action_layer;
 pub mod agent;
 pub mod briefing;
 pub mod browsers;
@@ -18,6 +19,7 @@ pub mod embedding;
 pub mod evals;
 pub mod graph;
 pub mod http_util;
+pub mod import;
 pub mod inference;
 pub mod ipc;
 pub mod mcp;
@@ -34,6 +36,7 @@ pub mod models;
 pub mod notify;
 pub mod ocr;
 pub mod operator;
+pub mod outputs;
 pub mod privacy;
 pub mod privacy_proof;
 pub mod proactive_signals;
@@ -654,6 +657,10 @@ impl AppState {
         Ok(())
     }
 
+    pub fn is_user_capture_paused(&self) -> bool {
+        self.user_capture_paused.load(Ordering::SeqCst)
+    }
+
     pub fn is_capturing(&self) -> bool {
         !self.is_paused.load(Ordering::SeqCst) && !self.is_incognito.load(Ordering::SeqCst)
     }
@@ -667,12 +674,21 @@ impl AppState {
     }
 
     pub fn ai_model_available(&self) -> bool {
+        if self
+            .inference
+            .read()
+            .as_ref()
+            .is_some_and(|engine| engine.apple_available())
+        {
+            return true;
+        }
         let preferred_model_id = self.inference_preferred_model_id();
         models::resolve_model(
             preferred_model_id.as_deref(),
             Some(self.app_data_dir.as_path()),
         )
         .is_some()
+            || inference::foundation::ready(self.app_data_dir.as_path())
     }
 
     /// Raw onboarding selection (may disagree with `config.vlm_model_size`).
@@ -693,6 +709,15 @@ impl AppState {
             .map(|engine| engine.model_id().to_string())
     }
 
+    pub fn last_text_backend(&self) -> String {
+        self.inference
+            .read()
+            .as_ref()
+            .map(|engine| engine.last_text_backend())
+            .unwrap_or("not_run")
+            .to_string()
+    }
+
     pub fn replace_ai_engines(&self, inference: Option<Arc<InferenceEngine>>) {
         *self.inference.write() = inference;
     }
@@ -709,12 +734,7 @@ impl AppState {
         }
 
         let preferred_model_id = self.inference_preferred_model_id();
-        if models::resolve_model(
-            preferred_model_id.as_deref(),
-            Some(self.app_data_dir.as_path()),
-        )
-        .is_none()
-        {
+        if !self.ai_model_available() {
             return Ok(None);
         }
 

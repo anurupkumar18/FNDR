@@ -17,6 +17,21 @@ afterEach(() => {
 });
 
 describe("development UI preview IPC", () => {
+    it("uses a synthetic imported title and enforces consent in preview", async () => {
+        window.history.replaceState(null, "", "/ui-preview.html?onboarding=bring_past");
+        const invoke = createPreviewIpcHandler();
+        await expect(invoke("get_onboarding_state")).resolves.toMatchObject({ step: "bring_past" });
+        await expect(invoke("import_get_consent", { source: "browser" })).resolves.toBe(false);
+        await expect(invoke("import_start", { source: "browser", windowDays: 30 })).rejects.toThrow(/consent/);
+        await invoke("import_set_consent", { source: "browser", enabled: true });
+        await expect(invoke("import_start", { source: "browser", windowDays: 30 })).resolves.toMatchObject({ state: "done", stored: 1 });
+        const cards = await invoke("list_memory_cards") as Array<{ title: string; source_type?: string }>;
+        expect(cards).toContainEqual(expect.objectContaining({ title: "Atlas planning notes", source_type: "import:browser" }));
+        await expect(invoke("import_forget", { source: "browser" })).resolves.toBe(1);
+        await expect(invoke("import_get_consent", { source: "browser" })).resolves.toBe(false);
+        window.history.replaceState(null, "", "/");
+    });
+
     it("models every state of Home's work area from ?home=", async () => {
         const populated = createPreviewIpcHandler();
         const threads = await populated("resume_work", { hours: 24, budgetTokens: 800 }) as Array<{ key: string; evidence: string[] }>;
@@ -45,6 +60,20 @@ describe("development UI preview IPC", () => {
         await expect(invoke("set_agent_notes_enabled", { enabled: false })).resolves.toBeUndefined();
         await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
         await expect(invoke("set_agent_notes_enabled", { enabled: "true" })).rejects.toThrow(/boolean/);
+    });
+
+    it("keeps action approvals empty and saves the optional confirmation in preview", async () => {
+        const invoke = createPreviewIpcHandler();
+        await expect(invoke("list_action_approvals")).resolves.toEqual([]);
+        await expect(invoke("get_action_settings")).resolves.toEqual({
+            actions_kill_switch: false,
+            confirm_unnamed_apps: false,
+        });
+        const settings = { actions_kill_switch: true, confirm_unnamed_apps: true };
+        await expect(invoke("set_action_settings", { settings })).resolves.toEqual(settings);
+        await expect(invoke("get_action_settings")).resolves.toEqual(settings);
+        await expect(invoke("set_action_settings", { settings: { confirm_unnamed_apps: "yes" } }))
+            .rejects.toThrow(/boolean/);
     });
 
     it("defaults visual QA to a stable Film dark scene", () => {

@@ -1,0 +1,44 @@
+.outputs-page {
+    position: fixed;
+    inset: 0;
+    z-index: 1050;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.outputs-header, .outputs-toolbar, .outputs-controls, .outputs-setting {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.outputs-header {
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: var(--header-border);
+}
+
+.outputs-header h2, .outputs-header p { margin: 0; }
+.outputs-header p, .outputs-settings p { color: var(--text-secondary); }
+.outputs-body { overflow: auto; padding: 24px; width: min(100%, 960px); margin: 0 auto; }
+.outputs-controls, .outputs-toolbar, .outputs-settings, .outputs-doc { margin-bottom: 20px; }
+.outputs-controls, .outputs-settings, .outputs-doc { padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-translucent); }
+.outputs-page label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.outputs-page .outputs-check { flex-direction: row; align-items: center; }
+.outputs-page button, .outputs-page input, .outputs-page select { font: inherit; }
+.outputs-page button { min-height: 34px; cursor: pointer; }
+.outputs-page button:disabled { cursor: wait; opacity: .5; }
+.outputs-doc h3 { margin-top: 0; }
+.outputs-doc h4 { margin-bottom: 8px; }
+.outputs-doc li { margin: 8px 0; }
+.outputs-citation { margin-left: 4px; }
+.outputs-error { color: var(--danger, #b42318); }
+.outputs-settings-toggle { margin-bottom: 16px; }
+.outputs-setting { margin: 12px 0; }
+.outputs-setting label { flex: 1; min-width: 200px; }
+.outputs-approval-backdrop { position: fixed; inset: 0; z-index: 1; display: grid; place-items: center; background: rgba(0, 0, 0, .58); padding: 20px; }
+.outputs-approval { width: min(100%, 640px); max-height: 90vh; overflow: auto; padding: 24px; border-radius: 14px; background: var(--panel-bg); border: 1px solid var(--border); }
+.outputs-approval pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 12px; background: var(--surface-translucent); }

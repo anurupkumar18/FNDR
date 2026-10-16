@@ -1,0 +1,30 @@
+.encryption-status {
+    border: 1px solid var(--border-subtle, #5555);
+    border-radius: 12px;
+    padding: 16px;
+    margin-block: 16px;
+}
+
+.encryption-status h2 {
+    font-size: 1rem;
+    margin: 0 0 8px;
+}
+
+.encryption-status h3 {
+    font-size: 0.875rem;
+    margin: 12px 0 4px;
+}
+
+.encryption-status ul {
+    margin: 0;
+    padding-inline-start: 20px;
+}
+
+.encryption-status li + li {
+    margin-block-start: 5px;
+}
+
+.encryption-status-filevault {
+    font-weight: 600;
+    margin: 0;
+}

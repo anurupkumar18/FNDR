@@ -6,6 +6,7 @@ export const MOUNTED_PANEL_KEYS = [
     "memoryCards",
     "ask",
     "dailySummary",
+    "outputs",
     "stats",
     "todo",
     "wrapped",

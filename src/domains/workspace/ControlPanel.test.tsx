@@ -11,6 +11,7 @@ import {
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
+import { getAppleModelStatus, setAppleModelEnabled } from "@/shared/ipc/onboarding";
 
 const checkUpdateMock = vi.fn();
 
@@ -27,6 +28,10 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ({
+    getActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    setActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    listActionApprovals: vi.fn().mockResolvedValue([]),
+    resolveActionApproval: vi.fn().mockResolvedValue(undefined),
     PRIVACY_ALERTS_EVENT: "privacy://alerts",
     CAPTURE_STATUS_EVENT: "capture://status",
     deleteAllData: vi.fn(),
@@ -96,6 +101,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
 }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
+    getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
+    setAppleModelEnabled: vi.fn(),
     deleteAiModel: vi.fn(),
     downloadModel: vi.fn(),
     getModelDownloadStatus: vi.fn().mockResolvedValue({
@@ -139,6 +146,27 @@ function openTab(name: string) {
 }
 
 describe("ControlPanel", () => {
+    it("shows the Apple text model switch and saves an opt out", async () => {
+        vi.mocked(getAppleModelStatus).mockResolvedValueOnce({ availability: "available", enabled: true });
+        vi.mocked(setAppleModelEnabled).mockResolvedValueOnce({ availability: "available", enabled: false });
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+
+        const toggle = await screen.findByRole("switch", { name: "Use Apple on-device model" });
+        await waitFor(() => expect(toggle).toBeChecked());
+        fireEvent.click(toggle);
+        await waitFor(() => expect(setAppleModelEnabled).toHaveBeenCalledWith(false));
+        await waitFor(() => expect(toggle).not.toBeChecked());
+    });
+
+    it("names the backend that handled the last text call", () => {
+        render(<ControlPanel status={{ ...statusWithEmbedder("real", false), last_text_backend: "apple_foundation" }} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+        expect(screen.getByText(/Last text backend: Apple on-device model/)).toBeInTheDocument();
+    });
+
     it("ignores an earlier settings load after reopening and saving consent", async () => {
         let finishFirstLoad!: (apps: string[]) => void;
         vi.mocked(getBlocklist).mockImplementationOnce(() => new Promise<string[]>((resolve) => {
@@ -351,7 +379,7 @@ describe("ControlPanel", () => {
         expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
         expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
         expect(screen.queryByText(/auto-fill/i)).toBeNull();
-        expect(screen.queryByText(/mcp server/i)).toBeNull();
+        expect(screen.queryByText(/start mcp server|stop mcp server|mcp server status/i)).toBeNull();
     });
 
     it("groups settings into five tabs, each holding its own people-first sections", async () => {

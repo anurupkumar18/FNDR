@@ -306,7 +306,7 @@ pub(super) fn set_fact_counts(card: &mut MemoryCard, record: &crate::storage::Me
 }
 
 pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
-    if result.is_agent_note() {
+    if result.is_leaf_row() {
         return crate::search::memory_cards::build_fallback_card("", &result);
     }
     let memory_id = result.id.clone();

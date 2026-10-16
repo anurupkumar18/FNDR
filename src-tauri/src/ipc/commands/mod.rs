@@ -82,7 +82,6 @@ pub use computer_use::*;
 pub use setup_center::*;
 pub use work_set::*;
 
-
 mod peer;
 pub use peer::*;
 
@@ -92,8 +91,14 @@ pub use graph::*;
 mod glasses_import;
 pub use glasses_import::*;
 
+mod import;
+pub use import::*;
+
 mod daily_review;
 pub use daily_review::*;
+
+mod daily_outputs;
+pub use daily_outputs::*;
 
 pub mod debug;
 pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
@@ -107,6 +112,9 @@ pub use retrieval::{
 
 mod companion;
 pub use companion::*;
+
+mod mcp_connect;
+pub use mcp_connect::*;
 
 mod screen_guide;
 pub use screen_guide::*;
@@ -123,6 +131,9 @@ pub use memory_journey::*;
 mod quality_lab;
 #[cfg(debug_assertions)]
 pub use quality_lab::*;
+
+mod actions;
+pub use actions::*;
 
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;

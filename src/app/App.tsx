@@ -56,6 +56,7 @@ export const SIDEBAR_GROUPS = [
         label: "Reflect",
         items: [
             { key: "dailySummary", text: "Daily Summary" },
+            { key: "outputs", text: "Daily outputs" },
             { key: "stats", text: "Stats" },
             { key: "todo", text: "To-dos" },
             { key: "wrapped", text: "FNDR Wrapped" },

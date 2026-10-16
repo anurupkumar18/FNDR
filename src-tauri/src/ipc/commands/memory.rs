@@ -36,32 +36,43 @@ pub(crate) async fn delete_memory_logic(
         return Ok(false);
     }
 
+    let mut cleanup_errors = Vec::new();
     if let Err(err) = super::todos::apply_memory_deletion_to_tasks(store, memory_id).await {
-        tracing::warn!(
-            "Task cleanup after deleting memory {} failed: {}",
-            memory_id,
-            err
-        );
+        cleanup_errors.push(format!("task cleanup: {err}"));
     }
 
     if let Some(record) = existing {
         if let Some(path) = record.screenshot_path {
-            if let Err(err) = std::fs::remove_file(&path) {
-                tracing::warn!("Failed to delete screenshot artifact {}: {}", path, err);
+            if let Err(err) = remove_screenshot_artifacts(Path::new(&path)) {
+                cleanup_errors.push(format!("screenshot cleanup: {err}"));
             }
         }
     }
 
     if let Err(err) = graph.delete_memory_node(memory_id).await {
-        tracing::warn!(
-            "Failed to delete graph node for memory {}: {}",
-            memory_id,
-            err
-        );
+        cleanup_errors.push(format!("graph cleanup: {err}"));
+    }
+
+    if !cleanup_errors.is_empty() {
+        return Err(cleanup_errors.join("; "));
     }
 
     tracing::info!("Deleted memory record {}", memory_id);
     Ok(true)
+}
+
+fn remove_screenshot_artifacts(path: &Path) -> std::io::Result<()> {
+    for artifact in [
+        path.to_path_buf(),
+        crate::privacy::vault::sealed_path_for(path),
+    ] {
+        match std::fs::remove_file(&artifact) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -345,6 +356,10 @@ pub(crate) fn resolve_reopen_target(
         return typed;
     }
 
+    if record.is_import() {
+        return None;
+    }
+
     if let Some(legacy) = parse_legacy_reopen_marker(&record.memory_context) {
         if is_http_url(&legacy) {
             return Some(ResolvedReopenTarget::BrowserUrl(legacy));
@@ -528,6 +543,20 @@ fn open_app_bundle(bundle_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_removes_plain_and_sealed_legacy_screenshot_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("frame.png");
+        let sealed = dir.path().join("frame.png.fndrenc");
+        std::fs::write(&plain, b"synthetic pixels").unwrap();
+        std::fs::write(&sealed, b"synthetic sealed pixels").unwrap();
+
+        remove_screenshot_artifacts(&plain).unwrap();
+
+        assert!(!plain.exists());
+        assert!(!sealed.exists());
+    }
 
     fn deletable_record(id: &str) -> crate::storage::MemoryRecord {
         crate::storage::MemoryRecord {

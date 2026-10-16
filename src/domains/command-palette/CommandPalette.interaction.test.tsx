@@ -51,6 +51,7 @@ describe("CommandPalette interaction contract", () => {
             "Memory Vault",
             "Search & Ask FNDR",
             "Daily Summary",
+            "Daily outputs",
             "Stats",
             "To-dos",
             "FNDR Wrapped",

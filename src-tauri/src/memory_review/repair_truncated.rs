@@ -107,7 +107,7 @@ fn uncut_sentence(stored: &str, record: &MemoryRecord) -> Option<String> {
 /// Repairs `record` in place. Returns the before and after of its summary
 /// when anything changed.
 pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     // The insight rows are derived separately and can be cut even when the
@@ -202,7 +202,7 @@ pub fn reword_narration(record: &mut MemoryRecord) -> Option<RepairExample> {
     // so the text and its vector say the same thing. That includes a
     // narrator ("The user is ...") and an activity left in progress
     // ("Reviewing ...").
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     let before = record.display_summary.clone();
