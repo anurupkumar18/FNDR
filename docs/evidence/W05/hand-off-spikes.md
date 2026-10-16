@@ -105,4 +105,4 @@ No Homebrew is needed. The worker's profile must make the toolchain folder reada
 
 ## Side note
 
-`scripts/dev/publish-merged.sh` exited 0 when GitHub rejected its push (GitLab took it). The commit was published afterwards by hand with the same checks.
+`scripts/dev/publish-merged.sh` fetched only GitLab, so a commit pushed to GitHub alone (Kunj's, 2026-10-15) made GitHub reject the publish after GitLab had taken it, leaving the remotes split. It did exit non-zero; an earlier note here said it exited 0, which was the exit code of a pipe around it. The commit was published afterwards by hand with the same checks, and the script now merges against GitHub's head when GitHub is ahead and stops before any check when the two have diverged (`scripts/dev/test_publish_merged.py`).
