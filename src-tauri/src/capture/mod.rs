@@ -1265,6 +1265,37 @@ pub(crate) fn field_supported_by_evidence(field: &str, evidence_norm: &str) -> b
     matched >= 1 && ratio >= 0.34
 }
 
+/// A project groups records across apps, so its words must occur together in
+/// one title or captured text segment, not across unrelated screen content.
+pub(crate) fn project_supported_by_evidence(
+    project: &str,
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+) -> bool {
+    let label = normalize_evidence_text(project);
+    if label.is_empty() || label == normalize_evidence_text(app_name) {
+        return false;
+    }
+    let terms = label
+        .split_whitespace()
+        .filter(|term| !matches!(*term, "a" | "an" | "and" | "for" | "of" | "the"))
+        .collect::<Vec<_>>();
+    !terms.is_empty()
+        && std::iter::once(window_title)
+            .chain(
+                clean_text
+                    .lines()
+                    .flat_map(|line| line.split(". "))
+                    .flat_map(|sentence| sentence.split(['?', '!'])),
+            )
+            .any(|segment| {
+                let source = normalize_evidence_text(segment);
+                let source_words: HashSet<&str> = source.split_whitespace().collect();
+                terms.iter().all(|term| source_words.contains(term))
+            })
+}
+
 fn strip_unsupported_values(
     values: &mut Vec<String>,
     evidence_norm: &str,
@@ -1332,6 +1363,16 @@ fn validate_structured_memory_extraction(
     clear_if_multi_option(&mut extraction.workflow, &mut issues, "workflow");
     clear_if_multi_option(&mut extraction.user_intent, &mut issues, "user_intent");
 
+    if !extraction.project.trim().is_empty() {
+        total += 1;
+        if project_supported_by_evidence(&extraction.project, app_name, window_title, clean_text) {
+            supported += 1;
+        } else {
+            issues.push("unsupported_project".to_string());
+            extraction.project.clear();
+        }
+    }
+
     let mut maybe_scrub = |value: &mut String, label: &str| {
         if value.trim().is_empty() {
             return;
@@ -1347,7 +1388,6 @@ fn validate_structured_memory_extraction(
         }
     };
 
-    maybe_scrub(&mut extraction.project, "project");
     maybe_scrub(&mut extraction.topic, "topic");
     maybe_scrub(&mut extraction.workflow, "workflow");
     maybe_scrub(&mut extraction.user_intent, "intent");
@@ -2435,9 +2475,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 format!("Visited {}", domain)
             };
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
+            let document_path = macos::document_path_for(&app_context);
+            let app_deep_link = crate::memory::reopen::app_deep_link_for(
+                app_context.bundle_id.as_deref(),
+                &window_title,
+                document_path.as_deref(),
+            );
             let mut reopen_target = build_reopen_target(
                 url.as_deref(),
-                macos::preferred_reopen_file_path(app_context.document_path.as_deref(), &[]),
+                app_deep_link.as_deref(),
+                macos::preferred_reopen_file_path(document_path.as_deref(), &[]),
                 app_context.bundle_id.as_deref(),
                 &app_name,
                 now.timestamp_millis(),
@@ -3818,10 +3865,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &prior_chain,
             &config.memory_quality,
         );
+        let document_path = macos::document_path_for(&app_context);
+        let app_deep_link = crate::memory::reopen::app_deep_link_for(
+            app_context.bundle_id.as_deref(),
+            &window_title,
+            document_path.as_deref(),
+        );
         let mut reopen_target = build_reopen_target(
             url.as_deref(),
+            app_deep_link.as_deref(),
             macos::preferred_reopen_file_path(
-                app_context.document_path.as_deref(),
+                document_path.as_deref(),
                 structured_memory
                     .as_ref()
                     .map(|memory| memory.files_touched.as_slice())
@@ -6468,7 +6522,7 @@ async fn maybe_create_tasks_from_memory(
     Ok(())
 }
 
-fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
+pub(crate) fn build_session_key(app_name: &str, window_title: &str, url: Option<&str>) -> String {
     let app = app_name.trim().to_lowercase().replace(' ', "_");
     let title = window_title
         .trim()
@@ -7928,7 +7982,7 @@ Activity patterns and insights dashboard
             &mut extraction,
             "Codex",
             "memory_cards.rs",
-            "Improved memory card search ranking quality in src-tauri/src/search/memory_cards.rs using MemoryCardSynthesizer",
+            "Improved FNDR memory card search ranking quality in src-tauri/src/search/memory_cards.rs using MemoryCardSynthesizer",
             "",
         );
 
@@ -7941,6 +7995,143 @@ Activity patterns and insights dashboard
         assert_eq!(extraction.files_touched.len(), 1);
         assert_eq!(extraction.entities.len(), 1);
         assert_eq!(extraction.dedup_fingerprint, "fndr:ranking:memory_cards");
+    }
+
+    #[test]
+    fn high_confidence_does_not_keep_an_unsupported_project() {
+        let mut extraction = StructuredMemoryExtraction {
+            confidence: 0.99,
+            project: "Smart Reminders launch".to_string(),
+            ..Default::default()
+        };
+
+        let (_, issues) = validate_structured_memory_extraction(
+            &mut extraction,
+            "Slack",
+            "#unrelated-team",
+            "Discussed an unrelated hiring schedule.",
+            "",
+        );
+
+        assert!(extraction.project.is_empty());
+        assert!(issues.iter().any(|issue| issue == "unsupported_project"));
+    }
+
+    #[test]
+    fn project_needs_all_its_words_in_the_source_not_just_a_similar_topic() {
+        let mut extraction = StructuredMemoryExtraction {
+            confidence: 0.99,
+            project: "Smart Reminders launch".to_string(),
+            ..Default::default()
+        };
+        validate_structured_memory_extraction(
+            &mut extraction,
+            "Slack",
+            "Smart team launch checklist",
+            "Discussed the team launch schedule.",
+            "",
+        );
+        assert!(extraction.project.is_empty());
+
+        extraction.project = "Smart Reminders launch".to_string();
+        validate_structured_memory_extraction(
+            &mut extraction,
+            "Slack",
+            "Launch checklist for Smart Reminders",
+            "Discussed the schedule.",
+            "",
+        );
+        assert_eq!(extraction.project, "Smart Reminders launch");
+
+        extraction.project = "Slack".to_string();
+        validate_structured_memory_extraction(
+            &mut extraction,
+            "Slack",
+            "#team - Slack",
+            "Discussed the schedule.",
+            "",
+        );
+        assert!(extraction.project.is_empty());
+    }
+
+    #[test]
+    fn project_validation_corpus_keeps_cross_app_work_separate() {
+        let cases = [
+            (
+                "Notion",
+                "Smart Reminders launch plan",
+                "Milestones and owners.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Slack",
+                "#launch",
+                "The Smart Reminders launch checklist is ready.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Keynote",
+                "Launch slides for Smart Reminders",
+                "The deck is ready.",
+                "Smart Reminders launch",
+                true,
+            ),
+            (
+                "Chrome",
+                "HIST 2100 essay rubric",
+                "The draft is due Friday.",
+                "HIST 2100 essay",
+                true,
+            ),
+            (
+                "Preview",
+                "Essay feedback",
+                "Feedback on the HIST 2100 essay.",
+                "HIST 2100 essay",
+                true,
+            ),
+            (
+                "TextEdit",
+                "Release notes",
+                "Reviewed the FNDR 2.0 rollout notes.",
+                "FNDR 2.0 rollout",
+                true,
+            ),
+            (
+                "Slack",
+                "Smart team launch",
+                "Reminders are due tomorrow.",
+                "Smart Reminders launch",
+                false,
+            ),
+            (
+                "Chrome",
+                "HIST 2100 planning",
+                "An unrelated essay is due Friday.",
+                "HIST 2100 essay",
+                false,
+            ),
+            (
+                "Notion",
+                "Team notes",
+                "Smart Reminders design. Launch plans for another app.",
+                "Smart Reminders launch",
+                false,
+            ),
+            (
+                "Notion",
+                "Notion",
+                "A generic meeting agenda.",
+                "Notion",
+                false,
+            ),
+        ];
+        for (app, title, text, proposed, expected) in cases {
+            let accepted = project_supported_by_evidence(proposed, app, title, text);
+            assert_eq!(accepted, expected, "{app}: {title}: {proposed}");
+        }
     }
 
     #[test]

@@ -100,6 +100,7 @@ async fn measure_queries(store: &Store, now_ms: i64) -> QueryTimings {
 }
 
 #[test]
+#[ignore = "Machine-dependent 10k-row index benchmark that rewrites docs/evidence/W04/storage-indexes.md; run: cargo test --test storage_scale storage_indexes_measured_before_and_after_on_10k_rows -- --ignored --nocapture"]
 fn storage_indexes_measured_before_and_after_on_10k_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_path_buf();

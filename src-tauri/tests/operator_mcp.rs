@@ -57,6 +57,10 @@ fn serves_the_policy_tool_names_and_exits_when_codex_closes_the_pipe() {
         "type_text",
         "press_key",
         "scroll",
+        "list_windows",
+        "arrange_windows",
+        "move_window",
+        "resize_window",
     ] {
         assert!(tools.contains(&name), "{name} missing from {tools:?}");
     }
@@ -71,4 +75,32 @@ fn serves_the_policy_tool_names_and_exits_when_codex_closes_the_pipe() {
         .unwrap()
         .contains("not running"));
     assert_eq!(replies[4]["result"]["isError"], true);
+}
+
+#[test]
+fn window_tools_refuse_ids_from_no_list_and_off_limits_apps_over_the_pipe() {
+    let (replies, exited_cleanly) = ask(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"arrange_windows","arguments":{"layout":"left_right_split","windows":[{"id":1,"app":"TextEdit"},{"id":2,"app":"Preview"}]}}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"arrange_windows","arguments":{"layout":"cascade","windows":[{"id":1,"app":"TextEdit"}]}}}),
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"move_window","arguments":{"app":"FNDR","window":1,"x":0,"y":0}}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_windows","arguments":{"app":"No Such App 91"}}}),
+    ]);
+    assert!(exited_cleanly);
+    assert_eq!(replies.len(), 5, "{replies:?}");
+    let text = |at: usize| {
+        assert_eq!(replies[at]["result"]["isError"], true, "{:?}", replies[at]);
+        replies[at]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(text(1).contains("Call list_windows"), "{}", text(1));
+    assert!(text(2).contains("left_right_split"), "{}", text(2));
+    let fndr = text(3);
+    assert!(
+        fndr.contains("off limits") || fndr.contains("not running"),
+        "{fndr}"
+    );
+    assert!(text(4).contains("not running"), "{}", text(4));
 }

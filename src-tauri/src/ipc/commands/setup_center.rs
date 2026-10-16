@@ -45,7 +45,6 @@ pub struct SetupComponent {
     pub url: Option<&'static str>,
 }
 
-const CHATGPT_APP_URL: &str = "https://openai.com/chatgpt/desktop/";
 const NODE_URL: &str = "https://nodejs.org/en/download";
 
 /// An `npm` FNDR can run, for components published there.
@@ -61,11 +60,25 @@ fn detect_npm() -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-/// npm packages FNDR may install, by component id. Nothing else is installable.
-fn npm_package(id: &str) -> Option<&'static str> {
+/// How FNDR installs a component. Nothing outside this list is installable.
+#[derive(Debug, PartialEq, Eq)]
+enum Installer {
+    /// An npm package, installed globally.
+    Npm(&'static str),
+    /// OpenAI's official Codex installer: no Node.js, installs under
+    /// `~/.codex/packages/standalone` and links `~/.local/bin/codex`.
+    CodexScript,
+    /// FNDR's own pinned Hermes.
+    Hermes,
+}
+
+const CODEX_INSTALL_SCRIPT_URL: &str = "https://chatgpt.com/codex/install.sh";
+
+fn installer_for(id: &str) -> Option<Installer> {
     match id {
-        "computer_use" => Some("open-computer-use@0.3.6"),
-        "codex_cli" => Some("@openai/codex@0.151.0"),
+        "computer_use" => Some(Installer::Npm("open-computer-use@0.3.6")),
+        "codex_cli" => Some(Installer::CodexScript),
+        "hermes" => Some(Installer::Hermes),
         _ => None,
     }
 }
@@ -131,12 +144,8 @@ pub async fn setup_components(
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
         }
         Err(error) => {
-            codex = npm_action(codex, npm);
-            if !npm {
-                codex.url = Some(CHATGPT_APP_URL);
-                codex.detail = Some("Install the ChatGPT app, which includes Codex.".to_string());
-            }
-            codex.detail.get_or_insert(error);
+            codex.action = Some(ComponentAction::Install);
+            codex.detail = Some(error);
         }
     }
     items.push(codex);
@@ -191,27 +200,48 @@ pub async fn setup_components(
 /// Installs a component FNDR knows how to install. Unknown ids are refused.
 #[tauri::command]
 pub async fn install_component(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    if id == "hermes" {
-        let app_state = state.inner().clone();
-        return tokio::task::spawn_blocking(move || {
-            super::hermes_agent::ensure_pinned_hermes(&app_state)
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+    let installer = installer_for(&id).ok_or_else(|| format!("FNDR can't install \"{id}\"."))?;
+    match installer {
+        Installer::Hermes => {
+            let app_state = state.inner().clone();
+            tokio::task::spawn_blocking(move || {
+                super::hermes_agent::ensure_pinned_hermes(&app_state)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        Installer::CodexScript => {
+            crate::privacy_proof::record_egress("chatgpt.com");
+            run_install(
+                tokio::process::Command::new("/bin/sh")
+                    .args(["-c", &format!("curl -fsSL {CODEX_INSTALL_SCRIPT_URL} | sh")]),
+                "the Codex installer",
+            )
+            .await
+        }
+        Installer::Npm(package) => {
+            let npm =
+                detect_npm().ok_or_else(|| "Install Node.js first, then try again.".to_string())?;
+            crate::privacy_proof::record_egress("registry.npmjs.org");
+            run_install(
+                tokio::process::Command::new(&npm).args(["install", "-g", package]),
+                package,
+            )
+            .await
+        }
     }
-    let package = npm_package(&id).ok_or_else(|| format!("FNDR can't install \"{id}\"."))?;
-    let npm = detect_npm().ok_or_else(|| "Install Node.js first, then try again.".to_string())?;
-    crate::privacy_proof::record_egress("registry.npmjs.org");
-    let output = tokio::process::Command::new(&npm)
-        .args(["install", "-g", package])
+}
+
+async fn run_install(command: &mut tokio::process::Command, what: &str) -> Result<(), String> {
+    let output = command
         .output()
         .await
-        .map_err(|e| format!("Could not run npm: {e}"))?;
+        .map_err(|e| format!("Could not start {what}: {e}"))?;
     if output.status.success() {
         Ok(())
     } else {
         Err(format!(
-            "Installing {package} failed: {}",
+            "Installing {what} failed: {}",
             String::from_utf8_lossy(&output.stderr)
                 .lines()
                 .last()
@@ -225,10 +255,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_known_packages_are_installable() {
-        assert_eq!(npm_package("computer_use"), Some("open-computer-use@0.3.6"));
-        assert_eq!(npm_package("codex_cli"), Some("@openai/codex@0.151.0"));
-        assert_eq!(npm_package("anything-else"), None);
+    fn only_known_components_are_installable_and_codex_needs_no_node() {
+        assert_eq!(installer_for("codex_cli"), Some(Installer::CodexScript));
+        assert_eq!(
+            installer_for("computer_use"),
+            Some(Installer::Npm("open-computer-use@0.3.6"))
+        );
+        assert_eq!(installer_for("hermes"), Some(Installer::Hermes));
+        assert_eq!(installer_for("anything-else"), None);
+        assert!(CODEX_INSTALL_SCRIPT_URL.starts_with("https://chatgpt.com/"));
     }
 
     #[test]

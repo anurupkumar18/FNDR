@@ -575,12 +575,28 @@
 .app-main.search-centered.has-resume {
     justify-content: flex-start;
     overflow-y: auto;
-    padding-top: 72px;
-    padding-bottom: 28px;
+    padding-top: 0;
+    padding-bottom: 40px;
+    container-type: size;
+    scrollbar-width: thin;
 }
 
 .has-resume .home-hero-stage {
     flex-shrink: 0;
+}
+
+/* Keep the query prominent while leaving recent work visible on Home. */
+.home-hero-fold {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: var(--s-7) 0 0;
+    box-sizing: border-box;
+}
+
+.home-hero-stage:not(:has(.home-work)) .home-hero-fold {
+    min-height: calc(100cqh - 40px);
 }
 
 .search-shell {

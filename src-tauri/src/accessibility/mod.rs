@@ -7,6 +7,7 @@
 mod operate;
 mod text_tree;
 
+pub(crate) use operate::paste_into_app;
 pub use operate::AxDesktop;
 
 use crate::ocr::{OcrConfig, OcrEngine};
@@ -441,6 +442,8 @@ fn paste_into_frontmost_app(text: &str, replace: bool) -> Result<(), String> {
     child
         .wait()
         .map_err(|e| format!("pbcopy did not finish: {e}"))?;
+    // FNDR's own paste is not something the person copied.
+    crate::capture::clipboard::note_self_copy(text);
 
     std::thread::sleep(Duration::from_millis(30));
 
@@ -695,6 +698,9 @@ extern "C" {
     fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
     fn CFArrayGetTypeID() -> usize;
+    fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> bool;
+    fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
+    fn CFBooleanGetTypeID() -> usize;
     static kCFBooleanTrue: CFTypeRef;
 }
 
@@ -721,6 +727,31 @@ impl Drop for AxElement {
         }
     }
 }
+
+impl Clone for AxElement {
+    fn clone(&self) -> Self {
+        if self.0.is_null() {
+            AxElement(self.0)
+        } else {
+            AxElement(unsafe { CFRetain(self.0) })
+        }
+    }
+}
+
+/// Two references to the same element on screen are equal (CFEqual).
+impl PartialEq for AxElement {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.is_null() || other.0.is_null() {
+            return self.0 == other.0;
+        }
+        unsafe { CFEqual(self.0, other.0) }
+    }
+}
+
+// An AXUIElement is a CoreFoundation object: retaining, releasing and
+// messaging it are safe from any thread. Window layout keeps the windows it
+// moved in a process-wide list (`operator::layout`), which needs this.
+unsafe impl Send for AxElement {}
 
 struct AxTextTree;
 

@@ -920,6 +920,17 @@ mod tests {
     }
 
     #[test]
+    fn incidental_about_word_does_not_make_unrelated_notes_strong() {
+        let words =
+            QueryContext::from_query("notes from the podcast about sourdough baking").anchor_terms;
+        assert!(!is_strong_match(
+            &found_by(&["vector", "keyword"], 0.3685, &["notes", "about"]),
+            &words,
+            0.2446
+        ));
+    }
+
+    #[test]
     fn other_evidence_keeps_a_match_strong() {
         let words = terms(&["estate", "probate", "trust", "documents"]);
         let routes = ["vector", "keyword"];

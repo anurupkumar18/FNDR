@@ -82,15 +82,22 @@ pub async fn reopen_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
 ) -> Result<ReopenOutcome, String> {
-    let record = state
-        .inner()
-        .store
-        .get_memory_by_id(&memory_id)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
-        .ok_or_else(|| format!("Memory not found: {}", memory_id))?;
+    // Use the work-set opener for a single source too. It checks the current
+    // blocklist, visibility, Private Mode and action switch at open time.
+    let outcomes = crate::workset::open_ids(state.inner(), &[memory_id]).await;
+    Ok(outcomes
+        .into_iter()
+        .next()
+        .and_then(|item| item.outcome)
+        .unwrap_or(ReopenOutcome::Unavailable))
+}
 
-    let target = resolve_reopen_target(&record);
+/// Opens what one memory points at: the shared core of `reopen_memory` and
+/// work sets, so every surface reopens and reports a memory the same way.
+pub(crate) async fn reopen_record(
+    record: &crate::storage::MemoryRecord,
+) -> Result<ReopenOutcome, String> {
+    let target = resolve_reopen_target(record);
     let app_name = record
         .reopen_app_name
         .as_deref()
@@ -123,7 +130,7 @@ pub async fn reopen_memory(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ResolvedReopenTarget {
+pub(crate) enum ResolvedReopenTarget {
     BrowserUrl(String),
     FilePath(PathBuf),
     AppBundle(String),
@@ -287,7 +294,9 @@ fn app_is_installed(_bundle_id: &str) -> bool {
     true
 }
 
-fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
+pub(crate) fn resolve_reopen_target(
+    record: &crate::storage::MemoryRecord,
+) -> Option<ResolvedReopenTarget> {
     if record.is_agent_note() {
         return None;
     }
@@ -1323,5 +1332,19 @@ mod tests {
         let result = plan(None, None, |_| vec![], |_| true);
         assert_eq!(result.outcome, ReopenOutcome::NoTarget);
         assert_eq!(result.action, None);
+    }
+
+    #[test]
+    fn resolve_and_plan_vscode_deep_link_opens_r19() {
+        let link = "vscode://file/Users/qa/re10-notes.txt";
+        let resolved = resolve_reopen_target(&Rec {
+            reopen_kind: ReopenKind::AppDeepLink,
+            reopen_app_deep_link: s(link),
+            ..Default::default()
+        });
+        assert_eq!(resolved, Some(R::AppDeepLink(link.into())));
+        let planned = plan(resolved, Some("Code"), |_| vec![], |_| true);
+        assert_eq!(planned.outcome, ReopenOutcome::Opened);
+        assert_eq!(planned.action, Some(R::AppDeepLink(link.into())));
     }
 }

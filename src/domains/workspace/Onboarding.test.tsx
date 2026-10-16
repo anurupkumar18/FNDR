@@ -41,6 +41,13 @@ const downloadStatusValue: ModelDownloadStatus & {
     activity_evidence: "backend-event",
 };
 
+const ttsStatus = vi.fn();
+const ttsInstall = vi.fn();
+vi.mock("@/shared/ipc/tauri", () => ({
+    ttsStatus: (...args: unknown[]) => ttsStatus(...args),
+    ttsInstall: (...args: unknown[]) => ttsInstall(...args),
+}));
+
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
     useModelDownloadStatus: () => downloadStatusValue,
 }));
@@ -65,6 +72,8 @@ beforeEach(() => {
         microphone: false,
     });
     saveOnboardingState.mockResolvedValue(undefined);
+    ttsStatus.mockResolvedValue({ state: "not_installed", downloadedBytes: 0, totalBytes: 330_000_000 });
+    ttsInstall.mockResolvedValue({ state: "downloading", downloadedBytes: 0, totalBytes: 330_000_000 });
     refreshAiModels.mockResolvedValue({ ai_model_available: true });
 });
 
@@ -115,6 +124,41 @@ afterEach(() => {
     downloadStatusValue.error = null;
     downloadStatusValue.logs = [];
     downloadStatusValue.updated_at_ms = 0;
+});
+
+describe("Onboarding voice download", () => {
+    it("offers the natural voice ticked, naming the size and where it comes from, and starts it when the person continues", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        render(<Onboarding onComplete={() => {}} />);
+
+        const box = (await screen.findByLabelText(/natural voice \(330 MB\)/)) as HTMLInputElement;
+        expect(box.checked).toBe(true);
+        expect(screen.getByText(/Hugging Face and GitHub/)).toBeInTheDocument();
+        expect(ttsInstall).not.toHaveBeenCalled();
+
+        fireEvent.click(await screen.findByText(/^Skip for now/));
+        await waitFor(() => expect(ttsInstall).toHaveBeenCalledWith(true));
+        expect(ttsInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("downloads nothing when the box is unticked", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        render(<Onboarding onComplete={() => {}} />);
+
+        fireEvent.click(await screen.findByLabelText(/natural voice/));
+        fireEvent.click(await screen.findByText(/^Skip for now/));
+        await waitFor(() => expect(saveOnboardingState).toHaveBeenCalled());
+        expect(ttsInstall).not.toHaveBeenCalled();
+    });
+
+    it("does not offer a voice that is already installed", async () => {
+        ttsStatus.mockResolvedValue({ state: "ready", downloadedBytes: 330_000_000, totalBytes: 330_000_000 });
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        render(<Onboarding onComplete={() => {}} />);
+
+        await screen.findByText("Qwen3-VL · 2B");
+        expect(screen.queryByLabelText(/natural voice/)).toBeNull();
+    });
 });
 
 describe("Onboarding model step", () => {

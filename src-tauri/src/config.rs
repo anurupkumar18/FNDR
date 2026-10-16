@@ -752,6 +752,11 @@ pub struct Config {
     /// (VS-68). Off by default, because it widens what memory holds.
     #[serde(default)]
     pub agent_notes_enabled: bool,
+    /// Notch Do's spoken progress is muted. `None` until the person first
+    /// mutes or unmutes, so the notch can migrate the older per-window flag
+    /// once (ADR 020 amendment, 2026-10-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notch_do_muted: Option<bool>,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -776,6 +781,147 @@ pub struct Config {
     /// Memory quality thresholds for primary cards and evidence gating.
     #[serde(default)]
     pub memory_quality: MemoryQualityConfig,
+    /// macOS banners for proactive notifications.
+    #[serde(default)]
+    pub notifications: NotificationConfig,
+    /// How FNDR speaks when a surface talks back: which voice and how fast.
+    #[serde(default)]
+    pub voice_output: VoiceOutputConfig,
+    /// The stuck detector, what-changed nudges and meeting prep.
+    #[serde(default)]
+    pub proactive_signals: ProactiveSignalsConfig,
+}
+
+/// Each proactive signal runs on device from stored memories and can be
+/// switched off on its own. Private Mode and the blocklist always apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveSignalsConfig {
+    #[serde(default = "default_proactive_signal_on")]
+    pub stuck: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub thread_updates: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub meeting_prep: bool,
+    /// Meeting prep also reads the calendar on this Mac (ADR 029). Off until
+    /// the person turns it on, because it asks for calendar access.
+    #[serde(default)]
+    pub calendar_meeting_prep: bool,
+    /// Calendar ids to read. Empty means every calendar the person did not
+    /// subscribe to.
+    #[serde(default)]
+    pub calendar_ids: Vec<String>,
+}
+
+fn default_proactive_signal_on() -> bool {
+    true
+}
+
+impl Default for ProactiveSignalsConfig {
+    fn default() -> Self {
+        Self {
+            stuck: true,
+            thread_updates: true,
+            meeting_prep: true,
+            calendar_meeting_prep: false,
+            calendar_ids: Vec::new(),
+        }
+    }
+}
+
+/// Spoken output. `provider` is `auto` (the ChatGPT plan voice when signed
+/// in, else the best voice on this Mac) or one provider id the webview's
+/// speech registry knows. `system_voice` is a macOS voice identifier such as
+/// `com.apple.voice.premium.en-US.Zoe`; empty means the best one installed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceOutputConfig {
+    #[serde(default = "default_voice_output_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub system_voice: String,
+    #[serde(default = "default_voice_output_rate")]
+    pub rate: f32,
+    /// The on-device neural voice (ADR 030), a Kokoro voice id such as
+    /// `af_heart`. Empty means its default voice.
+    #[serde(default)]
+    pub neural_voice: String,
+}
+
+const VOICE_OUTPUT_PROVIDERS: [&str; 5] = [
+    "auto",
+    "codex_realtime",
+    "system_enhanced",
+    "local_neural",
+    "webview_basic",
+];
+
+fn default_voice_output_provider() -> String {
+    "auto".to_string()
+}
+
+fn default_voice_output_rate() -> f32 {
+    1.0
+}
+
+impl Default for VoiceOutputConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_voice_output_provider(),
+            system_voice: String::new(),
+            rate: default_voice_output_rate(),
+            neural_voice: String::new(),
+        }
+    }
+}
+
+impl VoiceOutputConfig {
+    pub fn normalized(mut self) -> Self {
+        let provider = self.provider.trim();
+        self.provider = if VOICE_OUTPUT_PROVIDERS.contains(&provider) {
+            provider.to_string()
+        } else {
+            default_voice_output_provider()
+        };
+        let voice = self.system_voice.trim();
+        self.system_voice = if voice.len() <= 200 && !voice.chars().any(char::is_control) {
+            voice.to_string()
+        } else {
+            String::new()
+        };
+        let neural = self.neural_voice.trim();
+        self.neural_voice = if neural.len() <= 32
+            && neural.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        {
+            neural.to_string()
+        } else {
+            String::new()
+        };
+        self.rate = if self.rate.is_finite() {
+            self.rate.clamp(0.5, 2.0)
+        } else {
+            default_voice_output_rate()
+        };
+        self
+    }
+}
+
+/// Banners for the briefing, stale tasks and context-switch nudges when FNDR
+/// is in the background. The text is fixed and never carries memory text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    #[serde(default = "default_notification_banners")]
+    pub banners: bool,
+}
+
+fn default_notification_banners() -> bool {
+    true
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            banners: default_notification_banners(),
+        }
+    }
 }
 
 fn default_embedding_model_name() -> String {
@@ -1135,6 +1281,7 @@ impl Default for Config {
             operator: OperatorConfig::default(),
             actions_kill_switch: false,
             agent_notes_enabled: false,
+            notch_do_muted: None,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
@@ -1143,6 +1290,9 @@ impl Default for Config {
             store: StoreConfig::default(),
             proactive: ProactiveConfig::default(),
             memory_quality: MemoryQualityConfig::default(),
+            notifications: NotificationConfig::default(),
+            voice_output: VoiceOutputConfig::default(),
+            proactive_signals: ProactiveSignalsConfig::default(),
         }
     }
 }
@@ -1153,6 +1303,7 @@ impl Config {
         self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
         self.screen_guide = self.screen_guide.normalized();
+        self.voice_output = self.voice_output.normalized();
         if self.screen_guide.operate_computer {
             // An older file kept this opt-in under Screen Guide.
             self.operator.enabled = true;
@@ -1307,6 +1458,98 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn proactive_signals_are_on_for_an_older_file_and_each_switches_off_alone() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file = current
+            .split("[proactive_signals]")
+            .next()
+            .unwrap()
+            .to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert!(older.proactive_signals.stuck);
+        assert!(older.proactive_signals.thread_updates);
+        assert!(older.proactive_signals.meeting_prep);
+
+        let partial: ProactiveSignalsConfig = toml::from_str("stuck = false").unwrap();
+        assert!(!partial.stuck);
+        assert!(partial.thread_updates && partial.meeting_prep);
+    }
+
+    #[test]
+    fn calendar_meeting_prep_is_off_by_default_and_for_an_older_file() {
+        let fresh = ProactiveSignalsConfig::default();
+        assert!(!fresh.calendar_meeting_prep);
+        assert!(fresh.calendar_ids.is_empty());
+
+        let older: ProactiveSignalsConfig =
+            toml::from_str("stuck = true\nthread_updates = true\nmeeting_prep = true").unwrap();
+        assert!(!older.calendar_meeting_prep);
+        assert!(older.calendar_ids.is_empty());
+
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let reloaded: Config = toml::from_str(&current).expect("config reloads");
+        assert!(!reloaded.proactive_signals.calendar_meeting_prep);
+
+        let chosen: ProactiveSignalsConfig =
+            toml::from_str("calendar_meeting_prep = true\ncalendar_ids = [\"work\"]").unwrap();
+        assert!(chosen.calendar_meeting_prep && chosen.meeting_prep);
+        assert_eq!(chosen.calendar_ids, vec!["work".to_string()]);
+    }
+
+    #[test]
+    fn notch_do_mute_is_unset_for_an_older_file_and_survives_a_round_trip() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        assert!(!current.contains("notch_do_muted"));
+        let older: Config = toml::from_str(&current).expect("an older config still loads");
+        assert_eq!(older.notch_do_muted, None);
+
+        let muted = Config {
+            notch_do_muted: Some(true),
+            ..Config::default()
+        };
+        let saved = toml::to_string(&muted).expect("config serializes");
+        let loaded: Config = toml::from_str(&saved).expect("config loads");
+        assert_eq!(loaded.notch_do_muted, Some(true));
+    }
+
+    #[test]
+    fn voice_output_defaults_for_an_older_file_and_rejects_bad_values() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file: String = current.split("[voice_output]").next().unwrap().to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert_eq!(older.voice_output, VoiceOutputConfig::default());
+        assert_eq!(older.voice_output.provider, "auto");
+
+        let chosen: VoiceOutputConfig = toml::from_str(
+            "provider = \"system_enhanced\"\nsystem_voice = \"com.apple.voice.premium.en-US.Zoe\"\nrate = 1.2",
+        )
+        .unwrap();
+        let chosen = chosen.normalized();
+        assert_eq!(chosen.provider, "system_enhanced");
+        assert_eq!(chosen.system_voice, "com.apple.voice.premium.en-US.Zoe");
+        assert!((chosen.rate - 1.2).abs() < 1e-6);
+
+        let bad = VoiceOutputConfig {
+            provider: "elevenlabs".into(),
+            system_voice: "x".repeat(300),
+            rate: f32::NAN,
+            neural_voice: "../af_heart".into(),
+        }
+        .normalized();
+        assert_eq!(bad, VoiceOutputConfig::default());
+        let fast = VoiceOutputConfig {
+            rate: 9.0,
+            ..VoiceOutputConfig::default()
+        }
+        .normalized();
+        assert_eq!(fast.rate, 2.0);
+
+        assert_eq!(older.voice_output.neural_voice, "");
+        let neural: VoiceOutputConfig = toml::from_str("neural_voice = \"bf_emma\"").unwrap();
+        assert_eq!(neural.normalized().neural_voice, "bf_emma");
     }
 
     #[test]

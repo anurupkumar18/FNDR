@@ -17,6 +17,26 @@ afterEach(() => {
 });
 
 describe("development UI preview IPC", () => {
+    it("models every state of Home's work area from ?home=", async () => {
+        const populated = createPreviewIpcHandler();
+        const threads = await populated("resume_work", { hours: 24, budgetTokens: 800 }) as Array<{ key: string; evidence: string[] }>;
+        expect(threads.map((thread) => thread.key)).toEqual(["project:fndr-ui-overhaul", "project:fndr-beta-demo", "work:pantry app"]);
+        const resolution = await populated("resolve_work_set", { query: "FNDR UI overhaul" }) as { value: { items: Array<{ memoryId: string }> } };
+        expect(resolution.value.items.some((item) => threads[0].evidence.includes(item.memoryId))).toBe(true);
+        const sets = await populated("list_named_sets") as Array<{ items: unknown[] }>;
+        expect(sets[0].items.length).toBeGreaterThan(3);
+
+        window.history.replaceState(null, "", "/?home=empty");
+        const empty = createPreviewIpcHandler();
+        await expect(empty("resume_work")).resolves.toEqual([]);
+        await expect(empty("list_named_sets")).resolves.toEqual([]);
+        await expect(empty("routine_offers")).resolves.toEqual([]);
+
+        window.history.replaceState(null, "", "/?home=error");
+        await expect(createPreviewIpcHandler()("resume_work")).rejects.toThrow("recent work could not be read");
+        window.history.replaceState(null, "", "/");
+    });
+
     it("keeps assistant note consent off until explicitly enabled", async () => {
         const invoke = createPreviewIpcHandler();
         await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);
@@ -86,16 +106,6 @@ describe("development UI preview IPC", () => {
                 expect.objectContaining({ id: "memory-accessibility-notes" }),
             ]),
         );
-        await expect(
-            invoke("fndr_get_memory_subgraph", {
-                seedIds: ["memory-design-review"],
-                maxHops: 2,
-            }),
-        ).resolves.toMatchObject({
-            seed_ids: ["memory-design-review"],
-            node_count: 3,
-            edge_count: 2,
-        });
         await expect(
             invoke("find_visually_similar_memories", {
                 seedMemoryId: "memory-design-review",
@@ -470,6 +480,21 @@ describe("development UI preview IPC", () => {
             }),
         );
         await unlisten();
+    });
+
+    it("models the Settings Updates section so it shows components, not a preview error", async () => {
+        const invoke = createPreviewIpcHandler();
+
+        await expect(invoke("setup_components")).resolves.toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: "hermes", state: "missing" })]),
+        );
+        await expect(invoke("computer_use_permissions", { probe: false })).resolves.toMatchObject({
+            accessibility: true,
+            backend: null,
+        });
+        await expect(invoke("calendar_meeting_prep_state")).resolves.toEqual({ enabled: false, status: "not_determined" });
+        await expect(invoke("set_calendar_meeting_prep", { enabled: true })).resolves.toEqual({ enabled: true, status: "granted" });
+        await expect(invoke("calendar_meeting_prep_state")).resolves.toMatchObject({ enabled: true });
     });
 
     it("fails loudly when a screen needs an unmodeled command", async () => {

@@ -36,7 +36,10 @@ const READERS: Record<string, string> = {
     "ipc/commands/stats.rs": "shown: result_is_permitted or memory_is_permitted on every read",
     "ipc/commands/quality.rs": "shown in diagnostics: memory_is_visible or memory_is_permitted",
     "main.rs": "shown: the toast goes through proactive::pick_suggestion; the decay job shows nothing",
-    "resume/mod.rs": "shown: memory_is_visible",
+    "resume/mod.rs": "shown: admitted_with_threads keeps only resume::admits (memory_is_visible) before a thread is named; the thread digest reads through it",
+    "proactive_signals/stuck.rs": "shown: resume::admits (memory_is_visible) before any detection",
+    "proactive_signals/eval.rs": "internal: an ignored evaluation on a profile copy, through resume::admits",
+    "workset/mod.rs": "shown: workset::rank::eligible (memory_is_visible and memory_is_permitted); opening checks the blocklist again",
     "mcp/mod.rs": "served to agents: load_memories_for_results (memory_is_visible); the health check reads one timestamp",
     // Never shown as read: linking, repair, review and indexing.
     "capture/clipboard.rs": "internal: links a clipboard copy to the newest capture",

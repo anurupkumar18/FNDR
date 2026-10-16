@@ -99,7 +99,12 @@ const REASON_LABELS: Record<string, string> = {
     app_switched_during_capture: "App changed during capture",
 };
 
-const label = (reason: string) => REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
+function label(reason: string): string {
+    const known = REASON_LABELS[reason];
+    if (known) return known;
+    const words = reason.replace(/_/g, " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 export function PrivacyProof({ proof }: { proof: Proof }) {
     const reasons = Object.entries(proof.skipped_by_reason).filter(([, count]) => count > 0);

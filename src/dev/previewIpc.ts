@@ -14,9 +14,13 @@ import type {
     RuntimeMetricsSnapshot,
     ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
+    VoiceOutputSettings,
     Stats,
+    ResumeThread,
     Task,
     WeeklyWrapped,
+    NotchDoRun,
+    NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
 
@@ -352,7 +356,8 @@ const previewTasks: Task[] = [
         source_app: "manual",
         source_memory_id: "memory-accessibility-notes",
         created_at: previewNow - 29 * 60 * 1000,
-        due_date: null,
+        // Relative to the real clock so Home's "Due soon" card renders on any day.
+        due_date: Date.now() + 20 * 60 * 60 * 1000,
         is_completed: false,
         is_dismissed: false,
         task_type: "Todo",
@@ -666,6 +671,51 @@ function payloadRecord(payload: unknown): Record<string, unknown> | null {
         : null;
 }
 
+/** `?home=empty|error|loading` renders that state of Home's work area; anything else is populated. */
+type PreviewHomeState = "populated" | "empty" | "error" | "loading";
+
+function previewHomeState(): PreviewHomeState {
+    const value = new URLSearchParams(globalThis.location?.search ?? "").get("home");
+    return value === "empty" || value === "error" || value === "loading" ? value : "populated";
+}
+
+const previewResumeThreads: ResumeThread[] = [
+    {
+        key: "project:fndr-ui-overhaul",
+        title: "FNDR UI overhaul",
+        app_name: "Figma",
+        last_state: "Reviewed the Home hierarchy and the accessibility checklist.",
+        age_minutes: 24,
+        next_steps: [],
+        suggested_next_steps: [{ title: "Run the keyboard-only panel pass", source_memory_id: "memory-accessibility-notes", confidence: 0.8 }],
+        evidence: ["memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+    {
+        key: "project:fndr-beta-demo",
+        title: "FNDR Beta demo",
+        app_name: "Google Chrome",
+        last_state: "Checked how judges score the Beta.",
+        age_minutes: 95,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+    {
+        key: "work:pantry app",
+        title: "Pantry App",
+        grouped_by: ["Pantry App", "Demo script"],
+        app_name: "Keynote",
+        last_state: "Cut the demo script to four minutes and moved the architecture slide.",
+        age_minutes: 12,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+];
+
 function requiredString(
     payload: unknown,
     field: string,
@@ -757,6 +807,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
+    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1, neural_voice: "" };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
     let screenGuideDiagnosticStatus: Omit<
@@ -796,13 +847,66 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     };
     let previewBlocklist = ["1Password", "bank.example"];
     let previewAgentNotesEnabled = false;
+    let previewNotchDoMuted: boolean | null = null;
+    const previewSkills: NotchDoSkill[] = [{
+        id: "preview-skill-1",
+        name: "Monday setup",
+        request: "open Notes, Slack and the sprint board",
+        steps: ["Open Notes", "Open Slack", "Open linear.app/team/sprint"],
+        savedAt: "2026-10-13T15:00:00Z",
+    }];
+    let previewRuns: NotchDoRun[] = [
+        {
+            runId: "preview-run-1",
+            at: "2026-10-15T15:20:00Z",
+            request: "open Notes and look up the weather in Paris",
+            plannedBy: "local",
+            steps: ["Open Notes", "Search the web for the weather in Paris"],
+            ok: true,
+            summary: "Done: Open Notes, Search the web for the weather in Paris.",
+            rating: null,
+            repeatable: true,
+        },
+        {
+            runId: "preview-run-2",
+            at: "2026-10-15T14:05:00Z",
+            request: "add the next song to the queue in Spotify",
+            plannedBy: "planner",
+            steps: ["Add the next song to the queue"],
+            ok: false,
+            summary: "Stopped at the first step.",
+            rating: null,
+            repeatable: false,
+        },
+    ];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
+    let calendarMeetingPrep = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let configuredPeers: ConfiguredPeer[] = [];
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
         payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
+    const homeState = previewHomeState();
+    const homeWaits = () => new Promise<never>(() => undefined);
+    let previewNamedSets: Array<{ id: string; name: string; memoryIds: string[]; savedAt: number }> = homeState === "populated"
+        ? [{
+            id: "preview-named-beta",
+            name: "Beta demo prep",
+            memoryIds: ["memory-beta-rubric", "memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+            savedAt: previewNow,
+        }]
+        : [];
+    let previewRoutineDismissed = false;
+    const previewNamedSet = (set: { id: string; name: string; memoryIds: string[]; savedAt: number }) => {
+        const items = set.memoryIds.flatMap((memoryId) => {
+            const card = previewCards.find((row) => row.id === memoryId);
+            return card
+                ? [{ memoryId, label: card.title, kind: "url" as const, reopenRank: 4, appName: card.app_name, capturedAt: card.timestamp }]
+                : [];
+        });
+        return { ...set, memoryIds: items.map((item) => item.memoryId), items };
+    };
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
@@ -833,6 +937,41 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return undefined;
             case "get_fun_greeting":
                 return "Good evening, Anurup.";
+            case "what_changed_since": {
+                const threadKey =
+                    typeof payload === "object" && payload !== null && "threadKey" in payload
+                        ? String((payload as { threadKey?: unknown }).threadKey)
+                        : "";
+                return {
+                    thread_key: threadKey,
+                    title: "FNDR",
+                    since_ms: Date.now() - 3 * 60 * 60 * 1000,
+                    first_view: false,
+                    new_memories: 6,
+                    page_count: 1,
+                    pages: ["Tauri notification plugin docs"],
+                    file_count: 2,
+                    files: ["notify.rs", "main.rs"],
+                    task_count: 1,
+                    tasks: ["Add a test for the toast target"],
+                    commit_count: 1,
+                    newest_memory_id: "preview-memory-1",
+                };
+            }
+            case "mark_thread_seen":
+                return undefined;
+            case "calendar_meeting_prep_state":
+                return { enabled: calendarMeetingPrep, status: "not_determined" };
+            case "set_calendar_meeting_prep": {
+                const enabled = payloadRecord(payload)?.enabled;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_calendar_meeting_prep needs a boolean enabled");
+                }
+                calendarMeetingPrep = enabled;
+                return { enabled, status: enabled ? "granted" : "not_determined" };
+            }
+            case "open_calendar_privacy_settings":
+                return undefined;
             case "get_app_names":
                 return ["Visual Studio Code", "Google Chrome", "Terminal", "Figma"];
             case "get_privacy_alerts":
@@ -841,6 +980,46 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "notch_do_skills":
+                return previewSkills.map((skill) => ({ ...skill }));
+            case "notch_do_runs":
+                return previewRuns.map((run) => ({ ...run }));
+            case "notch_do_rate_run": {
+                const { runId, worked } = payload as { runId: string; worked: boolean };
+                previewRuns = previewRuns.map((run) => run.runId === runId
+                    ? { ...run, rating: worked ? "worked" : "did_not_work", repeatable: worked && run.repeatable }
+                    : run);
+                return undefined;
+            }
+            case "notch_do_save_skill": {
+                const { runId, name } = payload as { runId: string; name: string };
+                const run = previewRuns.find((each) => each.runId === runId);
+                if (!run?.repeatable) throw new Error("Only a run that worked can be saved as a skill.");
+                previewSkills.push({ id: `preview-skill-${previewSkills.length + 1}`, name, request: run.request, steps: run.steps, savedAt: new Date().toISOString() });
+                return name;
+            }
+            case "notch_do_delete_skill": {
+                const { id } = payload as { id: string };
+                const index = previewSkills.findIndex((skill) => skill.id === id);
+                if (index >= 0) previewSkills.splice(index, 1);
+                return index >= 0;
+            }
+            case "notch_do_request":
+                throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+            case "get_notch_do_muted":
+                return previewNotchDoMuted;
+            case "set_notch_do_muted": {
+                const muted = typeof payload === "object" && payload !== null && "muted" in payload
+                    ? (payload as { muted?: unknown }).muted
+                    : null;
+                if (typeof muted !== "boolean") {
+                    throw new Error("Preview set_notch_do_muted requires a boolean.");
+                }
+                previewNotchDoMuted = muted;
+                return muted;
+            }
+            case "set_notch_escape_monitor":
+                return undefined;
             case "set_agent_notes_enabled": {
                 const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
                     ? (payload as { enabled?: unknown }).enabled
@@ -1028,19 +1207,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     .slice(0, Math.max(0, limit))
                     .map((card) => clonePreview(card));
             }
-            case "fndr_get_memory_subgraph": {
-                const seedIds =
-                    typeof payload === "object" && payload !== null && "seedIds" in payload
-                        ? (payload as { seedIds?: unknown }).seedIds
-                        : [];
-                return {
-                    seed_ids: Array.isArray(seedIds)
-                        ? seedIds.filter((id): id is string => typeof id === "string")
-                        : [],
-                    node_count: 3,
-                    edge_count: 2,
-                };
-            }
             case "find_visually_similar_memories":
                 return clonePreview(previewSimilarResults);
             case "fndr_build_context_pack": {
@@ -1109,8 +1275,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 )));
             case "generate_daily_briefing":
                 return "Your preview briefing: finish the keyboard walkthrough, share the UI audit, and run native permission checks in the Tauri app.";
+            case "resume_work":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: recent work could not be read.");
+                return homeState === "empty" ? [] : clonePreview(previewResumeThreads);
             case "get_todos":
-                return clonePreview(tasks.filter((task) => !task.is_completed && !task.is_dismissed));
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: tasks could not be read.");
+                return clonePreview(tasks.filter((task) => (
+                    !task.is_completed && !task.is_dismissed && (homeState !== "empty" || task.due_date === null)
+                )));
             case "add_todo": {
                 const title = requiredString(payload, "title", command);
                 const requestedType = payloadRecord(payload)?.taskType;
@@ -1245,6 +1419,40 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 // Deliberate no-op: never hand a path to the OS from the browser preview.
                 return undefined;
             }
+            case "get_voice_output_settings":
+                return { ...voiceOutputSettings };
+            case "set_voice_output_settings": {
+                const settings = payloadRecord(payload)?.settings as Partial<VoiceOutputSettings> | undefined;
+                if (!settings || typeof settings.provider !== "string" || typeof settings.rate !== "number") {
+                    throw new Error("Preview set_voice_output_settings requires provider and rate.");
+                }
+                voiceOutputSettings = {
+                    provider: settings.provider,
+                    system_voice: typeof settings.system_voice === "string" ? settings.system_voice : "",
+                    rate: Math.min(2, Math.max(0.5, settings.rate)),
+                    neural_voice: typeof settings.neural_voice === "string" ? settings.neural_voice : "",
+                };
+                return { ...voiceOutputSettings };
+            }
+            case "tts_status":
+                // The browser preview has no model; speech falls back to the Mac's voices.
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_voices":
+                return {
+                    voices: [
+                        { id: "af_heart", name: "Heart", accent: "us", gender: "female", grade: "A" },
+                        { id: "bf_emma", name: "Emma", accent: "gb", gender: "female", grade: "B-" },
+                    ],
+                    defaultVoice: "af_heart",
+                };
+            case "tts_install":
+                throw new Error("The browser preview cannot download the on-device voice.");
+            case "tts_remove":
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_cancel":
+                return null;
+            case "tts_synthesize":
+                throw new Error("The browser preview has no on-device voice.");
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
             case "get_screen_guide_diagnostic_status":
@@ -1377,7 +1585,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     latest_pack_tokens_used: 0,
                 };
             case "list_recent_context_packs":
-            case "list_agent_audit_runs":
                 return [];
             case "fndr_subscribe":
             case "fndr_unsubscribe":
@@ -1453,8 +1660,106 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 run.remote_state = "TASK_STATE_CANCELED";
                 return { run: clonePreview(run), output_text: null };
             }
+            case "resolve_work_set": {
+                // Preview: the newest cards with a reopen target, as one set.
+                const items = previewCards
+                    .filter((card) => Boolean(card.reopen_target))
+                    .slice(0, 3)
+                    .map((card) => ({
+                        memoryId: card.id,
+                        label: card.title,
+                        kind: "url" as const,
+                        reopenRank: 4,
+                        appName: card.app_name,
+                        capturedAt: card.timestamp,
+                    }));
+                return items.length > 0
+                    ? { kind: "best", value: { id: "preview-set", title: items[0].label, reason: "Preview", score: 1, items } }
+                    : { kind: "none", value: { why: "Nothing FNDR remembers matches that." } };
+            }
+            case "open_work_set": {
+                // Preview never launches anything; it reports what would open.
+                const ids = (payloadRecord(payload)?.memoryIds as string[] | undefined) ?? [];
+                const layout = payloadRecord(payload)?.layout as string | null | undefined;
+                const arrangement = layout
+                    ? { arranged: false, layout, detail: "The preview does not move windows." }
+                    : undefined;
+                return ids.slice(0, 6).map((memoryId) => {
+                    const card = previewCards.find((row) => row.id === memoryId);
+                    return card
+                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" }, arrangement }
+                        : { memoryId, label: "", ok: false, detail: "FNDR no longer has this memory" };
+                });
+            }
+            case "list_named_sets":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: saved sets could not be read.");
+                return previewNamedSets.map((set) => previewNamedSet(set));
+            case "save_named_set": {
+                const args = payloadRecord(payload);
+                const name = String(args?.name ?? "").trim();
+                if (!name) throw new Error("Give the set a name.");
+                if (previewNamedSets.some((set) => set.name.toLowerCase() === name.toLowerCase())) {
+                    throw new Error(`A set is already called “${name}”.`);
+                }
+                const memoryIds = ((args?.memoryIds as string[] | undefined) ?? []).slice(0, 6);
+                const saved = { id: `preview-named-${previewNamedSets.length + 1}`, name, memoryIds, savedAt: Date.now() };
+                previewNamedSets = [saved, ...previewNamedSets];
+                return previewNamedSet(saved);
+            }
+            case "delete_named_set": {
+                const id = String(payloadRecord(payload)?.id ?? "");
+                previewNamedSets = previewNamedSets.filter((set) => set.id !== id);
+                return null;
+            }
+            case "routine_offers": {
+                if (homeState !== "populated") return [];
+                const memoryIds = previewCards.filter((card) => Boolean(card.reopen_target)).slice(0, 2).map((card) => card.id);
+                return previewRoutineDismissed || memoryIds.length === 0
+                    ? []
+                    : [{ id: "preview-routine", label: "Morning standup notes", memoryIds, reason: "Opened on 4 weekdays around 9:00", dueNow: true }];
+            }
+            case "dismiss_routine_offer":
+                previewRoutineDismissed = true;
+                return null;
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
+            case "computer_use_permissions":
+                return {
+                    accessibility: true,
+                    screenRecording: true,
+                    automationMedia: null,
+                    backend: null,
+                    backendReady: null,
+                    backendDetail: null,
+                };
+            case "setup_components":
+                return [
+                    {
+                        id: "codex",
+                        name: "Codex",
+                        purpose: "Signs in to ChatGPT for Hermes and Notch Do.",
+                        required: false,
+                        state: "ready",
+                        version: "0.45.0",
+                        detail: null,
+                        action: null,
+                        url: null,
+                    },
+                    {
+                        id: "hermes",
+                        name: "Hermes Agent",
+                        purpose: "Answers questions with the memories you attach.",
+                        required: false,
+                        state: "missing",
+                        version: null,
+                        detail: "Not installed yet.",
+                        action: "install",
+                        url: null,
+                    },
+                ];
+            case "install_component":
+                return null;
             case "openclicky_bridge_status":
                 return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
             case "list_agent_chats":
@@ -1520,6 +1825,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 return null;
             }
+            case "voice_out_status":
+                // The browser preview has no Codex; speech falls back to the Mac's voices.
+                return {
+                    state: "not_installed",
+                    detail: "The browser preview has no Codex.",
+                    usedPercent: null,
+                    fallbackAbovePercent: 95,
+                    connected: false,
+                };
+            case "voice_out_voices":
+                return { voices: [] };
+            case "voice_out_start":
+                throw new Error("The browser preview has no Codex.");
+            case "voice_out_speak":
+                throw new Error("The ChatGPT voice is not connected.");
+            case "voice_out_cancel":
+            case "voice_out_stop":
+                return null;
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);

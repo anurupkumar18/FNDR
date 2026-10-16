@@ -53,7 +53,7 @@ State on 2026-10-08, end of day: Kunj landed the ADR 026 executor the same eveni
 1. **Run the six fixture cases on the new executor.** The live runs in the evidence file were all on `open-computer-use`. Same harness, same pages; record which backend ran.
 2. Done 2026-10-09: an element reported under several parents is printed once, and page text is printed without a number (ADR 026, "How each rule is kept").
 3. The twenty-task set (`docs/evidence/W03/notch-do-task-set.md`) on the executor, then remove `open-computer-use` support (ADR 026, item 5).
-4. Shrink `src/shared/ipc/ipcDriftBaseline.ts`: 51 unused wrappers and 3 uncalled commands, most outside this lane. Take them a module at a time with the module's owner.
+4. Shrink `src/shared/ipc/ipcDriftBaseline.ts`: 51 unused wrappers and 3 uncalled commands, most outside this lane. Take them a module at a time with the module's owner. Checked 2026-10-09: all fifteen commands in `src-tauri/src/ipc/commands/agent.rs` (context pack, run, audit runs, skill and eval drafts, propose, approve and execute an action) still have no caller in the app. They were not removed, because the propose, approve, execute logic and its tests live only in that file and another lane made those tests deterministic on 2026-10-08. Whoever owns agent actions decides: give them a page, or delete the file and what only it uses.
 
 ## How to run a live Notch Do check
 
@@ -76,5 +76,10 @@ cd src-tauri && FNDR_LIVE_REQUEST="in Google Chrome, add this to my cart on the 
 - **This page grew by stacking updates** until its top contradicted its middle. Correction: rewrite it.
 
 ## Shared checkout
+
+State on 2026-10-09: the shared checkout at `~/FNDR` cannot fast-forward to `main`. Uncommitted edits in `src-tauri/src/lib.rs` and `src-tauri/src/mcp/mod.rs`, left by other sessions, overlap upstream changes. The owner of those edits has to commit or discard them. Until then, work in a temporary worktree made from `origin/main` (link `node_modules` from the shared checkout for front-end checks) and remove it when done, as `AGENTS.md` says.
+
+GitLab and GitHub can drift apart: merge requests land on GitLab only, and a push made while the VPN is off reaches GitHub only. Before starting, compare `git rev-list --count origin/main..gh/main` and the reverse; if both are above zero, merge the two in a temporary worktree and push the result to both.
+
 
 Other sessions work in this checkout at the same time (MCP, `src-tauri/src/agent/`, storage tests). Commit by path. Where a file holds someone else's uncommitted lines too, stage only your own hunks. Never stash or switch branches without the owner saying so.

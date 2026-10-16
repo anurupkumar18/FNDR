@@ -2,9 +2,7 @@ import type { MemoryCard } from "@/shared/ipc/tauri";
 import { isMetaOcrNarration } from "./MemoryCard";
 import "./InsightLayers.css";
 
-/** The 4 canonical insight slots — always rendered in order so the *shape*
- *  of a memory is legible even when fields are still empty. Sparse memories
- *  show "— not yet extracted" placeholders instead of collapsing the block. */
+/** Insight slots stay in a consistent order when they have useful content. */
 const SLOTS = [
     { label: "What happened", field: "insight_what_happened" },
     { label: "Why it mattered", field: "insight_why_mattered" },
@@ -12,9 +10,7 @@ const SLOTS = [
     { label: "Thread", field: "insight_context_thread" },
 ] as const;
 
-/** Renders the canonical 4-row insight block. Empty rows show a placeholder
- *  so the structure is visible and the user understands the memory hasn't
- *  been fully synthesized yet. */
+/** Empty or rejected insight rows stay out of the memory card. */
 export function InsightLayers({ card, evalUi = false }: { card: MemoryCard; evalUi?: boolean }) {
     const ic = card.insight_card_confidence ?? 0;
     const low = ic > 0 && ic < 0.4;

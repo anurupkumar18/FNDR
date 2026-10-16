@@ -85,6 +85,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -476,9 +477,20 @@ fn main() {
                     let mut recent_app_switches: std::collections::VecDeque<String> =
                         std::collections::VecDeque::with_capacity(APP_SWITCH_RECENT_CAPACITY);
 
+                    let mut signal_clock = fndr_lib::proactive_signals::SignalClock::default();
+
                     let mut interval = tokio::time::interval(PROACTIVE_NOTIFICATION_TICK);
                     loop {
                         interval.tick().await;
+
+                        // Stuck detector, thread updates and meeting prep:
+                        // each on its own cadence, switch and daily limit.
+                        fndr_lib::proactive_signals::run_due(
+                            &notif_handle,
+                            &notif_state,
+                            &mut signal_clock,
+                        )
+                        .await;
 
                         let now = chrono::Local::now();
                         let hour = now.hour();
@@ -501,13 +513,12 @@ fn main() {
                                 } else {
                                     "🌙 FNDR Evening Recap"
                                 };
-                                let _ = notif_handle.emit(
-                                    "fndr_notification",
-                                    serde_json::json!({
-                                        "title": title,
-                                        "body": briefing,
-                                        "kind": "briefing",
-                                    }),
+                                fndr_lib::notify::send(
+                                    &notif_handle,
+                                    &notif_state,
+                                    "briefing",
+                                    title,
+                                    &briefing,
                                 );
                                 tracing::info!("Sent {} briefing notification", mode);
                                 briefing_sent_today = true;
@@ -547,13 +558,12 @@ fn main() {
                                         stale.len(),
                                         titles.join(", ")
                                     );
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "📋 Stale Tasks",
-                                            "body": body,
-                                            "kind": "stale_tasks",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "stale_tasks",
+                                        "📋 Stale Tasks",
+                                        &body,
                                     );
                                 }
                             }
@@ -579,13 +589,12 @@ fn main() {
                                 let unique: std::collections::HashSet<_> =
                                     recent_app_switches.iter().collect();
                                 if unique.len() >= APP_SWITCH_UNIQUE_THRESHOLD {
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "🔀 High Context Switching",
-                                            "body": "You've been switching between many apps. Want to refocus?",
-                                            "kind": "context_switch",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "context_switch",
+                                        "🔀 High Context Switching",
+                                        "You've been switching between many apps. Want to refocus?",
                                     );
                                     recent_app_switches.clear();
                                 }
@@ -598,11 +607,11 @@ fn main() {
             app.manage(state.clone());
             app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
-            // Start the Companion API (iPhone/Watch local-network surface) as a
-            // background task so app startup is not blocked on TLS init. The
-            // server lives on a sibling port to MCP; pairing tokens are issued
-            // and stored via StateStore. See ADR-008.
-            {
+            // The Companion API (iPhone/Watch local-network surface) starts at
+            // launch only once a device is paired; otherwise nothing listens
+            // on the local network until the person starts it from the Mac
+            // (`companion_start_server`). TLS init runs off the startup path.
+            if fndr_lib::companion::should_start_at_launch(&state) {
                 let companion_state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     match fndr_lib::companion::start(companion_state, None, None).await {
@@ -628,9 +637,19 @@ fn main() {
             ipc::commands::create_screen_guide_notch_companion(app.handle());
             ipc::commands::create_screen_guide_overlay_window(app.handle());
 
-            // Alpha demo: Auto-Fill and the Alt+Space Omnibar are not part of
-            // the demo surface, so their windows and global shortcuts are not
-            // registered.
+            // The command bar (Alt+Space): memory search, and a request to do
+            // something handed to Notch Do. It was off for the Alpha demo
+            // (2026-09-18); back on as the command bar (2026-10-14). Auto-Fill
+            // stays off.
+            ipc::commands::create_omnibar_window(app.handle());
+            if let Err(err) = ipc::commands::register_omnibar_shortcut(app.handle()) {
+                tracing::warn!("Command bar shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Command bar global shortcut registered: {}",
+                    ipc::commands::OMNIBAR_SHORTCUT
+                );
+            }
 
             // Pre-create the notch HUD (hidden) and register its toggle.
             ipc::commands::create_notch_hud_window(app.handle());
@@ -675,7 +694,6 @@ fn main() {
             ipc::commands::retrieval::fndr_search,
             ipc::commands::retrieval::fndr_answer,
             ipc::commands::retrieval::fndr_build_context_pack,
-            ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
             ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,
@@ -719,6 +737,9 @@ fn main() {
             fndr_lib::voice::voice_start,
             fndr_lib::voice::voice_stop,
             fndr_lib::voice::voice_cancel,
+            fndr_lib::voice::notch_do::get_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_escape_monitor,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
@@ -734,6 +755,11 @@ fn main() {
             ipc::commands::get_runtime_metrics,
             ipc::commands::get_privacy_proof,
             ipc::commands::resume_work,
+            ipc::commands::what_changed_since,
+            ipc::commands::mark_thread_seen,
+            ipc::commands::calendar_meeting_prep_state,
+            ipc::commands::set_calendar_meeting_prep,
+            ipc::commands::open_calendar_privacy_settings,
             ipc::commands::get_retention_days,
             ipc::commands::set_retention_days,
             ipc::commands::delete_older_than,
@@ -755,7 +781,6 @@ fn main() {
             ipc::commands::run_idle_wiki_knowledge_compile,
             ipc::commands::get_graph_for_project,
             ipc::commands::get_full_graph,
-            ipc::commands::search_graph,
             ipc::commands::get_node_detail,
             ipc::commands::find_graph_path,
             ipc::commands::get_god_nodes,
@@ -771,21 +796,6 @@ fn main() {
             ipc::commands::complete_todo,
             ipc::commands::set_todo_completed,
             // Agent SDK
-            ipc::commands::build_agent_context_pack,
-            ipc::commands::run_agent_request,
-            ipc::commands::propose_agent_action,
-            ipc::commands::approve_agent_action,
-            ipc::commands::execute_agent_action,
-            ipc::commands::list_agent_audit_runs,
-            ipc::commands::get_agent_audit_run,
-            ipc::commands::explain_agent_retrieval,
-            ipc::commands::rate_agent_result,
-            ipc::commands::propose_skill_from_run,
-            ipc::commands::list_agent_skill_drafts,
-            ipc::commands::propose_eval_from_run,
-            ipc::commands::list_agent_eval_drafts,
-            ipc::commands::list_agent_prompts,
-            ipc::commands::get_agent_prompt,
             ipc::commands::get_hermes_bridge_status,
             ipc::commands::install_hermes_bridge,
             ipc::commands::save_hermes_setup,
@@ -806,6 +816,18 @@ fn main() {
             ipc::commands::codex_login_start,
             ipc::commands::codex_login_cancel,
             ipc::commands::codex_logout,
+            ipc::commands::voice_out_status,
+            ipc::commands::voice_out_voices,
+            ipc::commands::voice_out_start,
+            ipc::commands::voice_out_speak,
+            ipc::commands::voice_out_cancel,
+            ipc::commands::voice_out_stop,
+            ipc::commands::tts_status,
+            ipc::commands::tts_voices,
+            ipc::commands::tts_install,
+            ipc::commands::tts_remove,
+            ipc::commands::tts_cancel,
+            ipc::commands::tts_synthesize,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
             ipc::commands::set_computer_use_enabled,
@@ -814,8 +836,21 @@ fn main() {
             ipc::commands::install_component,
             ipc::commands::computer_use_permissions,
             ipc::commands::computer_use_start,
+            ipc::commands::notch_do_rate_run,
+            ipc::commands::notch_do_save_skill,
+            ipc::commands::notch_do_runs,
+            ipc::commands::notch_do_skills,
+            ipc::commands::notch_do_delete_skill,
+            ipc::commands::notch_do_request,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
+            ipc::commands::resolve_work_set,
+            ipc::commands::open_work_set,
+            ipc::commands::list_named_sets,
+            ipc::commands::save_named_set,
+            ipc::commands::delete_named_set,
+            ipc::commands::routine_offers,
+            ipc::commands::dismiss_routine_offer,
             ipc::commands::generate_daily_briefing,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
@@ -828,6 +863,8 @@ fn main() {
             // Auto-fill
             ipc::commands::get_autofill_settings,
             ipc::commands::set_autofill_settings,
+            ipc::commands::get_voice_output_settings,
+            ipc::commands::set_voice_output_settings,
             ipc::commands::set_autofill_overlay_ready,
             ipc::commands::take_pending_autofill_payload,
             ipc::commands::resolve_autofill,

@@ -11,11 +11,8 @@ use std::sync::OnceLock;
 
 static TOKEN: OnceLock<String> = OnceLock::new();
 
-fn token_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".fndr")
-        .join("mcp_token")
+pub(super) fn token_path() -> PathBuf {
+    super::fndr_home().join("mcp_token")
 }
 
 /// Load the existing token from disk, or generate and persist a new one.

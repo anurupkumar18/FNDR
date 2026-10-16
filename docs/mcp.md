@@ -18,15 +18,14 @@ Configuration is documented in `README.md`:
 
 ## Agent Tools Added In This Slice
 
-- `agent.build_context_pack`: returns the typed `AgentContextPack` for Ask / Plan / Act / Learn.
 - `agent.run`: builds a pack, persists an audit record, and returns deterministic local output with policy and blocked action details. It does not execute dangerous actions.
-- `agent.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
+- `fndr.privacy_status`: reports MCP/Agent privacy posture, auth mode, raw-evidence defaults, blocklist count, redaction setting, and dangerous-action policy.
 - `agent.explain_retrieval`: explains selected memories, qualitative ranking signals, dropped context, redactions, policy reasons, and limitations.
-- `agent.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking. Requires a valid MCP token, actions enabled, and "Let assistants add notes" enabled.
+- `fndr.rate_result`: logs retrieval feedback (`useful`, `irrelevant`, `wrong`, `stale`, `missing_context`) without mutating ranking. Requires a valid MCP token, actions enabled, and "Let assistants add notes" enabled.
 - `agent.list_prompts`: lists FNDR-specific prompt templates.
 - `agent.get_prompt`: returns one prompt template.
 
-Existing memory tools remain available, including `memory.search_full_context`, `memory.get_context_pack`, `memory.agent_brief`, `memory.timeline`, `memory.project_context`, `memory.decisions`, `memory.todos`, and graph/context tools.
+Start with `memory.resume_work`, `fndr.search`, `fndr.answer`, `fndr.build_context_pack`, `fndr.timeline` and `fndr.active_focus`; `memory.project_context`, `memory.decisions`, `memory.todos` and the graph tools stay for narrower reads. The duplicates that once sat beside these (RET-02, `docs/product/mcp-tool-audit.md`) are folded into them.
 
 ## Resources
 
@@ -50,7 +49,7 @@ The MCP server now supports `prompts/list` and `prompts/get` for:
 - `explain_my_thinking`
 - `turn_workflow_into_skill`
 
-Each prompt tells the external agent to call FNDR tools first, cite evidence, respect `agent.privacy_status`, explain uncertainty, and avoid actions without approval.
+Each prompt tells the external agent to call FNDR tools first, cite evidence, respect `fndr.privacy_status`, explain uncertainty, and avoid actions without approval.
 
 ## Security Model
 
@@ -107,12 +106,11 @@ The tool still writes to the separate decision ledger and rebuilds project conte
 
 ```json
 {
-  "name": "agent.build_context_pack",
+  "name": "fndr.build_context_pack",
   "arguments": {
-    "user_goal": "Summarize what I was debugging before lunch",
-    "mode": "ask",
-    "window_minutes": 240,
-    "include_raw_evidence": false
+    "query": "what I was debugging before lunch",
+    "agent_type": "coding_agent",
+    "budget_tokens": 1600
   }
 }
 ```
@@ -139,7 +137,7 @@ The tool still writes to the separate decision ledger and rebuilds project conte
 
 ```json
 {
-  "name": "agent.rate_result",
+  "name": "fndr.rate_result",
   "arguments": {
     "run_id": "agent_run_...",
     "memory_id": "memory-id",

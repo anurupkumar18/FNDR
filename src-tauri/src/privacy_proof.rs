@@ -99,6 +99,9 @@ pub enum Feature {
     NotchDoScreenText,
     HermesChat,
     ScreenGuideAnswer,
+    /// Reply text FNDR already decided to say, sent to the Codex realtime
+    /// voice to be spoken (ADR 028). Never memory or screen text.
+    VoiceOut,
 }
 
 impl Feature {
@@ -109,6 +112,7 @@ impl Feature {
             Self::NotchDoScreenText => "notch_do_screen_text",
             Self::HermesChat => "hermes_chat",
             Self::ScreenGuideAnswer => "screen_guide_answer",
+            Self::VoiceOut => "voice_out",
         }
     }
 }

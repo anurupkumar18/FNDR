@@ -18,6 +18,7 @@ vi.mock("./AppPanels", () => ({
         ? <><button type="button" onClick={onClosePanel}>Close mock panel</button><span data-testid="vault-focus">{memoryVaultFocusId}</span></>
         : null,
 }));
+vi.mock("@/shared/voice/VoiceOutputSection", () => ({ VoiceOutputSection: () => null }));
 vi.mock("./BiometricLockScreen", () => ({
     BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));
@@ -81,6 +82,12 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getFunGreeting: vi.fn().mockResolvedValue("Welcome back to FNDR."),
     resumeWork,
+    getTodos: vi.fn().mockResolvedValue([]),
+    notchDoSkills: vi.fn().mockResolvedValue([]),
+    notchDoRuns: vi.fn().mockResolvedValue([]),
+    listNamedSets: vi.fn().mockResolvedValue([]),
+    routineOffers: vi.fn().mockResolvedValue([]),
+    whatChangedSince: vi.fn().mockRejectedValue(new Error("not modeled")),
 }));
 
 import App from "./App";

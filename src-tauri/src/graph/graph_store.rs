@@ -484,47 +484,6 @@ impl GraphStore {
         })
     }
 
-    pub async fn search_nodes(
-        &self,
-        query_embedding: &[f32],
-        k: usize,
-    ) -> Result<Vec<GraphNode>, Box<dyn std::error::Error>> {
-        if query_embedding.len() != DEFAULT_TEXT_EMBEDDING_DIM {
-            return Err("embedding dim mismatch".into());
-        }
-        let q = self.store.graph_nodes_table.query();
-        let batches = q.execute().await?.try_collect::<Vec<_>>().await?;
-        let mut nodes = Vec::new();
-        for b in batches {
-            nodes.extend(batch_to_nodes(&b)?);
-        }
-        let mut scored: Vec<(f32, GraphNode)> = Vec::new();
-        let qn: f32 = query_embedding
-            .iter()
-            .map(|x| x * x)
-            .sum::<f32>()
-            .sqrt()
-            .max(1e-6);
-        for mut n in nodes {
-            let emb = n.embedding.take().unwrap_or_else(zero_embedding);
-            if emb.len() != query_embedding.len() {
-                continue;
-            }
-            let dn: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
-            let sim: f32 = emb
-                .iter()
-                .zip(query_embedding.iter())
-                .map(|(a, b)| a * b)
-                .sum::<f32>()
-                / (dn * qn);
-            n.embedding = Some(emb);
-            scored.push((sim, n));
-        }
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k.max(1));
-        Ok(scored.into_iter().map(|(_, n)| n).collect())
-    }
-
     pub async fn get_node_by_label(
         &self,
         label: &str,

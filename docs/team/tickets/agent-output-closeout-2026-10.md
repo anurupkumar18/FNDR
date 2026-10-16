@@ -121,3 +121,48 @@ These tickets reconcile merged work with the remaining native and real-use evide
 **Done when.** Recall and false suggestions have denominators and counts, and the native empty-state sentence is visibly confirmed or fixed.
 
 **Evidence.** Content-safe score table and native check in `docs/evidence/W04/`.
+
+## AG-06 Measure Notch Do with a labeled suite before changing it
+- assignee: anurupkumar
+- labels: area::command, type::feature, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: AG-02
+
+**Why.** AG-02 and AG-05 ask for a "twenty-task Notch Do set" and none existed, so a change to the planner prompt, the routing words or the policy had nothing to be scored against.
+
+**Result, 2026-10-14.** `scripts/operator/notch-do-cases.json` (30 cases) and `operator::eval`: routing scored on every test run through `plan::route`, which the run now uses; plan labels scored on recorded planner answers. It found five misroutes from never-do words used as nouns, fixed. The live planner test exists and has not been run.
+
+**Done when.** A live recording exists and its floor holds, and the suite has cases for the operate step's tool policy.
+
+**Evidence.** Test output; the first recording under `scripts/operator/recordings/`.
+
+## AG-07 One action layer: Notch Do, reached from the command bar too
+- assignee: anurupkumar
+- labels: area::command, type::chore, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: AG-06
+
+**Why.** The command bar's own stack (typed tool registry, run/confirm/refuse policy, action approvals, skill and eval drafts, about 3,600 lines) had no caller in the app, while Notch Do carried out every action under a separate policy. Owner decision, 2026-10-14.
+
+**Result, 2026-10-14.** The unreached stack and its 15 IPC commands are removed; MCP keeps context packs, `agent.run`, its audit, prompts and the write gate. The command bar shows "Do it: ..." for an action request and hands it to the notch (`omnibar_do`), which plans it without listening first. `docs/product/command-surface.md` describes the pipeline as it runs.
+
+**Done when.** The command bar hands a request to Notch Do in the running app, and the step types the October tool list still lacks (paste, reminders, Shortcuts, timers, reveal file) are ticketed one by one as Notch Do steps.
+
+**Evidence.** Component tests for the hand-off; a native run.
+
+## AG-08 Notch Do learns from its runs: ratings, cases from wrong runs, skills from good ones
+- assignee: anurupkumar
+- labels: area::command, type::feature, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+- depends: AG-06, AG-07
+
+**Why.** The journal recorded every action and nothing read it back beyond Privacy Activity, so a run that went wrong could not become a test and one that went well could not be repeated. Owner decision, 2026-10-14.
+
+**Result, 2026-10-14.** `operator::runs` keeps each run's request, plan and outcome and the person's rating; a run rated as not working is a draft suite case (`notch_do_case_drafts`). `operator::skills` saves a run that worked under a name and `plan::route` runs it again by that name through `carry_out`. The notch's finished card asks "Did that work?" and offers "Save as a skill".
+
+**Done when.** A skill is saved and run again by voice in the running app, and a draft case from a real run is labeled into the suite.
+
+**Not built.** A place to list, rename and delete skills; saving a work set or a run with an operate step as a skill is allowed but untested natively.

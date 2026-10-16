@@ -6,6 +6,7 @@
 pub mod accessibility;
 pub mod agent;
 pub mod briefing;
+pub mod browsers;
 pub mod capture;
 pub mod companion;
 pub mod config;
@@ -30,13 +31,16 @@ pub mod memory_journey;
 pub mod memory_quality;
 pub mod memory_review;
 pub mod models;
+pub mod notify;
 pub mod ocr;
 pub mod operator;
 pub mod privacy;
 pub mod privacy_proof;
+pub mod proactive_signals;
 pub mod resume;
 pub mod search;
 pub mod speech;
+pub mod speech_out;
 pub mod spotlight;
 pub mod storage;
 pub mod summariser;
@@ -44,8 +48,10 @@ pub mod system_resources;
 pub mod tasks;
 pub mod telemetry;
 pub mod timeline;
+pub mod tts;
 pub mod voice;
 pub mod wiki;
+pub mod workset;
 
 use config::Config;
 use graph::GraphStore;
@@ -57,7 +63,7 @@ use std::sync::Arc;
 use storage::{StateStore, Stats, Store};
 use tokio::sync::Mutex as AsyncMutex;
 
-const USER_CAPTURE_PAUSED_STATE_KEY: &str = "capture.user_paused";
+pub const USER_CAPTURE_PAUSED_STATE_KEY: &str = "capture.user_paused";
 
 /// Queued insight-graph upsert work (see `capture` flush + idle `commit_graph_updates`).
 #[derive(Debug, Clone)]
