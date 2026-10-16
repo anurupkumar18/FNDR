@@ -1,0 +1,45 @@
+@import "../../shared/theme/receipts.css";
+
+/* Connection state as a dot: blue is live, clay needs attention. */
+.mcp-state { display: inline-flex; align-items: center; gap: 7px; }
+.mcp-state::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--rc-line-strong);
+}
+.mcp-state[data-state="connected"]::before { background: var(--rc-accent); }
+.mcp-state[data-state="conflict"]::before,
+.mcp-state[data-state="unreadable"]::before,
+.mcp-state[data-state="needs_update"]::before { background: var(--rc-clay-solid); }
+
+.mcp-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rc-line);
+    font-size: 14px;
+    cursor: pointer;
+}
+.mcp-toggle input { order: 2; }
+
+.mcp-report { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.mcp-report li { padding-left: 18px; position: relative; color: var(--rc-text-2); }
+.mcp-report li::before { content: ""; position: absolute; left: 2px; top: 0.5em; width: 7px; height: 7px; border-radius: 50%; background: var(--rc-accent); }
+.mcp-report li[data-ok="false"]::before { background: var(--rc-clay-solid); }
+
+/* Each client is one row; its actions drop below instead of squeezing the text. */
+.mcp-clients .setup-center-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+}
+.mcp-clients .setup-center-status { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+.mcp-clients .setup-center-detail { overflow-wrap: normal; word-break: normal; }
+.mcp-path { font-family: var(--font-mono); font-size: 11.5px; }
+
+.mcp-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 22px; }
+.mcp-actions .ui-action-btn { flex: 0 0 auto; width: auto; height: 34px; padding: 0 14px; white-space: nowrap; }

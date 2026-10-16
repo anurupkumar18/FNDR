@@ -23,6 +23,16 @@ VS-40 and VS-41 were accepted on 2026-10-05 and moved to `docs/team/tickets/anur
 
 **Evidence.** Gate output before and after, and the load timing.
 
+**Result, 2026-10-13: measured, not shipped.** Two things were checked before and after on the same seeded profiles.
+
+The graph cannot feed the route. On the owner's vault (162 memories, read only, counts only) all 659 graph nodes have exactly one source memory, and each of the 10 project nodes has one. A node that matches a query can add at most the one memory it came from.
+
+A version that needs no graph was built and measured instead: the planner recognized a project from words only that project's name has ("essay rubric weights" to "HIST 2100 essay: Reconstruction"), and the entity route returned the memories whose `project` field is that project. Planner and route unit tests passed. On the three personas, search before and after: knowledge-worker Recall@5 1.000 and 1.000, MRR@10 0.909 and 0.909; office-pm 0.950 and 0.950, 0.647 and 0.647; software-engineer 1.000 and 1.000, 0.883 and 0.883. One query moved, from rank 1 to 2. Under step 4 the change was dropped, about 290 lines.
+
+Why it cannot help yet: the entity weight in fusion is 0.10, the personas are at or near the recall ceiling, and on the owner's vault only 21 of 162 memories carry a project, 9 of the 11 projects with a single memory. `detect_project_for_record` recognizes a project only from a code repository path, so a document, a course page or a chat never gets one.
+
+Still open, in this order: decide what a piece of work is for a person who does not work in a repository (it also decides Resume threads, which today are one window title each: 54 of 71 threads on the owner's vault hold one or two memories and one holds 64); then take the entity route out of the planner or feed it from that.
+
 ## VS-70 Weight the vector route's two branches explicitly, and recalibrate the score bars
 - assignee: anurupkumar
 - labels: area::vault-search, type::spike, prio::p2

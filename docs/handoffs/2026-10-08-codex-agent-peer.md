@@ -10,6 +10,7 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 - Privacy Activity shows saved host, time, request size and readable state. The session request counter remains separate from this durable list.
 - The 100-run ledger preserves uncertain and active tasks. When full, it reuses an ended run's slot or refuses a new Send before egress.
 - A direct reply without text is recorded as confirmed but unsupported content. Peer UI and Privacy Activity explain that FNDR cannot display it; no task ID is invented.
+- Send asks task-capable peers to return immediately, so FNDR can keep the real task ID and check status later. Two live direct-answer peers still pass; long-running live task polling is unverified.
 - The checkout is shared with two Claude sessions. Inspect current status before editing or staging; do not stage their files.
 
 ## Verification and limits
@@ -21,7 +22,7 @@ This replaces the completed five-hour plan in the earlier version of this file. 
 
 ## Next slices, in order
 
-1. Finish AG-04 lifecycle acceptance: controlled Cancel/Get, missing task and one-attempt failed Send now pass. Exercise Get/Cancel and an uncertain task through native UI with a real task-capable peer and a disposable profile. Keep source visibility checks before and after network access.
+1. Finish AG-04 lifecycle acceptance: controlled Cancel/Get, missing task and one-attempt failed Send now pass. Exercise nonblocking Send, Get/Cancel and an uncertain task through native UI with a real task-capable peer and a disposable profile. Keep source visibility checks before and after network access.
 2. Establish a native window-access route, then run Peer UI and Privacy Activity after restart on a disposable profile. Do not use the owner vault. If the route remains unavailable, report native QA pending without another duplicate build.
 3. Bind a credential to one configured peer if a real target needs Bearer. Never place it in a Card URL, task body or run ledger. Prove endpoint binding and refusal after credential removal.
 4. After AG-04, measure task usefulness, unsupported claims, latency and bytes across the two checked peers before expanding to inbound A2A. Keep AG-04 Doing until its native and lifecycle gates pass; AG-05 owns broader native Agent QA.

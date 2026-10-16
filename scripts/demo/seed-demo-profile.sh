@@ -41,6 +41,10 @@ cat > "$DEMO/onboarding.json" <<JSON
 JSON
 
 cd "$REPO/src-tauri"
+SEED_ARGS=(--data-dir "$DEMO" --corpus "$CORPUS")
+if [[ "${FNDR_DEMO_PAUSE_CAPTURE:-0}" == "1" ]]; then
+  SEED_ARGS+=(--pause-capture)
+fi
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo run --example seed_demo -- \
-  --data-dir "$DEMO" --corpus "$CORPUS"
+  "${SEED_ARGS[@]}"
 echo "Demo profile ready: $DEMO"

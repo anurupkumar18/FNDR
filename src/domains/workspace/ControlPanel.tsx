@@ -1,3 +1,7 @@
+import { HOME_SECTIONS, setHomeSection, useHomeSections } from "@/shared/home/homeSections";
+import { SettingsTabList, SettingsTabPanel, type SettingsTab } from "./SettingsTabs";
+import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
+import { NotchDoSettings } from "@/domains/notch/NotchDoSettings";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,9 +21,12 @@ import {
 import {
     type ModelInfo,
     type OnboardingState,
+    type AppleModelStatus,
+    getAppleModelStatus,
     getOnboardingState,
     listAvailableModels,
     saveOnboardingState,
+    setAppleModelEnabled,
 } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { STORAGE_KEYS } from "@/shared/utils/config";
@@ -47,6 +54,7 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { PrivacyPanel } from "./PrivacyPanel";
+import { ActionApprovalPanel } from "@/domains/actions/ActionApprovalPanel";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
@@ -154,12 +162,28 @@ function captureActivityTrace(
     });
 }
 
+const TABS_ID = "fndr-settings";
+
+type SettingsTabId = "general" | "capture" | "privacy" | "voice" | "ai";
+
+const SETTINGS_TABS: readonly SettingsTab<SettingsTabId>[] = [
+    { id: "general", label: "General" },
+    { id: "capture", label: "Capture" },
+    { id: "privacy", label: "Privacy" },
+    { id: "voice", label: "Voice" },
+    { id: "ai", label: "AI" },
+];
+
 export function ControlPanel({
     status,
     compact: _compact = false,
     evalUi: _evalUi = false,
 }: ControlPanelProps) {
     const [isOpen, setIsOpen] = useState(false);
+    const homeSections = useHomeSections();
+    const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
+    const [tabDirection, setTabDirection] = useState<"forward" | "back">("forward");
+    const panelContentRef = useRef<HTMLDivElement>(null);
     const [theme, setTheme] = useState<"dark" | "light">(
         () => (localStorage.getItem(STORAGE_KEYS.theme) as "dark" | "light") || "dark",
     );
@@ -171,6 +195,9 @@ export function ControlPanel({
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMessage, setProfileMessage] = useState<string | null>(null);
     const [models, setModels] = useState<ModelInfo[]>([]);
+    const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
+    const [appleModelBusy, setAppleModelBusy] = useState(false);
+    const [appleModelError, setAppleModelError] = useState<string | null>(null);
     const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
     const [settingsError, setSettingsError] = useState<string | null>(null);
     const [agentNotesEnabled, setAgentNotesEnabledState] = useState<boolean | null>(null);
@@ -192,15 +219,18 @@ export function ControlPanel({
         setSettingsError(null);
         setAgentNotesEnabledState(null);
         setAgentNotesError(null);
+        setAppleModel(null);
+        setAppleModelError(null);
         const results = await Promise.allSettled([
             getBlocklist(),
             getOnboardingState(),
             listAvailableModels(),
             fndrQualityStatus(),
             getAgentNotesEnabled(),
+            getAppleModelStatus(),
         ] as const);
         if (version !== settingsLoadVersion.current) return;
-        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult] = results;
+        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult, appleResult] = results;
         const unavailable: string[] = [];
 
         if (blocklistResult.status === "fulfilled") {
@@ -229,6 +259,11 @@ export function ControlPanel({
             setAgentNotesEnabledState(agentNotesResult.value);
         } else {
             unavailable.push("assistant notes");
+        }
+        if (appleResult.status === "fulfilled") {
+            setAppleModel(appleResult.value);
+        } else {
+            unavailable.push("Apple model");
         }
 
         if (unavailable.length > 0) {
@@ -385,6 +420,21 @@ export function ControlPanel({
         }
     };
 
+    const handleToggleAppleModel = async () => {
+        if (!appleModel || appleModelBusy || appleModel.availability !== "available") return;
+        setAppleModelBusy(true);
+        setAppleModelError(null);
+        try {
+            const next = await setAppleModelEnabled(!appleModel.enabled);
+            settingsLoadVersion.current += 1;
+            setAppleModel(next);
+        } catch (error) {
+            setAppleModelError(`Apple model update failed: ${String(error)}`);
+        } finally {
+            setAppleModelBusy(false);
+        }
+    };
+
     const handleSaveProfile = async () => {
         setProfileBusy(true);
         setProfileMessage(null);
@@ -442,6 +492,17 @@ export function ControlPanel({
             setBlocklistBusy(false);
         }
     };
+
+    const selectSettingsTab = (next: SettingsTabId) => {
+        if (next === settingsTab) return;
+        const order = SETTINGS_TABS.map((tab) => tab.id);
+        setTabDirection(order.indexOf(next) > order.indexOf(settingsTab) ? "forward" : "back");
+        setSettingsTab(next);
+        panelContentRef.current?.scrollTo?.({ top: 0 });
+    };
+    const settingsTabs = SETTINGS_TABS.map((tab) =>
+        tab.id === "privacy" ? { ...tab, badge: privacyAlertCount } : tab,
+    );
 
     const stored = status?.pipeline.stored_total ?? qualityStatus?.stored_count ?? 0;
     const skipped = status?.pipeline.skipped_total ?? qualityStatus?.dropped_count ?? 0;
@@ -501,297 +562,358 @@ export function ControlPanel({
                             onClose={() => setIsOpen(false)}
                         />
 
-                        <div className="panel-content">
+                        <SettingsTabList
+                            tabs={settingsTabs}
+                            active={settingsTab}
+                            onChange={selectSettingsTab}
+                            idPrefix={TABS_ID}
+                            label="Settings sections"
+                        />
+
+                        <div className="panel-content" ref={panelContentRef}>
                             {settingsError && (
                                 <p className="settings-message settings-message--error" role="alert">
                                     {settingsError}
                                 </p>
                             )}
 
-                            <section className="panel-section settings-section--about" aria-labelledby="settings-profile-title">
-                                <h3 id="settings-profile-title">About</h3>
-                                <p className="section-hint">Personalize FNDR and its appearance on this Mac.</p>
-                                <label className="settings-field-label" htmlFor="fndr-profile-name">Display name</label>
-                                <div className="profile-row">
-                                    <input
-                                        id="fndr-profile-name"
-                                        type="text"
-                                        value={profileDraft}
-                                        onChange={(event) => {
-                                            setProfileDraft(event.target.value);
-                                            setProfileMessage(null);
-                                        }}
-                                        autoComplete="name"
-                                        className="profile-input"
-                                        onKeyDown={(event) => {
-                                            if (
-                                                event.key === "Enter"
-                                                && !profileBusy
-                                                && profileDraft.trim() !== profileName.trim()
-                                            ) {
-                                                void handleSaveProfile();
-                                            }
-                                        }}
-                                    />
-                                    <button
-                                        type="button"
-                                        className="ui-action-btn btn-secondary"
-                                        onClick={() => void handleSaveProfile()}
-                                        disabled={profileBusy || profileDraft.trim() === profileName.trim()}
-                                    >
-                                        {profileBusy ? "Saving…" : "Save"}
-                                    </button>
-                                </div>
-                                {profileMessage && (
-                                    <p
-                                        className="profile-msg"
-                                        role={profileMessage.startsWith("Profile save failed") ? "alert" : "status"}
-                                    >
-                                        {profileMessage}
-                                    </p>
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-subsection settings-section--about" aria-labelledby="settings-appearance-title">
-                                <h4 id="settings-appearance-title">Appearance</h4>
-                                <SegmentedControl
-                                    ariaLabel="Theme"
-                                    value={theme}
-                                    onChange={setTheme}
-                                    options={[
-                                        { value: "light", label: "Light" },
-                                        { value: "dark", label: "Dark" },
-                                    ]}
-                                />
-                                <div className="palette-list" role="radiogroup" aria-label="Color palette">
-                                    {listPalettes().map((key) => {
-                                        const option = PALETTES[key];
-                                        const selected = key === palette;
-                                        return (
-                                            <button
-                                                key={key}
-                                                type="button"
-                                                role="radio"
-                                                aria-checked={selected}
-                                                className={`palette-option${selected ? " is-selected" : ""}`}
-                                                onClick={() => setPalette(key)}
-                                            >
-                                                <span className="palette-swatch" aria-hidden="true">
-                                                    <span style={{ background: option[theme].bg }} />
-                                                    <span style={{ background: option[theme].surfaceRaised }} />
-                                                    <span style={{ background: option[theme].accent }} />
-                                                </span>
-                                                <span className="palette-name">{option.name}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                                <p className="appearance-sublabel" id="settings-wallpaper-label">Background</p>
-                                <div className="wallpaper-list" role="radiogroup" aria-labelledby="settings-wallpaper-label">
-                                    {listWallpapers().map((key) => {
-                                        const option = WALLPAPERS[key];
-                                        const selected = key === wallpaper;
-                                        return (
-                                            <button
-                                                key={key}
-                                                type="button"
-                                                role="radio"
-                                                aria-checked={selected}
-                                                title={option.description}
-                                                className={`wallpaper-option${selected ? " is-selected" : ""}`}
-                                                onClick={() => setWallpaper(key)}
-                                            >
-                                                <span
-                                                    className="wallpaper-preview"
-                                                    style={{ background: option.preview }}
-                                                    aria-hidden="true"
-                                                />
-                                                <span className="wallpaper-name">{option.name}</span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-
-                            <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
-                                <h3 id="settings-updates-title">Updates</h3>
-                                <p className="section-hint">Keep FNDR and its required components ready to use.</p>
-                                <SetupCenter embedded />
-                            </section>
-
-                            <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
-                                <h3 id="settings-capture-title">Capture</h3>
-                                <p className="section-hint">
-                                    Control when FNDR may process new screen context on this Mac.
-                                </p>
-                                <button
-                                    type="button"
-                                    className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
-                                    onClick={() => void handleToggleCapture()}
-                                    disabled={!status || captureBusy}
-                                >
-                                    {!status
-                                        ? "Checking capture status…"
-                                        : captureBusy
-                                            ? "Updating…"
-                                            : status?.is_incognito
-                                                ? "Exit private mode"
-                                            : capturePaused
-                                                ? "Resume capture"
-                                                : "Pause capture"}
-                                </button>
-                                {captureMessage && (
-                                    <p
-                                        className={`settings-message ${captureMessage.startsWith("Capture action failed") ? "settings-message--error" : ""}`}
-                                        role={captureMessage.startsWith("Capture action failed") ? "alert" : "status"}
-                                        aria-label={captureMessage.startsWith("Capture action failed") ? "Capture action failed" : undefined}
-                                    >
-                                        {captureMessage}
-                                    </p>
-                                )}
-                                <div className="capture-stats capture-stats--pipeline" aria-label="This session">
-                                    <span>Stored this session: {stored.toLocaleString()}</span>
-                                    <span>Skipped this session: {skipped.toLocaleString()}</span>
-                                </div>
-                                {captureTrace && (
-                                    <ActivityTrace
-                                        trace={captureTrace}
-                                        className="capture-activity-trace"
-                                    />
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--voice" aria-labelledby="settings-voice-title">
-                                <h3 id="settings-voice-title">Voice</h3>
-                                <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
-                            </section>
-
-                            <section className="panel-section settings-section--agent-access" aria-labelledby="settings-trust-title">
-                                <h3 id="settings-trust-title">Agent access</h3>
-                                <p className="section-hint">Choose whether connected assistants can save notes on this Mac.</p>
-                                <label className="settings-switch-row">
-                                    <span>Let assistants add notes</span>
-                                    <input
-                                        type="checkbox"
-                                        role="switch"
-                                        className="settings-switch"
-                                        aria-describedby="settings-agent-notes-hint"
-                                        checked={agentNotesEnabled === true}
-                                        disabled={agentNotesEnabled === null || agentNotesBusy}
-                                        onChange={() => void handleToggleAgentNotes()}
-                                    />
-                                </label>
-                                <p className="section-hint" id="settings-agent-notes-hint">
-                                    Connected assistants can save labeled notes and decision records locally.
-                                    Turning this off keeps existing records.
-                                </p>
-                                {agentNotesError && (
-                                    <p
-                                        className="settings-message settings-message--error"
-                                        role="alert"
-                                        aria-label="Assistant notes update failed"
-                                    >
-                                        {agentNotesError}
-                                    </p>
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--privacy" aria-labelledby="settings-privacy-title">
-                                <h3 id="settings-privacy-title">Privacy</h3>
-                                <p className="section-hint">Review sensitive activity and control what FNDR captures.</p>
-                                <PrivacyPanel
-                                    isVisible={true}
-                                    onClose={() => undefined}
-                                    onAlertsChange={setPrivacyAlertCount}
-                                    onBlocklistChange={setBlocklistState}
-                                    embedded={true}
-                                />
-                            </section>
-
-                            <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
-                                <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>
-                                <p className="section-hint">
-                                    Matching apps and websites are excluded from future capture.
-                                </p>
-                                <div className="blocklist">
-                                    {blocklist.length === 0 ? (
-                                        <p className="blocklist-empty">No custom apps or sites are blocked.</p>
-                                    ) : (
-                                        blocklist.map((app) => (
-                                            <div key={app} className="blocklist-item">
-                                                <span>{app}</span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleRemoveBlocklist(app)}
-                                                    aria-label={`Remove ${app} from blocklist`}
-                                                    disabled={blocklistBusy}
-                                                >
-                                                    <span aria-hidden="true">×</span>
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                                <label className="settings-field-label" htmlFor="fndr-blocklist-entry">
-                                    App or website
-                                </label>
-                                <div className="add-app-row">
-                                    <input
-                                        id="fndr-blocklist-entry"
-                                        type="text"
-                                        placeholder="Example: 1Password or bank.example"
-                                        value={newApp}
-                                        onChange={(event) => {
-                                            setNewApp(event.target.value);
-                                            setBlocklistMessage(null);
-                                        }}
-                                        onKeyDown={(event) => {
-                                            if (event.key === "Enter" && newApp.trim() && !blocklistBusy) {
-                                                void handleAddBlocklist();
-                                            }
-                                        }}
-                                        className="add-app-input"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleAddBlocklist()}
-                                        className="ui-action-btn btn-primary"
-                                        disabled={!newApp.trim() || blocklistBusy}
-                                    >
-                                        {blocklistBusy ? "Updating…" : "Add"}
-                                    </button>
-                                </div>
-                                {blocklistMessage && (
-                                    <p
-                                        className={`settings-message ${blocklistMessage.startsWith("Blocklist update failed") ? "settings-message--error" : ""}`}
-                                        role={blocklistMessage.startsWith("Blocklist update failed") ? "alert" : "status"}
-                                        aria-label={blocklistMessage.startsWith("Blocklist update failed") ? "Blocklist update failed" : undefined}
-                                    >
-                                        {blocklistMessage}
-                                    </p>
-                                )}
-                            </section>
-
-                            <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
-                                <h3 id="settings-models-title">Models</h3>
-                                <p className="section-hint">
-                                    What intelligence is available locally, and why a feature may be limited.
-                                </p>
-                                {status?.embedding_backend === "unavailable" && (
-                                    <p className="model-error" role="alert">
-                                        Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.
-                                    </p>
-                                )}
-                                <ul className="model-readiness-list">
-                                    {readyModels.map((model) => (
-                                        <li key={model.id}><strong>{model.name}</strong> <span>Ready</span></li>
+                            <SettingsTabPanel idPrefix={TABS_ID} id="general" active={settingsTab === "general"} direction={tabDirection}>
+                                <section className="panel-section settings-section--home" aria-labelledby="settings-home-title">
+                                    <h3 id="settings-home-title">Home</h3>
+                                    <p className="section-hint">Choose what appears below the search on Home. The rest scrolls into view.</p>
+                                    {HOME_SECTIONS.map((section) => (
+                                        <label key={section.id} className="settings-switch-row">
+                                            <span>
+                                                {section.label}
+                                                <small className="settings-switch-hint">{section.hint}</small>
+                                            </span>
+                                            <input
+                                                type="checkbox"
+                                                role="switch"
+                                                className="settings-switch"
+                                                aria-label={section.label}
+                                                checked={homeSections[section.id]}
+                                                onChange={(event) => setHomeSection(section.id, event.target.checked)}
+                                            />
+                                        </label>
                                     ))}
-                                    {models.length === 0 && <li>Checking local model readiness…</li>}
-                                    {models.length > 0 && readyModels.length === 0 && (
-                                        <li>No local models are ready. Finish model setup to enable AI features.</li>
+                                </section>
+                                <section className="panel-section settings-section--about" aria-labelledby="settings-profile-title">
+                                    <h3 id="settings-profile-title">About</h3>
+                                    <p className="section-hint">Personalize FNDR and its appearance on this Mac.</p>
+                                    <label className="settings-field-label" htmlFor="fndr-profile-name">Display name</label>
+                                    <div className="profile-row">
+                                        <input
+                                            id="fndr-profile-name"
+                                            type="text"
+                                            value={profileDraft}
+                                            onChange={(event) => {
+                                                setProfileDraft(event.target.value);
+                                                setProfileMessage(null);
+                                            }}
+                                            autoComplete="name"
+                                            className="profile-input"
+                                            onKeyDown={(event) => {
+                                                if (
+                                                    event.key === "Enter"
+                                                    && !profileBusy
+                                                    && profileDraft.trim() !== profileName.trim()
+                                                ) {
+                                                    void handleSaveProfile();
+                                                }
+                                            }}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="ui-action-btn btn-secondary"
+                                            onClick={() => void handleSaveProfile()}
+                                            disabled={profileBusy || profileDraft.trim() === profileName.trim()}
+                                        >
+                                            {profileBusy ? "Saving…" : "Save"}
+                                        </button>
+                                    </div>
+                                    {profileMessage && (
+                                        <p
+                                            className="profile-msg"
+                                            role={profileMessage.startsWith("Profile save failed") ? "alert" : "status"}
+                                        >
+                                            {profileMessage}
+                                        </p>
                                     )}
-                                </ul>
-                            </section>
+                                </section>
+                                <section className="panel-section settings-subsection settings-section--about" aria-labelledby="settings-appearance-title">
+                                    <h4 id="settings-appearance-title">Appearance</h4>
+                                    <SegmentedControl
+                                        ariaLabel="Theme"
+                                        value={theme}
+                                        onChange={setTheme}
+                                        options={[
+                                            { value: "light", label: "Light" },
+                                            { value: "dark", label: "Dark" },
+                                        ]}
+                                    />
+                                    <div className="palette-list" role="radiogroup" aria-label="Color palette">
+                                        {listPalettes().map((key) => {
+                                            const option = PALETTES[key];
+                                            const selected = key === palette;
+                                            return (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={selected}
+                                                    className={`palette-option${selected ? " is-selected" : ""}`}
+                                                    onClick={() => setPalette(key)}
+                                                >
+                                                    <span className="palette-swatch" aria-hidden="true">
+                                                        <span style={{ background: option[theme].bg }} />
+                                                        <span style={{ background: option[theme].surfaceRaised }} />
+                                                        <span style={{ background: option[theme].accent }} />
+                                                    </span>
+                                                    <span className="palette-name">{option.name}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="appearance-sublabel" id="settings-wallpaper-label">Background</p>
+                                    <div className="wallpaper-list" role="radiogroup" aria-labelledby="settings-wallpaper-label">
+                                        {listWallpapers().map((key) => {
+                                            const option = WALLPAPERS[key];
+                                            const selected = key === wallpaper;
+                                            return (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={selected}
+                                                    title={option.description}
+                                                    className={`wallpaper-option${selected ? " is-selected" : ""}`}
+                                                    onClick={() => setWallpaper(key)}
+                                                >
+                                                    <span
+                                                        className="wallpaper-preview"
+                                                        style={{ background: option.preview }}
+                                                        aria-hidden="true"
+                                                    />
+                                                    <span className="wallpaper-name">{option.name}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </section>
+                            </SettingsTabPanel>
+                            <SettingsTabPanel idPrefix={TABS_ID} id="capture" active={settingsTab === "capture"} direction={tabDirection}>
+                                <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
+                                    <h3 id="settings-capture-title">Capture</h3>
+                                    <p className="section-hint">
+                                        Control when FNDR may process new screen context on this Mac.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        className={`ui-action-btn capture-toggle ${capturePaused || status?.is_incognito ? "is-paused" : "is-capturing"}`}
+                                        onClick={() => void handleToggleCapture()}
+                                        disabled={!status || captureBusy}
+                                    >
+                                        {!status
+                                            ? "Checking capture status…"
+                                            : captureBusy
+                                                ? "Updating…"
+                                                : status?.is_incognito
+                                                    ? "Exit private mode"
+                                                : capturePaused
+                                                    ? "Resume capture"
+                                                    : "Pause capture"}
+                                    </button>
+                                    {captureMessage && (
+                                        <p
+                                            className={`settings-message ${captureMessage.startsWith("Capture action failed") ? "settings-message--error" : ""}`}
+                                            role={captureMessage.startsWith("Capture action failed") ? "alert" : "status"}
+                                            aria-label={captureMessage.startsWith("Capture action failed") ? "Capture action failed" : undefined}
+                                        >
+                                            {captureMessage}
+                                        </p>
+                                    )}
+                                    <div className="capture-stats capture-stats--pipeline" aria-label="This session">
+                                        <span>Stored this session: {stored.toLocaleString()}</span>
+                                        <span>Skipped this session: {skipped.toLocaleString()}</span>
+                                    </div>
+                                    {captureTrace && (
+                                        <ActivityTrace
+                                            trace={captureTrace}
+                                            className="capture-activity-trace"
+                                        />
+                                    )}
+                                </section>
+                            </SettingsTabPanel>
+                            <SettingsTabPanel idPrefix={TABS_ID} id="privacy" active={settingsTab === "privacy"} direction={tabDirection}>
+                                <section className="panel-section settings-section--privacy" aria-labelledby="settings-privacy-title">
+                                    <h3 id="settings-privacy-title">Privacy</h3>
+                                    <p className="section-hint">Review sensitive activity and control what FNDR captures.</p>
+                                    <PrivacyPanel
+                                        isVisible={true}
+                                        onClose={() => undefined}
+                                        onAlertsChange={setPrivacyAlertCount}
+                                        onBlocklistChange={setBlocklistState}
+                                        embedded={true}
+                                    />
+                                </section>
+                                <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
+                                    <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>
+                                    <p className="section-hint">
+                                        Matching apps and websites are excluded from future capture.
+                                    </p>
+                                    <div className="blocklist">
+                                        {blocklist.length === 0 ? (
+                                            <p className="blocklist-empty">No custom apps or sites are blocked.</p>
+                                        ) : (
+                                            blocklist.map((app) => (
+                                                <div key={app} className="blocklist-item">
+                                                    <span>{app}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleRemoveBlocklist(app)}
+                                                        aria-label={`Remove ${app} from blocklist`}
+                                                        disabled={blocklistBusy}
+                                                    >
+                                                        <span aria-hidden="true">×</span>
+                                                    </button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                    <label className="settings-field-label" htmlFor="fndr-blocklist-entry">
+                                        App or website
+                                    </label>
+                                    <div className="add-app-row">
+                                        <input
+                                            id="fndr-blocklist-entry"
+                                            type="text"
+                                            placeholder="Example: 1Password or bank.example"
+                                            value={newApp}
+                                            onChange={(event) => {
+                                                setNewApp(event.target.value);
+                                                setBlocklistMessage(null);
+                                            }}
+                                            onKeyDown={(event) => {
+                                                if (event.key === "Enter" && newApp.trim() && !blocklistBusy) {
+                                                    void handleAddBlocklist();
+                                                }
+                                            }}
+                                            className="add-app-input"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleAddBlocklist()}
+                                            className="ui-action-btn btn-primary"
+                                            disabled={!newApp.trim() || blocklistBusy}
+                                        >
+                                            {blocklistBusy ? "Updating…" : "Add"}
+                                        </button>
+                                    </div>
+                                    {blocklistMessage && (
+                                        <p
+                                            className={`settings-message ${blocklistMessage.startsWith("Blocklist update failed") ? "settings-message--error" : ""}`}
+                                            role={blocklistMessage.startsWith("Blocklist update failed") ? "alert" : "status"}
+                                            aria-label={blocklistMessage.startsWith("Blocklist update failed") ? "Blocklist update failed" : undefined}
+                                        >
+                                            {blocklistMessage}
+                                        </p>
+                                    )}
+                                </section>
+                            </SettingsTabPanel>
+                            <SettingsTabPanel idPrefix={TABS_ID} id="voice" active={settingsTab === "voice"} direction={tabDirection}>
+                                <section className="panel-section settings-section--voice" aria-labelledby="settings-voice-title">
+                                    <h3 id="settings-voice-title">Voice</h3>
+                                    <p className="section-hint">Use the microphone controls in Home and Search when you want to speak to FNDR.</p>
+                                    <VoiceOutputSection />
+                                </section>
+                            </SettingsTabPanel>
+                            <SettingsTabPanel idPrefix={TABS_ID} id="ai" active={settingsTab === "ai"} direction={tabDirection}>
+                                <section className="panel-section settings-section--agent-access" aria-labelledby="settings-trust-title">
+                                    <h3 id="settings-trust-title">Agent access</h3>
+                                    <p className="section-hint">Choose whether connected assistants can save notes on this Mac.</p>
+                                    <label className="settings-switch-row">
+                                        <span>Let assistants add notes</span>
+                                        <input
+                                            type="checkbox"
+                                            role="switch"
+                                            className="settings-switch"
+                                            aria-describedby="settings-agent-notes-hint"
+                                            checked={agentNotesEnabled === true}
+                                            disabled={agentNotesEnabled === null || agentNotesBusy}
+                                            onChange={() => void handleToggleAgentNotes()}
+                                        />
+                                    </label>
+                                    <p className="section-hint" id="settings-agent-notes-hint">
+                                        Connected assistants can save labeled notes and decision records locally.
+                                        Turning this off keeps existing records.
+                                    </p>
+                                    {agentNotesError && (
+                                        <p
+                                            className="settings-message settings-message--error"
+                                            role="alert"
+                                            aria-label="Assistant notes update failed"
+                                        >
+                                            {agentNotesError}
+                                        </p>
+                                    )}
+                                </section>
+                                <section className="panel-section" aria-label="Action controls">
+                                    <ActionApprovalPanel embedded />
+                                </section>
+                                <NotchDoSettings />
+                                <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
+                                    <h3 id="settings-models-title">Models</h3>
+                                    <p className="section-hint">
+                                        What intelligence is available locally, and why a feature may be limited.
+                                    </p>
+                                    <p className="section-hint">
+                                        Last text backend: {status?.last_text_backend === "apple_foundation"
+                                            ? "Apple on-device model"
+                                            : status?.last_text_backend === "local_gguf"
+                                                ? "Downloaded Qwen model"
+                                                : status?.last_text_backend === "unavailable"
+                                                    ? "No text model available"
+                                                : "No text model call yet"}
+                                    </p>
+                                    <label className="settings-switch-row">
+                                        <span>Use Apple on-device model</span>
+                                        <input
+                                            type="checkbox"
+                                            role="switch"
+                                            className="settings-switch"
+                                            checked={appleModel?.enabled === true}
+                                            disabled={!appleModel || appleModelBusy || appleModel.availability !== "available"}
+                                            onChange={() => void handleToggleAppleModel()}
+                                        />
+                                    </label>
+                                    <p className="section-hint">
+                                        {appleModel?.availability === "available"
+                                            ? "Uses Apple's local model for extraction, snippets and answers when Qwen is not installed. Downloaded Qwen adds broader text and visual understanding."
+                                            : "Requires macOS 26 or later, a supported Mac, and Apple Intelligence turned on and ready."}
+                                    </p>
+                                    {appleModelError && <p className="settings-message settings-message--error" role="alert">{appleModelError}</p>}
+                                    {status?.embedding_backend === "unavailable" && (
+                                        <p className="model-error" role="alert">
+                                            Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.
+                                        </p>
+                                    )}
+                                    <ul className="model-readiness-list">
+                                        {readyModels.map((model) => (
+                                            <li key={model.id}><strong>{model.name}</strong> <span>Ready</span></li>
+                                        ))}
+                                        {models.length === 0 && <li>Checking local model readiness…</li>}
+                                        {models.length > 0 && readyModels.length === 0 && (
+                                            <li>No local models are ready. Finish model setup to enable AI features.</li>
+                                        )}
+                                    </ul>
+                                </section>
+                                <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
+                                    <h3 id="settings-updates-title">Updates</h3>
+                                    <p className="section-hint">Keep FNDR and its required components ready to use.</p>
+                                    <SetupCenter embedded />
+                                </section>
+                            </SettingsTabPanel>
                         </div>
                     </aside>
                 </>,

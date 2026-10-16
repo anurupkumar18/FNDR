@@ -23,9 +23,9 @@
 .settings-panel {
     position: fixed;
     top: 0;
-    right: -420px;
+    right: -460px;
     bottom: 0;
-    width: 400px;
+    width: 440px;
     max-width: 100vw;
     background: color-mix(in srgb, var(--cp-bg, var(--panel-bg)) 92%, transparent);
     backdrop-filter: blur(24px) saturate(140%);
@@ -172,14 +172,6 @@
     color: var(--text-primary);
     margin: 0 0 10px;
 }
-
-.settings-section--capture { order: 1; }
-.settings-section--privacy { order: 2; }
-.settings-section--voice { order: 3; }
-.settings-section--agent-access { order: 4; }
-.settings-section--models { order: 5; }
-.settings-section--updates { order: 6; }
-.settings-section--about { order: 7; }
 
 .settings-subsection {
     margin-top: 0;
@@ -1286,4 +1278,13 @@
 .wallpaper-option:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
+}
+
+.settings-switch-hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-weight: 400;
+    line-height: 1.35;
 }

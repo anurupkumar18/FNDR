@@ -382,10 +382,23 @@ impl GraphStore {
         (nodes, edges)
     }
 
-    /// Clear all graph data is managed via store reset/deletion in this version.
+    /// Clear both persisted graph table pairs during delete-all.
     pub async fn clear_all(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Implementation depends on Store's ability to truncate specific tables.
-        // For now, we omit individual clear in favor of consolidated store management.
+        self.store.clear_all_graph_data().await
+    }
+
+    /// [`Self::delete_memory_node`] for many memories in one pass.
+    pub async fn delete_memory_nodes(
+        &self,
+        memory_ids: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let node_ids = memory_ids
+            .iter()
+            .map(|id| memory_node_id(id))
+            .collect::<Vec<_>>();
+        for batch in node_ids.chunks(128) {
+            self.store.delete_graph_nodes(batch).await?;
+        }
         Ok(())
     }
 
@@ -510,7 +523,7 @@ fn host_from_url(url: &str) -> String {
 
 fn classify_memory_type(app_name: &str, url: Option<&str>, summary_source: &str) -> &'static str {
     let app = app_name.to_lowercase();
-    if url.is_some() || is_browser_app(&app) {
+    if url.is_some() || crate::browsers::is_browser(&app) {
         return "web";
     }
 
@@ -519,15 +532,6 @@ fn classify_memory_type(app_name: &str, url: Option<&str>, summary_source: &str)
     }
 
     "general"
-}
-
-fn is_browser_app(app_name: &str) -> bool {
-    app_name.contains("safari")
-        || app_name.contains("chrome")
-        || app_name.contains("arc")
-        || app_name.contains("brave")
-        || app_name.contains("edge")
-        || app_name.contains("firefox")
 }
 
 fn related_urls_for_task_from_snapshot(

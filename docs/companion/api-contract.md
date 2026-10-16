@@ -5,15 +5,21 @@ same self-signed cert the MCP server uses, written to
 `~/.fndr/mcp_cert.pem`). Read `~/.fndr/companion.json` for the live
 `host`, `port`, and `cert_fingerprint_sha256`.
 
-Auth: `Authorization: Bearer <access_token>` on every route EXCEPT
-`/v1/pair/start` and `/v1/pair/complete`. Tokens are issued during pairing
-and revocable from the Mac UI.
+Auth: `Authorization: Bearer <access_token>` on every route except
+`/v1/pair/complete`. Tokens are issued during pairing and revocable from the
+Mac UI.
+
+The server starts with FNDR only once a device is paired; otherwise the Mac
+UI starts it (`companion_start_server`). A pairing code is issued only on the
+Mac, through the `companion_start_pairing` command, and never over the
+network. Until 2026-10-13 an open `POST /v1/pair/start` returned the code to
+any caller on the same network, who could complete pairing with it and read
+memories. Five wrong codes void every code issued so far.
 
 | Route                       | Auth | Slice | Notes                                  |
 | --------------------------- | ---- | ----- | -------------------------------------- |
 | `GET  /`                    | no   | 1     | service descriptor                     |
 | `GET  /v1/health`           | no   | 1     | liveness                               |
-| `POST /v1/pair/start`       | no   | 1     | Mac UI starts one-time code + QR       |
 | `POST /v1/pair/complete`    | no   | 1     | one-shot; consumes the code            |
 | `GET  /v1/status`           | yes  | 1     | capture + runtime status               |
 | `POST /v1/capture/control`  | yes  | 1     | pause / resume / incognito             |
@@ -31,8 +37,8 @@ serialized JSON shapes are stable and treated as the contract.
 ## Pairing
 
 ```
-POST /v1/pair/start
-→ 200
+companion_start_pairing (Tauri command, Mac only)
+→
 {
   "pairing_code": "381729",
   "qr_payload":   "{ \"version\": 1, \"mac_name\": \"...\", \"host\": \"192.168.1.40\", ... }",

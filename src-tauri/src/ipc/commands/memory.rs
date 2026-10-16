@@ -36,32 +36,43 @@ pub(crate) async fn delete_memory_logic(
         return Ok(false);
     }
 
+    let mut cleanup_errors = Vec::new();
     if let Err(err) = super::todos::apply_memory_deletion_to_tasks(store, memory_id).await {
-        tracing::warn!(
-            "Task cleanup after deleting memory {} failed: {}",
-            memory_id,
-            err
-        );
+        cleanup_errors.push(format!("task cleanup: {err}"));
     }
 
     if let Some(record) = existing {
         if let Some(path) = record.screenshot_path {
-            if let Err(err) = std::fs::remove_file(&path) {
-                tracing::warn!("Failed to delete screenshot artifact {}: {}", path, err);
+            if let Err(err) = remove_screenshot_artifacts(Path::new(&path)) {
+                cleanup_errors.push(format!("screenshot cleanup: {err}"));
             }
         }
     }
 
     if let Err(err) = graph.delete_memory_node(memory_id).await {
-        tracing::warn!(
-            "Failed to delete graph node for memory {}: {}",
-            memory_id,
-            err
-        );
+        cleanup_errors.push(format!("graph cleanup: {err}"));
+    }
+
+    if !cleanup_errors.is_empty() {
+        return Err(cleanup_errors.join("; "));
     }
 
     tracing::info!("Deleted memory record {}", memory_id);
     Ok(true)
+}
+
+fn remove_screenshot_artifacts(path: &Path) -> std::io::Result<()> {
+    for artifact in [
+        path.to_path_buf(),
+        crate::privacy::vault::sealed_path_for(path),
+    ] {
+        match std::fs::remove_file(&artifact) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -82,15 +93,22 @@ pub async fn reopen_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
 ) -> Result<ReopenOutcome, String> {
-    let record = state
-        .inner()
-        .store
-        .get_memory_by_id(&memory_id)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
-        .ok_or_else(|| format!("Memory not found: {}", memory_id))?;
+    // Use the work-set opener for a single source too. It checks the current
+    // blocklist, visibility, Private Mode and action switch at open time.
+    let outcomes = crate::workset::open_ids(state.inner(), &[memory_id]).await;
+    Ok(outcomes
+        .into_iter()
+        .next()
+        .and_then(|item| item.outcome)
+        .unwrap_or(ReopenOutcome::Unavailable))
+}
 
-    let target = resolve_reopen_target(&record);
+/// Opens what one memory points at: the shared core of `reopen_memory` and
+/// work sets, so every surface reopens and reports a memory the same way.
+pub(crate) async fn reopen_record(
+    record: &crate::storage::MemoryRecord,
+) -> Result<ReopenOutcome, String> {
+    let target = resolve_reopen_target(record);
     let app_name = record
         .reopen_app_name
         .as_deref()
@@ -123,7 +141,7 @@ pub async fn reopen_memory(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ResolvedReopenTarget {
+pub(crate) enum ResolvedReopenTarget {
     BrowserUrl(String),
     FilePath(PathBuf),
     AppBundle(String),
@@ -287,7 +305,9 @@ fn app_is_installed(_bundle_id: &str) -> bool {
     true
 }
 
-fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ResolvedReopenTarget> {
+pub(crate) fn resolve_reopen_target(
+    record: &crate::storage::MemoryRecord,
+) -> Option<ResolvedReopenTarget> {
     if record.is_agent_note() {
         return None;
     }
@@ -334,6 +354,10 @@ fn resolve_reopen_target(record: &crate::storage::MemoryRecord) -> Option<Resolv
     };
     if typed.is_some() {
         return typed;
+    }
+
+    if record.is_import() {
+        return None;
     }
 
     if let Some(legacy) = parse_legacy_reopen_marker(&record.memory_context) {
@@ -519,6 +543,20 @@ fn open_app_bundle(bundle_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_removes_plain_and_sealed_legacy_screenshot_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("frame.png");
+        let sealed = dir.path().join("frame.png.fndrenc");
+        std::fs::write(&plain, b"synthetic pixels").unwrap();
+        std::fs::write(&sealed, b"synthetic sealed pixels").unwrap();
+
+        remove_screenshot_artifacts(&plain).unwrap();
+
+        assert!(!plain.exists());
+        assert!(!sealed.exists());
+    }
 
     fn deletable_record(id: &str) -> crate::storage::MemoryRecord {
         crate::storage::MemoryRecord {
@@ -1323,5 +1361,19 @@ mod tests {
         let result = plan(None, None, |_| vec![], |_| true);
         assert_eq!(result.outcome, ReopenOutcome::NoTarget);
         assert_eq!(result.action, None);
+    }
+
+    #[test]
+    fn resolve_and_plan_vscode_deep_link_opens_r19() {
+        let link = "vscode://file/Users/qa/re10-notes.txt";
+        let resolved = resolve_reopen_target(&Rec {
+            reopen_kind: ReopenKind::AppDeepLink,
+            reopen_app_deep_link: s(link),
+            ..Default::default()
+        });
+        assert_eq!(resolved, Some(R::AppDeepLink(link.into())));
+        let planned = plan(resolved, Some("Code"), |_| vec![], |_| true);
+        assert_eq!(planned.outcome, ReopenOutcome::Opened);
+        assert_eq!(planned.action, Some(R::AppDeepLink(link.into())));
     }
 }

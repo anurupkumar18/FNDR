@@ -11,7 +11,12 @@ import {
     listAvailableModels,
     downloadModel,
     refreshAiModels,
+    getAppleModelStatus,
+    type AppleModelStatus,
 } from "@/shared/ipc/onboarding";
+import { getPrivacyProof, ttsInstall, ttsStatus, type PrivacyProof as PrivacyProofData, type TtsStatus } from "@/shared/ipc/tauri";
+import { PrivacyProof } from "@/domains/privacy-proof/PrivacyProof";
+import { ImportSources } from "@/domains/setup/ImportSources";
 import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { formatBytes } from "@/shared/utils/format";
@@ -25,14 +30,16 @@ import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./Onboarding.css";
 import { Icon, type IconName } from "@/shared/components/atoms/Icon";
 import { observedModelDownloadStep } from "./modelDownloadActivity";
+import { EncryptionStatus } from "@/domains/privacy-proof/EncryptionStatus";
 
 // ── Helper: step index for progress dots ─────────────────────────────────
 const STEPS: OnboardingStep[] = [
     "welcome",
-    "biometrics",
     "privacy_promise",
+    "biometrics",
     "model_download",
     "permissions",
+    "bring_past",
 ];
 
 const DEFAULT_ONBOARDING_STATE: OnboardingState = {
@@ -78,7 +85,7 @@ function StepWelcome({
         onSave({
             ...state,
             display_name: displayName.trim() || null,
-            step: "biometrics",
+            step: "privacy_promise",
         });
     }
 
@@ -130,7 +137,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
         try {
             const ok = await requestBiometricAuth("Unlock FNDR — your private screen history");
             if (ok) {
-                const next = { ...state, step: "privacy_promise" as OnboardingStep, biometric_enabled: true };
+                const next = { ...state, step: "model_download" as OnboardingStep, biometric_enabled: true };
                 onSave(next);
             } else {
                 setError("Authentication failed. Please try again.");
@@ -142,7 +149,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
     }
 
     function handleSkip() {
-        onSave({ ...state, step: "privacy_promise", biometric_enabled: false });
+        onSave({ ...state, step: "model_download", biometric_enabled: false });
     }
 
     return (
@@ -166,16 +173,19 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
 
 // ── Step 3: Privacy Promise ───────────────────────────────────────────────
 function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
+    const [proof, setProof] = useState<PrivacyProofData | null>(null);
+    useEffect(() => { void getPrivacyProof().then(setProof).catch(() => undefined); }, []);
     return (
         <>
             <span className="ob-icon"><Icon name="lock" size={30} /></span>
             <h1 className="ob-title">How FNDR handles your data</h1>
+            {proof ? <PrivacyProof proof={proof} /> : <p>Privacy activity will appear here when the local counter is ready.</p>}
             <div className="ob-privacy-list">
                 {[
                     {
                         icon: "check-circle" as IconName,
                         title: "What FNDR stores",
-                        body: "Text, window metadata, and snapshots of your screen. This is indexed into a local LanceDB store on your Mac.",
+                        body: "Text and window metadata are indexed into a local memory database. FNDR keeps few screenshots after processing.",
                     },
                     {
                         icon: "globe" as IconName,
@@ -185,7 +195,7 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                     {
                         icon: "eye-off" as IconName,
                         title: "Capture controls",
-                        body: "FNDR skips its own windows and anything matching your app/site blocklist. Review your blocklist and pause capture before opening sensitive material.",
+                        body: "FNDR excludes banking pages, password managers and recognizable private windows by default. The menu bar shows capture status. Control+Option+P pauses capture. Review your blocklist and pause capture before opening sensitive material.",
                     },
                     {
                         icon: "trash" as IconName,
@@ -202,16 +212,17 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                     </div>
                 ))}
             </div>
+            <EncryptionStatus />
             <button
                 id="ob-accept-privacy"
                 className="ob-btn-primary"
-                onClick={() => onSave({ ...state, step: "model_download" })}
+                onClick={() => onSave({ ...state, step: "biometrics" })}
             >
                 Continue
             </button>
             <button
                 className="ob-btn-ghost"
-                onClick={() => onSave({ ...state, step: "model_download" })}
+                onClick={() => onSave({ ...state, step: "biometrics" })}
             >
                 Skip for now
             </button>
@@ -321,7 +332,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
     function handleContinue() {
         onSave({
             ...state,
-            step: "complete",
+            step: "bring_past",
             screen_permission: perms.screen_recording,
             accessibility_permission: perms.accessibility,
         });
@@ -412,6 +423,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
 // ── Step 5: Model Download ────────────────────────────────────────────────
 function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
     const [models, setModels] = useState<ModelInfo[]>([]);
+    const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
     const [selected, setSelected] = useState<ModelInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [pendingModelId, setPendingModelId] = useState<string | null>(null);
@@ -421,6 +433,31 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     const mountedRef = useRef(true);
     const activatingModelIdRef = useRef<string | null>(null);
     const statusGenerationFloorRef = useRef<number | null>(null);
+    const [voiceStatus, setVoiceStatus] = useState<TtsStatus | null>(null);
+    const [wantVoice, setWantVoice] = useState(true);
+    const voiceStartedRef = useRef(false);
+
+    useEffect(() => {
+        let live = true;
+        void ttsStatus()
+            .then((next) => live && setVoiceStatus(next))
+            .catch(() => undefined);
+        return () => {
+            live = false;
+        };
+    }, []);
+
+    const offerVoice = voiceStatus !== null && voiceStatus.state !== "ready" && voiceStatus.state !== "downloading";
+
+    // The voice downloads in the background (the backend task outlives this step)
+    // once the person acts on this step with the box ticked.
+    const beginVoice = useCallback(() => {
+        if (!offerVoice || !wantVoice || voiceStartedRef.current) return;
+        voiceStartedRef.current = true;
+        void ttsInstall(true).catch(() => {
+            voiceStartedRef.current = false;
+        });
+    }, [offerVoice, wantVoice]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -468,6 +505,14 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 setSelected(preferred ?? null);
             })
             .catch((e) => setError(`Failed to load models: ${String(e)}`));
+    }, []);
+
+    useEffect(() => {
+        let live = true;
+        void getAppleModelStatus()
+            .then((status) => live && setAppleModel(status))
+            .catch(() => undefined);
+        return () => { live = false; };
     }, []);
 
     const embedder = models.find((m) => m.required) ?? null;
@@ -647,6 +692,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
     async function handleDownload() {
         if (!selected) return;
         setError(null);
+        beginVoice();
         if (selected.download_url === "already_downloaded") {
             startActivity({
                 id: "activation",
@@ -710,6 +756,23 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
         }
     }
 
+    async function handleUseApple() {
+        setError(null);
+        setIsActivatingModel(true);
+        try {
+            const runtime = await refreshAiModels();
+            if (!runtime.ai_model_available) {
+                throw new Error("Apple model unavailable");
+            }
+            beginVoice();
+            onSave({ ...state, step: "permissions", model_downloaded: true, model_id: "apple-foundation" });
+        } catch {
+            setError("The Apple on-device model is not ready. Try again or choose the download option.");
+        } finally {
+            setIsActivatingModel(false);
+        }
+    }
+
     const alreadyDownloaded = selected?.download_url === "already_downloaded";
     const activeModelName =
         models.find((model) => model.id === activeDownloadStatus?.model_id)?.name ?? selected?.name;
@@ -719,8 +782,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             <span className="ob-icon"><Icon name="cpu" size={30} /></span>
             <h1 className="ob-title">Select your local AI model</h1>
             <p className="ob-subtitle">
-                Choose the &apos;brain&apos; for your FNDR. Qwen3-VL (4B) is recommended for best-in-class 
-                summaries, memory Q&amp;A, and screen understanding.
+                {appleModel?.enabled
+                    ? "Apple's on-device model is ready for memory extraction, snippets and answers, so FNDR can continue without downloading Qwen. The search model is still required. Qwen adds visual understanding and broader text features."
+                    : "Choose a local model for summaries, memory Q&A, and screen understanding."}
                 <br /><br />
                 Downloading connects to Hugging Face. After the model files are installed, supported analysis
                 runs on this Mac. Optional helpers for transcription and TTS are loaded only when needed.
@@ -735,7 +799,7 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             className={`ob-model-card ${selected?.id === m.id ? "selected" : ""} ${m.download_url === "already_downloaded" ? "already-downloaded" : ""}`}
                             onClick={() => setSelected(m)}
                         >
-                            {m.recommended && <span className="ob-model-badge">Recommended</span>}
+                            {m.recommended && !appleModel?.enabled && <span className="ob-model-badge">Recommended</span>}
                             {m.download_url === "already_downloaded" && (
                                 <span className="ob-model-badge downloaded">Already on Disk</span>
                             )}
@@ -757,7 +821,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                         {
                             icon: "sparkles" as IconName,
                             title: "Multi-modal Intelligence",
-                            body: "Qwen3-VL powers the core experience, enabling search by screen content and natural language synthesis.",
+                            body: appleModel?.enabled
+                                ? "Apple handles extraction, snippets and answers. Qwen adds visual understanding and broader text features."
+                                : "Qwen3-VL enables search by screen content and natural language synthesis.",
                         },
                         {
                             icon: "mic" as IconName,
@@ -807,11 +873,39 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
 
             {error && <div className="ob-error-box" role="alert">{error}</div>}
 
+            {offerVoice && voiceStatus && (
+                <label className="ob-voice-consent">
+                    <input
+                        id="ob-download-voice"
+                        type="checkbox"
+                        checked={wantVoice}
+                        onChange={(event) => setWantVoice(event.target.checked)}
+                    />
+                    <span>
+                        <strong>{`Also download FNDR's natural voice (${Math.round(voiceStatus.totalBytes / 1_000_000)} MB)`}</strong>
+                        <small>
+                            Kokoro speaks FNDR's replies in a natural voice that runs on this Mac. It downloads once from
+                            Hugging Face and GitHub in the background, checked against pinned checksums. You can remove it in
+                            Settings.
+                        </small>
+                    </span>
+                </label>
+            )}
+
             {!isDownloading && (
                 <>
+                    {appleModel?.enabled && (
+                        <button
+                            type="button"
+                            className="ob-btn-primary"
+                            onClick={() => void handleUseApple()}
+                        >
+                            Continue with Apple on-device model
+                        </button>
+                    )}
                     <button
                         id="ob-download-model"
-                        className="ob-btn-primary"
+                        className={appleModel?.enabled ? "ob-btn-ghost" : "ob-btn-primary"}
                         onClick={handleDownload}
                         disabled={!selected}
                     >
@@ -821,7 +915,10 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                     </button>
                     <button
                         className="ob-btn-ghost"
-                        onClick={() => onSave({ ...state, step: "permissions" })}
+                        onClick={() => {
+                            beginVoice();
+                            onSave({ ...state, step: "permissions" });
+                        }}
                     >
                         {embedderMissing
                             ? "Skip for now (capture stays paused until the search model is installed)"
@@ -833,7 +930,10 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
             {isDownloading && (
                 <button
                     className="ob-btn-ghost"
-                    onClick={() => onSave({ ...state, step: "permissions" })}
+                    onClick={() => {
+                        beginVoice();
+                        onSave({ ...state, step: "permissions" });
+                    }}
                 >
                     Skip for now (downloads continue in the background)
                 </button>
@@ -895,6 +995,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 {(state.step === "permissions" || state.step === "indexing_started") && (
                     <StepPermissions state={state} onSave={save} />
                 )}
+                {state.step === "bring_past" && <ImportSources mode="onboarding" onContinue={() => void save({ ...state, step: "complete" })} />}
             </div>
         </div>
     );

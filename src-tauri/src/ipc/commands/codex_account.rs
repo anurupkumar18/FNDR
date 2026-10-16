@@ -131,6 +131,23 @@ impl AppServer {
         executable: &Path,
         extra_args: &[String],
     ) -> Result<Self, String> {
+        Self::spawn_opted(executable, extra_args, false).await
+    }
+
+    /// As [`Self::spawn_with`], opted into Codex's experimental methods
+    /// (`thread/realtime/*` answers only on such a connection).
+    pub(crate) async fn spawn_experimental(
+        executable: &Path,
+        extra_args: &[String],
+    ) -> Result<Self, String> {
+        Self::spawn_opted(executable, extra_args, true).await
+    }
+
+    async fn spawn_opted(
+        executable: &Path,
+        extra_args: &[String],
+        experimental: bool,
+    ) -> Result<Self, String> {
         let mut child = Command::new(executable)
             .args(["app-server", "-c", FILE_CREDENTIAL_STORE])
             .args(extra_args)
@@ -179,18 +196,17 @@ impl AppServer {
             last_error_line,
         };
 
-        server
-            .request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "fndr",
-                        "title": "FNDR",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    }
-                }),
-            )
-            .await?;
+        let mut initialize = json!({
+            "clientInfo": {
+                "name": "fndr",
+                "title": "FNDR",
+                "version": env!("CARGO_PKG_VERSION"),
+            }
+        });
+        if experimental {
+            initialize["capabilities"] = json!({ "experimentalApi": true });
+        }
+        server.request("initialize", initialize).await?;
         server.notify("initialized", json!({})).await?;
         Ok(server)
     }
@@ -280,7 +296,7 @@ impl AppServer {
     /// Next response or notification. Server-initiated requests (approvals,
     /// elicitations, token refresh) carry both a method and an id; callers
     /// that don't handle them explicitly never grant them.
-    async fn read_message(&mut self) -> Result<Value, String> {
+    pub(crate) async fn read_message(&mut self) -> Result<Value, String> {
         loop {
             let message = self.read_raw().await?;
             if let (Some(id), Some(method)) = (message.get("id").cloned(), message.get("method")) {
@@ -331,7 +347,7 @@ pub(crate) fn parse_account(result: &Value) -> Option<CodexAccount> {
     })
 }
 
-fn parse_window(window: Option<&Value>) -> Option<CodexUsageWindow> {
+pub(crate) fn parse_window(window: Option<&Value>) -> Option<CodexUsageWindow> {
     let window = window?.as_object()?;
     Some(CodexUsageWindow {
         used_percent: window.get("usedPercent")?.as_f64()?,
@@ -405,7 +421,7 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
 
 pub(crate) fn ready_executable() -> Result<PathBuf, String> {
     detect_codex_executable().ok_or_else(|| {
-        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex@0.151.0`, then try again."
+        "Codex isn't installed. Install it from Settings → Setup and updates, then try again."
             .to_string()
     })
 }
@@ -630,6 +646,16 @@ pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// Whether the Codex last asked has a feature by this name; `None` before
+/// any Codex was asked.
+pub(crate) fn codex_knows_feature(name: &str) -> Option<bool> {
+    KNOWN_CODEX_FEATURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|known| known.iter().any(|feature| feature == name))
+}
+
 /// `--disable` flags for every acting feature the installed Codex has.
 fn disable_flags(known: Option<&[String]>) -> Vec<String> {
     READ_ONLY_DISABLED_FEATURES
@@ -713,7 +739,7 @@ pub(crate) fn is_plain_config_key(name: &str) -> bool {
 /// Arguments that turn the user's Codex config into a tool-less session for
 /// this process only: acting features off and every configured MCP server
 /// disabled by name. Nothing is written to their config.toml.
-fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, String> {
     let mut args = read_only_feature_args();
     for name in mcp_server_names {
         if !is_plain_config_key(name) {
@@ -991,7 +1017,9 @@ mod tests {
         assert_eq!(thread["model"], "gpt-5.6-sol");
         // Nothing listed: Codex keeps its own choice.
         assert_eq!(pick_model(&[]), None);
-        assert!(with_model(json!({ "ephemeral": true }), None).get("model").is_none());
+        assert!(with_model(json!({ "ephemeral": true }), None)
+            .get("model")
+            .is_none());
     }
 
     #[test]
@@ -1004,10 +1032,20 @@ mod tests {
         let flags = disable_flags(Some(&known));
         assert_eq!(
             flags,
-            ["--disable", "shell_tool", "--disable", "unified_exec", "--disable", "memories"]
+            [
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "unified_exec",
+                "--disable",
+                "memories"
+            ]
         );
         // Before any Codex was asked, nothing is left out.
-        assert_eq!(disable_flags(None).len(), READ_ONLY_DISABLED_FEATURES.len() * 2);
+        assert_eq!(
+            disable_flags(None).len(),
+            READ_ONLY_DISABLED_FEATURES.len() * 2
+        );
     }
 
     #[test]

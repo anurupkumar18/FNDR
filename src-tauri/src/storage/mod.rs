@@ -13,14 +13,15 @@ pub use lance_store::{
     PROJECT_CONTEXTS_TABLE, SEGMENTS_TABLE, TASKS_TABLE,
 };
 pub use schema::{
-    ActivityEvent, AppCount, CodeContext, CommandEvent, CommitRef, ContextDelta, ContextPack,
-    ContextPackItemReason, ContextRuntimeStatus, ContextTask, DecisionLedgerEntry, DecisionSummary,
-    EdgeType, EntityAliasRecord, EntityRef, ErrorEvent, EvidenceRef, ExcludedContextItem,
-    ExtractedEntity, FailureSummary, GraphEdge, GraphNode, HealthStatus, IntentAnalysis,
-    IntentCandidate, IssueSummary, KnowledgePage, KnowledgePageType, KnowledgeStability,
-    MatchedChunkEvidence, MeetingBreakdown, MeetingSegment, MeetingSession, MemoryActionItem,
-    MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType, PrivacyClass,
-    ProjectContext, RelevantFile, SearchResult, Stats, Task, TaskType, WorkingState,
-    AGENT_NOTE_SESSION_PREFIX, AGENT_NOTE_SOURCE_TYPE,
+    is_leaf_source_type, ActivityEvent, AppCount, CodeContext, CommandEvent, CommitRef,
+    ContextDelta, ContextPack, ContextPackItemReason, ContextRuntimeStatus, ContextTask,
+    DecisionLedgerEntry, DecisionSummary, EdgeType, EntityAliasRecord, EntityRef, ErrorEvent,
+    EvidenceRef, ExcludedContextItem, ExtractedEntity, FailureSummary, GraphEdge, GraphNode,
+    HealthStatus, IntentAnalysis, IntentCandidate, IssueSummary, KnowledgePage, KnowledgePageType,
+    KnowledgeStability, MatchedChunkEvidence, MeetingBreakdown, MeetingSegment, MeetingSession,
+    MemoryActionItem, MemoryChunkRecord, MemoryChunkSearchResult, MemoryRecord, NodeType,
+    PrivacyClass, ProjectContext, RelevantFile, SearchResult, Stats, Task, TaskType, WorkingState,
+    AGENT_NOTE_SESSION_PREFIX, AGENT_NOTE_SOURCE_TYPE, IMPORT_SESSION_PREFIX,
+    IMPORT_SOURCE_TYPE_PREFIX,
 };
 pub use state_store::StateStore;

@@ -14,9 +14,13 @@ import type {
     RuntimeMetricsSnapshot,
     ScreenGuideDiagnosticStatus,
     ScreenGuideSettings,
+    VoiceOutputSettings,
     Stats,
+    ResumeThread,
     Task,
     WeeklyWrapped,
+    NotchDoRun,
+    NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
 
@@ -352,7 +356,8 @@ const previewTasks: Task[] = [
         source_app: "manual",
         source_memory_id: "memory-accessibility-notes",
         created_at: previewNow - 29 * 60 * 1000,
-        due_date: null,
+        // Relative to the real clock so Home's "Due soon" card renders on any day.
+        due_date: Date.now() + 20 * 60 * 60 * 1000,
         is_completed: false,
         is_dismissed: false,
         task_type: "Todo",
@@ -666,6 +671,51 @@ function payloadRecord(payload: unknown): Record<string, unknown> | null {
         : null;
 }
 
+/** `?home=empty|error|loading` renders that state of Home's work area; anything else is populated. */
+type PreviewHomeState = "populated" | "empty" | "error" | "loading";
+
+function previewHomeState(): PreviewHomeState {
+    const value = new URLSearchParams(globalThis.location?.search ?? "").get("home");
+    return value === "empty" || value === "error" || value === "loading" ? value : "populated";
+}
+
+const previewResumeThreads: ResumeThread[] = [
+    {
+        key: "project:fndr-ui-overhaul",
+        title: "FNDR UI overhaul",
+        app_name: "Figma",
+        last_state: "Reviewed the Home hierarchy and the accessibility checklist.",
+        age_minutes: 24,
+        next_steps: [],
+        suggested_next_steps: [{ title: "Run the keyboard-only panel pass", source_memory_id: "memory-accessibility-notes", confidence: 0.8 }],
+        evidence: ["memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+    {
+        key: "project:fndr-beta-demo",
+        title: "FNDR Beta demo",
+        app_name: "Google Chrome",
+        last_state: "Checked how judges score the Beta.",
+        age_minutes: 95,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+    {
+        key: "work:pantry app",
+        title: "Pantry App",
+        grouped_by: ["Pantry App", "Demo script"],
+        app_name: "Keynote",
+        last_state: "Cut the demo script to four minutes and moved the architecture slide.",
+        age_minutes: 12,
+        next_steps: [],
+        suggested_next_steps: [],
+        evidence: ["memory-beta-rubric", "memory-design-review"],
+        pack: { items: [], dropped_for_budget: 0, estimated_tokens: 0 },
+    },
+];
+
 function requiredString(
     payload: unknown,
     field: string,
@@ -757,6 +807,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         speak_responses: false,
         show_cursor: true,
     };
+    let voiceOutputSettings: VoiceOutputSettings = { provider: "auto", system_voice: "", rate: 1, neural_voice: "" };
     let screenGuideGeneration = 0;
     let screenGuideDiagnosticArmExpiresAt: number | null = null;
     let screenGuideDiagnosticStatus: Omit<
@@ -785,8 +836,13 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         }
     };
     const releasedScreenGuideGenerations = new Set<number>();
+    const previewOnboardingStep = (): OnboardingState["step"] => {
+        const requested = new URLSearchParams(window.location.search).get("onboarding");
+        const steps = ["welcome", "privacy_promise", "model_download", "bring_past"] as const;
+        return steps.find((step) => step === requested) ?? "complete";
+    };
     let previewOnboardingState: OnboardingState = {
-        step: "complete",
+        step: previewOnboardingStep(),
         biometric_enabled: false,
         screen_permission: true,
         accessibility_permission: true,
@@ -795,19 +851,176 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         display_name: "Anurup",
     };
     let previewBlocklist = ["1Password", "bank.example"];
+    const importKinds = ["browser", "file", "calendar", "mail", "slack", "git"];
+    const importConsent = new Set<string>();
+    const importStatuses = new Map<string, { source: string; state: string; window_days: number; scanned: number; stored: number; updated: number; duplicates: number; redacted: number; skipped: number; skip_reasons: Record<string, number>; started_at_ms: number; finished_at_ms: number | null; error: string | null }>();
+    let firstImportAnswerMs: number | null = null;
+    const importStatusFor = (source: string) => importStatuses.get(source) ?? {
+        source, state: "idle", window_days: 30, scanned: 0, stored: 0, updated: 0,
+        duplicates: 0, redacted: 0, skipped: 0, skip_reasons: {}, started_at_ms: 0,
+        finished_at_ms: null, error: null,
+    };
     let previewAgentNotesEnabled = false;
+    const previewParam = (name: string) => new URLSearchParams(window.location.search).get(name);
+    const previewApprovalCard = {
+        id: "preview-approval",
+        caller: "Notch Do",
+        surface: "computer_use" as const,
+        tool: "paste_text",
+        title: "Paste a reply into Mail",
+        target: "Mail, Re: Atlas plan",
+        args: [{ name: "text", value: "Thanks, I will review the Atlas plan today and send comments by Wednesday." }],
+        reason: "You asked Notch Do to reply to Dana.",
+        undo: { kind: "unavailable" as const, reason: "The text is typed into another app, so FNDR cannot take it back." },
+        status: "pending" as const,
+        detail: null,
+        created_at_ms: Date.now(),
+        expires_at_ms: Date.now() + 60_000,
+    };
+    const previewOutputDoc = () => ({
+        id: "preview-output",
+        kind: "standup" as const,
+        title: "Standup, Thursday",
+        start_ms: Date.now() - 86_400_000,
+        end_ms: Date.now(),
+        generated_at_ms: Date.now(),
+        model_polished: false,
+        sections: [
+            { heading: "Yesterday", lines: [
+                { text: "Reviewed the Home hierarchy and the accessibility checklist in Figma.", project: "FNDR", citations: [{ kind: "memory" as const, id: "1", memory_id: "preview-1" }] },
+                { text: "Merged the retrieval gate change and checked Recall at 5 stayed at 1.00.", project: "FNDR", citations: [{ kind: "memory" as const, id: "2", memory_id: "preview-2" }, { kind: "memory" as const, id: "3", memory_id: "preview-3" }] },
+            ] },
+            { heading: "Today", lines: [
+                { text: "Run the keyboard-only pass on the new panels.", project: "FNDR", citations: [{ kind: "memory" as const, id: "4", memory_id: "preview-4" }] },
+            ] },
+            { heading: "Blockers", lines: [] },
+        ],
+    });
+    const previewMcpStatus = () => ({
+        running: true,
+        endpoint: "http://127.0.0.1:49152/mcp",
+        actionsBlocked: false,
+        keepRunning: true,
+        hideMore: false,
+        clients: [
+            { id: "claude_code" as const, name: "Claude Code", state: "connected" as const, detected: true, configPath: "~/.claude.json", detail: null, missingTool: null },
+            { id: "claude_desktop" as const, name: "Claude Desktop", state: "not_connected" as const, detected: true, configPath: "~/Library/Application Support/Claude/claude_desktop_config.json", detail: null, missingTool: null },
+            { id: "cursor" as const, name: "Cursor", state: "conflict" as const, detected: true, configPath: "~/.cursor/mcp.json", detail: "An entry named fndr already exists that FNDR did not write.", missingTool: null },
+        ],
+    });
+    let previewActionSettings = { actions_kill_switch: false, confirm_unnamed_apps: false };
+    let previewNotchDoMuted: boolean | null = null;
+    const previewSkills: NotchDoSkill[] = [{
+        id: "preview-skill-1",
+        name: "Monday setup",
+        request: "open Notes, Slack and the sprint board",
+        steps: ["Open Notes", "Open Slack", "Open linear.app/team/sprint"],
+        savedAt: "2026-10-13T15:00:00Z",
+    }];
+    let previewRuns: NotchDoRun[] = [
+        {
+            runId: "preview-run-1",
+            at: "2026-10-15T15:20:00Z",
+            request: "open Notes and look up the weather in Paris",
+            plannedBy: "local",
+            steps: ["Open Notes", "Search the web for the weather in Paris"],
+            ok: true,
+            summary: "Done: Open Notes, Search the web for the weather in Paris.",
+            rating: null,
+            repeatable: true,
+        },
+        {
+            runId: "preview-run-2",
+            at: "2026-10-15T14:05:00Z",
+            request: "add the next song to the queue in Spotify",
+            plannedBy: "planner",
+            steps: ["Add the next song to the queue"],
+            ok: false,
+            summary: "Stopped at the first step.",
+            rating: null,
+            repeatable: false,
+        },
+    ];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
+    let calendarMeetingPrep = false;
     let agentChats: Array<{ id: string; title: string; createdAt: number; updatedAt: number; messages: Array<{ role: string; content: string; at: number; memories: Array<{ id: string; title: string; appName: string; timestamp: number }> }> }> = [];
     let configuredPeers: ConfiguredPeer[] = [];
     let previewPeerRuns: Array<{ local_id: string; peer_id: string; host: string; created_at_ms: number;
         payload_bytes: number; status: string; remote_task_id: string | null; remote_state: string | null }> = [];
     let hermesConfigured = false;
+    const homeState = previewHomeState();
+    const homeWaits = () => new Promise<never>(() => undefined);
+    let previewNamedSets: Array<{ id: string; name: string; memoryIds: string[]; savedAt: number }> = homeState === "populated"
+        ? [{
+            id: "preview-named-beta",
+            name: "Beta demo prep",
+            memoryIds: ["memory-beta-rubric", "memory-accessibility-notes", "memory-preview-pdf-page", "memory-design-review"],
+            savedAt: previewNow,
+        }]
+        : [];
+    let previewRoutineDismissed = false;
+    const previewNamedSet = (set: { id: string; name: string; memoryIds: string[]; savedAt: number }) => {
+        const items = set.memoryIds.flatMap((memoryId) => {
+            const card = previewCards.find((row) => row.id === memoryId);
+            return card
+                ? [{ memoryId, label: card.title, kind: "url" as const, reopenRank: 4, appName: card.app_name, capturedAt: card.timestamp }]
+                : [];
+        });
+        return { ...set, memoryIds: items.map((item) => item.memoryId), items };
+    };
     let codexLoginSeq = 0;
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
     return async (command: string, payload?: unknown) => {
         switch (command) {
+            case "import_list_sources":
+                return importKinds.map((kind) => ({
+                    id: kind, kind, label: kind, permissions: [],
+                    row_count: previewCards.filter((card) => card.source_type === `import:${kind}`).length,
+                    status: importStatusFor(kind),
+                }));
+            case "import_get_consent":
+                return importConsent.has(requiredString(payload, "source", command));
+            case "import_set_consent": {
+                const source = requiredString(payload, "source", command);
+                if (!importKinds.includes(source)) throw new Error("Unknown import source");
+                if (payloadRecord(payload)?.enabled === true) importConsent.add(source);
+                else importConsent.delete(source);
+                return undefined;
+            }
+            case "import_start": {
+                const source = requiredString(payload, "source", command);
+                if (!importConsent.has(source)) throw new Error("Import requires consent for this source.");
+                const windowDays = Number(payloadRecord(payload)?.windowDays) || 30;
+                if (source === "browser" && !previewCards.some((card) => card.id === "preview-import-browser")) {
+                    previewCards.push({ ...previewMemoryCards[0], id: "preview-import-browser",
+                        title: "Atlas planning notes", source_type: "import:browser",
+                        reopen_target: "https://example.test/atlas-plan" });
+                }
+                const stored = source === "browser" ? 1 : 0;
+                const status = { ...importStatusFor(source), state: "done", window_days: windowDays,
+                    scanned: stored, stored, started_at_ms: Date.now(), finished_at_ms: Date.now() };
+                importStatuses.set(source, status);
+                return status;
+            }
+            case "import_status":
+                return importStatusFor(requiredString(payload, "source", command));
+            case "import_cancel":
+                return true;
+            case "import_forget": {
+                const source = requiredString(payload, "source", command);
+                const before = previewCards.length;
+                previewCards = previewCards.filter((card) => card.source_type !== `import:${source}`);
+                importConsent.delete(source);
+                importStatuses.delete(source);
+                return before - previewCards.length;
+            }
+            case "import_record_first_answer":
+                firstImportAnswerMs ??= Number(payloadRecord(payload)?.elapsedMs) || 0;
+                return undefined;
+            case "import_first_answer_ms":
+                return firstImportAnswerMs;
             case "get_onboarding_state":
                 return { ...previewOnboardingState };
             case "save_onboarding_state": {
@@ -833,6 +1046,41 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return undefined;
             case "get_fun_greeting":
                 return "Good evening, Anurup.";
+            case "what_changed_since": {
+                const threadKey =
+                    typeof payload === "object" && payload !== null && "threadKey" in payload
+                        ? String((payload as { threadKey?: unknown }).threadKey)
+                        : "";
+                return {
+                    thread_key: threadKey,
+                    title: "FNDR",
+                    since_ms: Date.now() - 3 * 60 * 60 * 1000,
+                    first_view: false,
+                    new_memories: 6,
+                    page_count: 1,
+                    pages: ["Tauri notification plugin docs"],
+                    file_count: 2,
+                    files: ["notify.rs", "main.rs"],
+                    task_count: 1,
+                    tasks: ["Add a test for the toast target"],
+                    commit_count: 1,
+                    newest_memory_id: "preview-memory-1",
+                };
+            }
+            case "mark_thread_seen":
+                return undefined;
+            case "calendar_meeting_prep_state":
+                return { enabled: calendarMeetingPrep, status: "not_determined" };
+            case "set_calendar_meeting_prep": {
+                const enabled = payloadRecord(payload)?.enabled;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_calendar_meeting_prep needs a boolean enabled");
+                }
+                calendarMeetingPrep = enabled;
+                return { enabled, status: enabled ? "granted" : "not_determined" };
+            }
+            case "open_calendar_privacy_settings":
+                return undefined;
             case "get_app_names":
                 return ["Visual Studio Code", "Google Chrome", "Terminal", "Figma"];
             case "get_privacy_alerts":
@@ -841,6 +1089,107 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "list_action_approvals":
+                return previewParam("approval") === "pending" ? [previewApprovalCard] : [];
+            case "get_encryption_statement":
+                return {
+                    filevault: "on",
+                    encrypted: [
+                        "The few screenshots FNDR saves are sealed with a key in your Keychain.",
+                        "Exports you save from FNDR are sealed the same way.",
+                    ],
+                    not_encrypted: [
+                        "The memory database is not encrypted by FNDR. FileVault protects it while your Mac is off.",
+                        "Text you copy out of FNDR is as private as the place you paste it.",
+                    ],
+                };
+            case "generate_daily_output":
+                return previewOutputDoc();
+            case "render_daily_output":
+                return "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy [1]\n";
+            case "output_destination_status":
+                return { slack_webhook: true, linear_api_key: false, linear_team_id: false };
+            case "list_output_allowed_destinations":
+                return [];
+            case "propose_daily_output_send":
+                return {
+                    approval_id: "preview-send",
+                    tool: "outputs.post_slack",
+                    action: "Post to Slack",
+                    destination: "hooks.slack.com/services/T0/B0/...",
+                    title: "Standup, Thursday",
+                    body: "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy and the accessibility checklist in Figma. [1]\n- Merged the retrieval gate change. [2][3]\n\nToday\n- Run the keyboard-only pass on the new panels. [4]",
+                    bytes: 247,
+                    expires_at_ms: Date.now() + 60_000,
+                    trimmed: false,
+                };
+            case "send_daily_output_allowed":
+                return null;
+            case "resolve_daily_output_send":
+                return payloadRecord(payload)?.approved === true
+                    ? { tool: "outputs.post_slack", destination: "hooks.slack.com/services/T0/B0/...", detail: "Posted", trust_id: "preview-trust" }
+                    : null;
+            case "trust_output_destination":
+                return "Always allowed.";
+            case "mcp_connect_status":
+                return previewMcpStatus();
+            case "resolve_action_approval":
+                throw new Error("No action is waiting for approval in preview.");
+            case "get_action_settings":
+                return { ...previewActionSettings };
+            case "set_action_settings": {
+                const settings = payloadRecord(payload)?.settings;
+                if (typeof settings !== "object" || settings === null ||
+                    !("actions_kill_switch" in settings) || typeof settings.actions_kill_switch !== "boolean" ||
+                    !("confirm_unnamed_apps" in settings) || typeof settings.confirm_unnamed_apps !== "boolean") {
+                    throw new Error("Preview action settings require boolean values.");
+                }
+                previewActionSettings = {
+                    actions_kill_switch: settings.actions_kill_switch,
+                    confirm_unnamed_apps: settings.confirm_unnamed_apps,
+                };
+                return { ...previewActionSettings };
+            }
+            case "notch_do_skills":
+                return previewSkills.map((skill) => ({ ...skill }));
+            case "notch_do_runs":
+                return previewRuns.map((run) => ({ ...run }));
+            case "notch_do_rate_run": {
+                const { runId, worked } = payload as { runId: string; worked: boolean };
+                previewRuns = previewRuns.map((run) => run.runId === runId
+                    ? { ...run, rating: worked ? "worked" : "did_not_work", repeatable: worked && run.repeatable }
+                    : run);
+                return undefined;
+            }
+            case "notch_do_save_skill": {
+                const { runId, name } = payload as { runId: string; name: string };
+                const run = previewRuns.find((each) => each.runId === runId);
+                if (!run?.repeatable) throw new Error("Only a run that worked can be saved as a skill.");
+                previewSkills.push({ id: `preview-skill-${previewSkills.length + 1}`, name, request: run.request, steps: run.steps, savedAt: new Date().toISOString() });
+                return name;
+            }
+            case "notch_do_delete_skill": {
+                const { id } = payload as { id: string };
+                const index = previewSkills.findIndex((skill) => skill.id === id);
+                if (index >= 0) previewSkills.splice(index, 1);
+                return index >= 0;
+            }
+            case "notch_do_request":
+                throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+            case "get_notch_do_muted":
+                return previewNotchDoMuted;
+            case "set_notch_do_muted": {
+                const muted = typeof payload === "object" && payload !== null && "muted" in payload
+                    ? (payload as { muted?: unknown }).muted
+                    : null;
+                if (typeof muted !== "boolean") {
+                    throw new Error("Preview set_notch_do_muted requires a boolean.");
+                }
+                previewNotchDoMuted = muted;
+                return muted;
+            }
+            case "set_notch_escape_monitor":
+                return undefined;
             case "set_agent_notes_enabled": {
                 const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
                     ? (payload as { enabled?: unknown }).enabled
@@ -891,6 +1240,9 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "list_available_models":
                 return previewModels.map((model) => ({ ...model }));
+            case "get_apple_model_status":
+            case "set_apple_model_enabled":
+                return { availability: "unsupported_os", enabled: false };
             case "fndr_quality_status":
                 return {
                     stored_count: previewCaptureStatus.pipeline.stored_total,
@@ -1028,19 +1380,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     .slice(0, Math.max(0, limit))
                     .map((card) => clonePreview(card));
             }
-            case "fndr_get_memory_subgraph": {
-                const seedIds =
-                    typeof payload === "object" && payload !== null && "seedIds" in payload
-                        ? (payload as { seedIds?: unknown }).seedIds
-                        : [];
-                return {
-                    seed_ids: Array.isArray(seedIds)
-                        ? seedIds.filter((id): id is string => typeof id === "string")
-                        : [],
-                    node_count: 3,
-                    edge_count: 2,
-                };
-            }
             case "find_visually_similar_memories":
                 return clonePreview(previewSimilarResults);
             case "fndr_build_context_pack": {
@@ -1109,8 +1448,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 )));
             case "generate_daily_briefing":
                 return "Your preview briefing: finish the keyboard walkthrough, share the UI audit, and run native permission checks in the Tauri app.";
+            case "resume_work":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: recent work could not be read.");
+                return homeState === "empty" ? [] : clonePreview(previewResumeThreads);
             case "get_todos":
-                return clonePreview(tasks.filter((task) => !task.is_completed && !task.is_dismissed));
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: tasks could not be read.");
+                return clonePreview(tasks.filter((task) => (
+                    !task.is_completed && !task.is_dismissed && (homeState !== "empty" || task.due_date === null)
+                )));
             case "add_todo": {
                 const title = requiredString(payload, "title", command);
                 const requestedType = payloadRecord(payload)?.taskType;
@@ -1245,6 +1592,40 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 // Deliberate no-op: never hand a path to the OS from the browser preview.
                 return undefined;
             }
+            case "get_voice_output_settings":
+                return { ...voiceOutputSettings };
+            case "set_voice_output_settings": {
+                const settings = payloadRecord(payload)?.settings as Partial<VoiceOutputSettings> | undefined;
+                if (!settings || typeof settings.provider !== "string" || typeof settings.rate !== "number") {
+                    throw new Error("Preview set_voice_output_settings requires provider and rate.");
+                }
+                voiceOutputSettings = {
+                    provider: settings.provider,
+                    system_voice: typeof settings.system_voice === "string" ? settings.system_voice : "",
+                    rate: Math.min(2, Math.max(0.5, settings.rate)),
+                    neural_voice: typeof settings.neural_voice === "string" ? settings.neural_voice : "",
+                };
+                return { ...voiceOutputSettings };
+            }
+            case "tts_status":
+                // The browser preview has no model; speech falls back to the Mac's voices.
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_voices":
+                return {
+                    voices: [
+                        { id: "af_heart", name: "Heart", accent: "us", gender: "female", grade: "A" },
+                        { id: "bf_emma", name: "Emma", accent: "gb", gender: "female", grade: "B-" },
+                    ],
+                    defaultVoice: "af_heart",
+                };
+            case "tts_install":
+                throw new Error("The browser preview cannot download the on-device voice.");
+            case "tts_remove":
+                return { state: "not_installed", detail: null, downloadedBytes: 0, totalBytes: 134_000_000, loaded: false };
+            case "tts_cancel":
+                return null;
+            case "tts_synthesize":
+                throw new Error("The browser preview has no on-device voice.");
             case "get_screen_guide_settings":
                 return { ...screenGuideSettings };
             case "get_screen_guide_diagnostic_status":
@@ -1377,7 +1758,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     latest_pack_tokens_used: 0,
                 };
             case "list_recent_context_packs":
-            case "list_agent_audit_runs":
                 return [];
             case "fndr_subscribe":
             case "fndr_unsubscribe":
@@ -1453,8 +1833,106 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 run.remote_state = "TASK_STATE_CANCELED";
                 return { run: clonePreview(run), output_text: null };
             }
+            case "resolve_work_set": {
+                // Preview: the newest cards with a reopen target, as one set.
+                const items = previewCards
+                    .filter((card) => Boolean(card.reopen_target))
+                    .slice(0, 3)
+                    .map((card) => ({
+                        memoryId: card.id,
+                        label: card.title,
+                        kind: "url" as const,
+                        reopenRank: 4,
+                        appName: card.app_name,
+                        capturedAt: card.timestamp,
+                    }));
+                return items.length > 0
+                    ? { kind: "best", value: { id: "preview-set", title: items[0].label, reason: "Preview", score: 1, items } }
+                    : { kind: "none", value: { why: "Nothing FNDR remembers matches that." } };
+            }
+            case "open_work_set": {
+                // Preview never launches anything; it reports what would open.
+                const ids = (payloadRecord(payload)?.memoryIds as string[] | undefined) ?? [];
+                const layout = payloadRecord(payload)?.layout as string | null | undefined;
+                const arrangement = layout
+                    ? { arranged: false, layout, detail: "The preview does not move windows." }
+                    : undefined;
+                return ids.slice(0, 6).map((memoryId) => {
+                    const card = previewCards.find((row) => row.id === memoryId);
+                    return card
+                        ? { memoryId, label: card.title, kind: "url", ok: true, detail: "Opened", outcome: { kind: "opened" }, arrangement }
+                        : { memoryId, label: "", ok: false, detail: "FNDR no longer has this memory" };
+                });
+            }
+            case "list_named_sets":
+                if (homeState === "loading") return homeWaits();
+                if (homeState === "error") throw new Error("Preview: saved sets could not be read.");
+                return previewNamedSets.map((set) => previewNamedSet(set));
+            case "save_named_set": {
+                const args = payloadRecord(payload);
+                const name = String(args?.name ?? "").trim();
+                if (!name) throw new Error("Give the set a name.");
+                if (previewNamedSets.some((set) => set.name.toLowerCase() === name.toLowerCase())) {
+                    throw new Error(`A set is already called “${name}”.`);
+                }
+                const memoryIds = ((args?.memoryIds as string[] | undefined) ?? []).slice(0, 6);
+                const saved = { id: `preview-named-${previewNamedSets.length + 1}`, name, memoryIds, savedAt: Date.now() };
+                previewNamedSets = [saved, ...previewNamedSets];
+                return previewNamedSet(saved);
+            }
+            case "delete_named_set": {
+                const id = String(payloadRecord(payload)?.id ?? "");
+                previewNamedSets = previewNamedSets.filter((set) => set.id !== id);
+                return null;
+            }
+            case "routine_offers": {
+                if (homeState !== "populated") return [];
+                const memoryIds = previewCards.filter((card) => Boolean(card.reopen_target)).slice(0, 2).map((card) => card.id);
+                return previewRoutineDismissed || memoryIds.length === 0
+                    ? []
+                    : [{ id: "preview-routine", label: "Morning standup notes", memoryIds, reason: "Opened on 4 weekdays around 9:00", dueNow: true }];
+            }
+            case "dismiss_routine_offer":
+                previewRoutineDismissed = true;
+                return null;
             case "computer_use_status":
                 return { enabled: false, codexReady: true, openComputerUsePath: null, active: false };
+            case "computer_use_permissions":
+                return {
+                    accessibility: true,
+                    screenRecording: true,
+                    automationMedia: null,
+                    backend: null,
+                    backendReady: null,
+                    backendDetail: null,
+                };
+            case "setup_components":
+                return [
+                    {
+                        id: "codex",
+                        name: "Codex",
+                        purpose: "Signs in to ChatGPT for Hermes and Notch Do.",
+                        required: false,
+                        state: "ready",
+                        version: "0.45.0",
+                        detail: null,
+                        action: null,
+                        url: null,
+                    },
+                    {
+                        id: "hermes",
+                        name: "Hermes Agent",
+                        purpose: "Answers questions with the memories you attach.",
+                        required: false,
+                        state: "missing",
+                        version: null,
+                        detail: "Not installed yet.",
+                        action: "install",
+                        url: null,
+                    },
+                ];
+            case "install_component":
+                return null;
             case "openclicky_bridge_status":
                 return { reachable: false, tokenFound: false, bridgeTokenConfigured: false };
             case "list_agent_chats":
@@ -1520,6 +1998,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 return null;
             }
+            case "voice_out_status":
+                // The browser preview has no Codex; speech falls back to the Mac's voices.
+                return {
+                    state: "not_installed",
+                    detail: "The browser preview has no Codex.",
+                    usedPercent: null,
+                    fallbackAbovePercent: 95,
+                    connected: false,
+                };
+            case "voice_out_voices":
+                return { voices: [] };
+            case "voice_out_start":
+                throw new Error("The browser preview has no Codex.");
+            case "voice_out_speak":
+                throw new Error("The ChatGPT voice is not connected.");
+            case "voice_out_cancel":
+            case "voice_out_stop":
+                return null;
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);

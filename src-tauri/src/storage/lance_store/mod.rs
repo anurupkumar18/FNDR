@@ -1234,6 +1234,15 @@ impl Store {
         Ok(())
     }
 
+    /// Clear both the timeline graph and the insight graph during delete-all.
+    pub async fn clear_all_graph_data(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.edges_table.delete("id IS NOT NULL").await?;
+        self.nodes_table.delete("id IS NOT NULL").await?;
+        self.graph_edges_table.delete("id IS NOT NULL").await?;
+        self.graph_nodes_table.delete("id IS NOT NULL").await?;
+        Ok(())
+    }
+
     /// Dataset version and on-disk fragment counts for the main memories
     /// table, for storage-scale diagnostics (MEM-08).
     pub async fn memories_table_scale_stats(
@@ -1241,6 +1250,14 @@ impl Store {
     ) -> Result<MemoriesTableScaleStats, Box<dyn std::error::Error>> {
         Ok(MemoriesTableScaleStats {
             versions: self.table.list_versions().await?.len(),
+        })
+    }
+
+    pub async fn memory_chunks_table_scale_stats(
+        &self,
+    ) -> Result<MemoriesTableScaleStats, Box<dyn std::error::Error>> {
+        Ok(MemoriesTableScaleStats {
+            versions: self.memory_chunks_table.list_versions().await?.len(),
         })
     }
 
@@ -1300,7 +1317,50 @@ impl Store {
                 error_if_tagged_old_versions: Some(false),
             })
             .await?;
+        self.memory_chunks_table
+            .optimize(OptimizeAction::Compact {
+                options: CompactionOptions::default(),
+                remap_options: None,
+            })
+            .await?;
+        self.memory_chunks_table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(chrono::Duration::try_days(older_than_days).unwrap_or_default()),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
         Ok(stats)
+    }
+
+    /// Reclaim old versions of every table changed by a privacy erasure.
+    /// The app data directory's instance lock makes immediate pruning safe.
+    pub async fn compact_and_prune_erased_data(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.compact_and_prune(0).await?;
+        for table in [
+            &self.memories_v5_table,
+            &self.memory_chunks_table,
+            &self.nodes_table,
+            &self.edges_table,
+            &self.graph_nodes_table,
+            &self.graph_edges_table,
+            &self.tasks_table,
+        ] {
+            table
+                .optimize(OptimizeAction::Compact {
+                    options: CompactionOptions::default(),
+                    remap_options: None,
+                })
+                .await?;
+            table
+                .optimize(OptimizeAction::Prune {
+                    older_than: Some(chrono::Duration::zero()),
+                    delete_unverified: Some(true),
+                    error_if_tagged_old_versions: Some(false),
+                })
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn list_chunks_for_memory(
@@ -1764,6 +1824,80 @@ impl Store {
             self.delete_chunks_for_memory(id).await?;
         }
         Ok(ids)
+    }
+
+    /// Rows whose `source_type` is exactly `source_type`.
+    pub async fn count_memories_by_source_type(
+        &self,
+        source_type: &str,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let filter = format!("source_type = '{}'", sql_escape(source_type));
+        Ok(self.table.count_rows(Some(filter)).await?)
+    }
+
+    /// Every row whose `source_type` is exactly `source_type`.
+    pub async fn memories_by_source_type(
+        &self,
+        source_type: &str,
+    ) -> Result<Vec<MemoryRecord>, Box<dyn std::error::Error>> {
+        let filter = format!("source_type = '{}'", sql_escape(source_type));
+        let ids = self.memory_ids_for_filter(&filter).await?;
+        let mut rows = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(128) {
+            rows.extend(self.get_memories_by_ids(batch).await?.into_values());
+        }
+        Ok(rows)
+    }
+
+    /// Delete every row of one `source_type` with its chunks and its rows in
+    /// the BGE table. Returns the deleted ids and the number of chunks, so a
+    /// caller with the graph store can drop graph nodes too.
+    pub async fn delete_memories_by_source_type(
+        &self,
+        source_type: &str,
+    ) -> Result<(Vec<String>, usize), Box<dyn std::error::Error>> {
+        let filter = format!("source_type = '{}'", sql_escape(source_type));
+        self.delete_memories_matching(&filter).await
+    }
+
+    /// Delete imported rows older than `days` days by their own timestamp.
+    pub async fn delete_imports_older_than(
+        &self,
+        days: u32,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let cutoff_ms =
+            (chrono::Utc::now() - chrono::Duration::days(days as i64)).timestamp_millis();
+        let filter = format!(
+            "timestamp < {cutoff_ms} AND source_type LIKE '{}%'",
+            crate::storage::IMPORT_SOURCE_TYPE_PREFIX
+        );
+        let (ids, _) = self.delete_memories_matching(&filter).await?;
+        for batch in ids.chunks(128) {
+            let graph_ids = batch
+                .iter()
+                .map(|id| format!("memory:{id}"))
+                .collect::<Vec<_>>();
+            self.delete_graph_nodes(&graph_ids).await?;
+        }
+        Ok(ids.len())
+    }
+
+    async fn delete_memories_matching(
+        &self,
+        filter: &str,
+    ) -> Result<(Vec<String>, usize), Box<dyn std::error::Error>> {
+        let ids = self.memory_ids_for_filter(filter).await?;
+        if ids.is_empty() {
+            return Ok((ids, 0));
+        }
+        self.table.delete(filter).await?;
+        let chunks = self.delete_chunks_for_memories(&ids).await?;
+        for id_batch in ids.chunks(128) {
+            if let Some(v5_filter) = build_string_match_filter("id", id_batch) {
+                self.memories_v5_table.delete(&v5_filter).await?;
+            }
+        }
+        Ok((ids, chunks))
     }
 
     /// Return the path to the frames directory (for screenshot eviction).
@@ -2392,6 +2526,7 @@ impl Store {
     /// Delete all records.
     pub async fn delete_all(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.table.delete("id IS NOT NULL").await?;
+        self.memories_v5_table.delete("id IS NOT NULL").await?;
         self.memory_chunks_table
             .delete("memory_id IS NOT NULL")
             .await?;
@@ -2429,19 +2564,27 @@ impl Store {
         Ok(list)
     }
 
-    /// Delete records older than `days` days; returns count of deleted rows.
+    /// Delete screen records older than `days` days; returns count of deleted
+    /// rows. Imported rows follow `import_retention_days` instead
+    /// ([`Self::delete_imports_older_than`]), so this sweep never takes them.
     pub async fn delete_older_than(&self, days: u32) -> Result<usize, Box<dyn std::error::Error>> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
         let cutoff_ms = cutoff.timestamp_millis();
-        let filter = format!("timestamp < {cutoff_ms}");
+        let filter = format!(
+            "timestamp < {cutoff_ms} AND (source_type IS NULL OR source_type NOT LIKE '{}%')",
+            crate::storage::IMPORT_SOURCE_TYPE_PREFIX
+        );
         let ids = self.memory_ids_for_filter(&filter).await?;
 
         // Count before deletion.
         let before = self.table.count_rows(None).await?;
-        self.table.delete(&filter).await?;
-        for id in ids {
-            self.delete_chunks_for_memory(&id).await?;
+        self.delete_chunks_for_memories(&ids).await?;
+        let graph_ids: Vec<String> = ids.iter().map(|id| format!("memory:{id}")).collect();
+        for batch in graph_ids.chunks(128) {
+            self.delete_graph_nodes(batch).await?;
         }
+        // Delete parents last so a failed child or graph cleanup can be retried.
+        self.table.delete(&filter).await?;
         let after = self.table.count_rows(None).await?;
 
         Ok(before.saturating_sub(after))
@@ -2455,6 +2598,9 @@ impl Store {
         let before = self.table.count_rows(None).await?;
         let id = sql_escape(memory_id);
         self.table.delete(&format!("id = '{id}'")).await?;
+        self.memories_v5_table
+            .delete(&format!("id = '{id}'"))
+            .await?;
         self.delete_chunks_for_memory(memory_id).await?;
         let after = self.table.count_rows(None).await?;
         Ok(before.saturating_sub(after))

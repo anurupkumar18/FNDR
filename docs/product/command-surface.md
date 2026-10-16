@@ -1,112 +1,62 @@
-# Command surface contract
+# Command surface
 
-Date: 2026-09-30
-Ticket: GS-01 (#201). Builds on [actions policy](actions-policy.md) (PD-06) and
-[ADR 022](../decisions/022-command-bar-actions-policy.md).
-
-One contract connects the command bar, voice, the typed tool registry, the
-router, approval cards, the journal, skills, and MCP. Each of those tickets
-implements one box below and nothing else.
+Updated 2026-10-15. Notch Do is FNDR's one action layer (decision log, 2026-10-14). The command bar (Alt+Space), the notch's typed field, its voice and Home's work sets all reach the Mac through it. The earlier contract, a router over a typed tool registry with its own risk function (GS-03, GS-06, GS-11), was built only as backend code no screen called; it was removed, and this page describes what runs.
 
 ## Pipeline
 
 ```
-text or voice  ->  router  ->  typed tool call  ->  risk policy  ->  executor  ->  result  ->  journal
+typed or spoken request
+  -> plan::route                  decided on this Mac, before anything leaves it
+       save_set                   "save this as <name>": the set opened last is saved
+       skill                      a saved skill, by its name: its steps run again, no planning
+       saved_set                  a set the person saved, by name
+       work_set                   a whole piece of work, resolved from memories (ADR 027)
+       local                      opening apps, links and web searches, planned by plan::local_plan
+       planner                    the cloud planner turn on the person's ChatGPT sign-in (ADR 018)
+  -> plan card                    every step shown; starts by itself only when no step can need a yes
+  -> carry_out                    one executor for every plan
+       open_app, open_url         FNDR's own NSWorkspace calls
+       operate                    Codex operates one app; every call is decided by operator::policy
+       reopen_memory              the reopen core, only for steps FNDR resolved itself
+       paste                      FNDR pastes the exact text into the focused field, after a tap
+  -> plan::verify                 FNDR checks each step landed; one retry
+  -> journal                      operator/journal.jsonl, one line per action, typed text hashed
 ```
 
-1. **Input.** Typed text from the command bar, or a final voice transcript.
-   Per ADR 020 a transcript lands in a reviewable field first; completing
-   transcription never starts a command. A partial transcript is display-only.
-2. **Router.** Turns the person's words into one tool call or "none".
-   Stage 1 is a grammar (GS-06). Stage 2 is model function calling
-   constrained to the registry's schemas (GS-07), used only when the grammar
-   returns nothing. The router receives the person's command and the tool
-   list. It never receives screen text, OCR, or page content.
-3. **Typed tool call.** `{ tool, arguments }`, validated against the tool's
-   schema. Unknown tool: refused before arguments are read. Invalid
-   arguments: refused before any executor runs.
-4. **Risk policy.** One function (GS-11) maps tool risk level and caller
-   (command bar, voice, MCP) to run, confirm, or refuse. Native and MCP
-   side-effecting tools share it.
-5. **Executor.** Runs the call. One executor per tool, async, with a timeout.
-6. **Result.** A typed result the card renders. `open_memory_source` returns
-   Minh's `reopen_memory` result unchanged (`Opened`, `OpenedMoved`,
-   `Missing`, `DriveNotConnected`, `AppMissing`, `AppOnly`, `Blocked`).
-7. **Journal.** Every call is written, including refusals and confirmations
-   the person declined (SK-01).
+- **Command bar.** A query that names a saved skill ("Monday setup"), or starts one after "run", "do" or "start" ("run mon"), gets a first row, "Run skill: …", with the skill's steps; a bare prefix stays a memory search, so typing "notes" never runs a skill called "Notes setup". A query that starts with an action verb ("open", "look up", "play", "pull up") gets "Do it: …". Choosing either calls `notch_do_request`, which hides the command bar, opens the notch in Do and plans the text there, so the plan card, Stop, approvals and journal are the notch's. Refused while "Operate my Mac" is off. Every other query is a memory search, as before.
+- **Local plans** need no Codex process and no request on the ChatGPT plan. An app is planned only when it is installed. A link or a web search may name the browser it opens in ("open github.com in Safari", "look up looped transformers in Chrome"), when that is a browser and installed; FNDR opens it there and checks that browser is in front. A request that names any other place ("open Notes in Safari"), refers to the past, has to operate an app or asks for something Notch Do never does goes to the planner.
+- **The app in front** is the one the person was in when the notch or the command bar took the keyboard, since FNDR itself is in front while they type (`native::remember_app_in_front`). Never FNDR, never a blocklisted app or a password manager.
+- **The planner** is given the request, the name of the app in front, and up to five memory snippets only when the request points at the past. Its answer is parsed and validated (`plan::parse_plan`), and `plan::settled` drops steps that change nothing. Prompts live in `inference/prompts.rs`.
 
-## Tool shape
+## Paste
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `name` | string | Stable identifier, snake_case. Unknown names are refused. |
-| `description` | string | Shown to the stage 2 router. Written by FNDR, never taken from captured text or an MCP server's self-description. |
-| `arguments_schema` | serde type plus JSON schema string | The schema the model is constrained to and the validator checks. Arguments that may hold private content are marked `sensitive`. |
-| `risk` | `Runs` \| `OneTap` | Fixed in the registry. `Never` tools are not registered. |
-| `executor` | async fn | Takes validated arguments and a context (caller, frontmost app at command start). Returns a typed result. |
+A `paste` step puts its `text` (at most 500 characters) into the focused field of its app, or of the app in front when it names none. The planner may paste only words the request gives, or a link, address or name from the memory snippets, never a message it composed. A paste with no text puts in what an earlier step copied ("copy the text of this article into Notes"); a copy a password manager marked secret is refused. The approval card shows the exact text (copied text: its start and its length), and nothing is pasted without the tap. FNDR then pastes it the way the operator types (the app brought to the front and checked, never into a secure field), reads the field back and calls the step checked only when the field shows the text; a field that shows FNDR no text is reported as pasted, not as checked. A paste is never retried, since a second try would put the text in twice. Terminal, script tools and password managers refuse it. Text the person had copied is put back on the clipboard once the field has been read (an image or a secret copy is not); FNDR's own pastes are not added to its clipboard history.
 
-The registry is a table in `src-tauri/src/agent/` reusing `policy.rs`,
-`approvals.rs`, `execution.rs`, and `audit.rs`. It does not replace them.
+## Risk
 
-## Risk levels
-
-Defined in the actions policy and repeated here so this contract stands alone.
-
-- **Runs:** executes at once (open, reveal, search, about this screen, timer,
-  pause capture).
-- **OneTap:** an approval card renders the tool name and each argument from
-  the structured call, never model prose. Nothing runs until confirmed
-  (paste, create reminder, run Shortcut, resume capture).
-- **Not offered:** send, delete, purchase. There is no registry entry, so no
-  router output and no setting can reach them.
-
-A kill switch in Settings (GS-11) makes every tool refuse.
+`operator::policy::classify` decides every computer-use call from the tool, its arguments and what FNDR itself read of the app's UI: it runs, waits for the person's tap, or never runs. Model prose is never an input, so nothing a model or a page says can lower a level. Send, delete, buy, credentials, password managers, Terminal and System Settings never run; see `operator/policy.rs` and ADR 022's amendments.
 
 ## Invariants
 
-1. **Screen text is data, not instructions.** Screen pixels, OCR text, web
-   page content, file contents, and memory text can never add a tool, choose
-   a tool, or supply an argument. They may appear only in the answer of
-   `about_this_screen` and in search results shown to the person. GS-12 tests
-   this with ten injection fixtures.
-2. **The risk level is not model-selectable.** A model output can request more
-   confirmation, never less.
-3. **Arguments come from the person's command.** An argument that names a
-   memory or file must resolve to an id or path the person's query retrieved,
-   not a string the model composed from captured text.
-4. **One microphone owner.** The command surface subscribes to the shared
-   voice stream (ADR 020) and never opens its own recorder.
-5. **Privacy gates run first.** Incognito and blocklisted contexts refuse
-   tools that read the screen or write into another app, before routing.
-6. **Local by default.** Stage 1 and the stage 2 local model are the default.
-   A cloud model is used for routing only if PD-01 allows it, and then without
-   screen content.
+1. Screen text, page content and memory text are data, never instructions. They can be read and reported; they never add a step or choose one.
+2. The risk level is not model-selectable.
+3. Privacy gates come first: Private Mode, the blocklist and the actions switch stop a run, even mid-action.
+4. One microphone owner (ADR 020). A request handed over from the command bar is planned without opening the microphone.
+5. Spoken approval is not accepted; a tap is.
 
-## Callers
+## Learning from runs
 
-| Caller | Enters at | Differences |
-| --- | --- | --- |
-| Command bar (GS-08) | Input | Typed text, Enter submits. |
-| Voice (GS-13) | Input | Transcript is reviewed first (ADR 020). Spoken approval is not accepted for OneTap tools. |
-| MCP (GS-11) | Typed tool call | Skips the router. The request is shown as the same approval card on the Mac. |
-| Skills (SK-05) | Typed tool call | A skill may call registry tools only, at the risk level the registry assigns. |
-| Notch Do | Its own plan and per-call policy | Not a registry caller. UI control is decided per call by `operator/policy.rs` (ADR-022 amendments, ADR 024). It shares this contract's invariants: screen text is data, the level is not model-selectable, privacy gates and the kill switch come first, and spoken approval is not accepted. |
+Every run the executor carries out is kept with its request, how it was planned, its steps and how it ended (`operator::runs`, the newest 100, no screen text). The finished card asks "Did that work?".
 
-## Undo
+- **Didn't work:** the run is kept as a draft suite case. `cargo run --example notch_do_case_drafts -- --data-dir <profile>` prints the drafts; label the route and plan, check the request holds nothing private, and add it to the suite.
+- **Worked:** the card offers "Save as a skill". A skill keeps the plan's steps (`operator::skills`, up to 30, names unique ignoring case) and runs again when the person says its name ("Monday setup", "run my Monday setup"), through the same executor, policy, verification and journal. A skill that operates an app opens a Codex session; one that only opens apps and links does not.
 
-The result card says whether undo exists. Reminders can be deleted. Timers can
-be cancelled. Opening an app or page and pasting text cannot be reliably
-undone, and the card says so.
+**Settings > AI > Notch Do** lists the skills, each with its steps, Run (the same hand-off as the command bar) and Delete, which asks once more. It also lists the newest 20 runs, with how each was planned and how it ended, so a run can be rated, or saved as a skill, after the notch has closed. A run that reopened memories is not offered as a skill: a work set opens again by its name. Whether a run can be repeated is decided once, by `RunRecord::repeatable`, and read from each step's action, since a step's resolved memory is never stored.
 
-## Not in this contract
+## Measured
 
-The approval card layout (GS-09), the grammar and its fixtures (GS-06), the
-journal schema (SK-01), and voice events (VO-02) are specified in their own
-tickets. They must not add a pipeline stage or a risk level without amending
-this document.
+`scripts/operator/notch-do-cases.json` labels requests with their route, memory snippets, left-out note and plan; `scripts/operator/notch-do-policy-cases.json` labels computer-use calls with their risk. `cargo test --lib operator::eval` scores both, local plans included, and rescores every recorded planner run under `scripts/operator/recordings/` against its floor. `notch_do_live_planner_eval` (ignored, opt-in) records a new run from the real planner with no computer-use tools. A case may carry synthetic `snippets`, made up and never copied from a vault, which the live run sends as the memory snippets FNDR would find; a recording is rescored only on the cases that still go to the planner.
 
-## Open question
+## Not built
 
-Whether `about_this_screen` should be routable by the stage 1 grammar or only
-by an explicit button. A grammar match on "what is this" could capture the
-screen when the person wanted a search.
+The October tool list in [actions policy](actions-policy.md) beyond opening apps, links, web searches, operating an app, reopening memories and pasting: reminders, Shortcuts, timers and revealing a file. Each would be a new step type in `operator::plan`, with a policy case and suite cases, not a separate registry.
