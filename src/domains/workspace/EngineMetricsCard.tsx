@@ -229,6 +229,10 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                             {runtimeMetrics.capture.frames_captured} captured ·{" "}
                             {runtimeMetrics.capture.frames_dropped} dropped
                         </dd>
+                        {runtimeMetrics.aggregates.import_first_answer && <>
+                            <dt>First imported answer</dt>
+                            <dd>{(runtimeMetrics.aggregates.import_first_answer.avg_ms / 1000).toFixed(1)} seconds · {runtimeMetrics.counters.import_first_answer_count ?? 0} opened result</dd>
+                        </>}
                         <dt>CLIP vision</dt>
                         <dd>
                             {runtimeMetrics.embedding.clip_session_loaded ? "loaded" : "idle"} · last{" "}

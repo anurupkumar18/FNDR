@@ -94,21 +94,27 @@ fn model_requests() -> &'static Mutex<Vec<ModelRequest>> {
 /// Activity stores and labels, so a new caller is added here, not as a string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
+    DailyOutputSend,
     NotchDoPlan,
     NotchDoStep,
     NotchDoScreenText,
     HermesChat,
     ScreenGuideAnswer,
+    /// Reply text FNDR already decided to say, sent to the Codex realtime
+    /// voice to be spoken (ADR 028). Never memory or screen text.
+    VoiceOut,
 }
 
 impl Feature {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::DailyOutputSend => "daily_output_send",
             Self::NotchDoPlan => "notch_do_plan",
             Self::NotchDoStep => "notch_do_step",
             Self::NotchDoScreenText => "notch_do_screen_text",
             Self::HermesChat => "hermes_chat",
             Self::ScreenGuideAnswer => "screen_guide_answer",
+            Self::VoiceOut => "voice_out",
         }
     }
 }

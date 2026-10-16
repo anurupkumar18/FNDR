@@ -448,9 +448,8 @@ mod tests {
 
     #[test]
     fn history_is_bounded_by_size_and_drops_the_oldest() {
-        let dir = std::env::temp_dir().join(format!("fndr-chats-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(CHATS_FILE);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CHATS_FILE);
         let message = |text: String, at: i64| AgentChatMessage {
             role: "user".to_string(),
             content: text,
@@ -488,9 +487,8 @@ mod tests {
 
     #[test]
     fn exchanges_accumulate_newest_chat_first() {
-        let dir = std::env::temp_dir().join(format!("fndr-chats-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(CHATS_FILE);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CHATS_FILE);
         let message = |role: &str, content: &str, at: i64| AgentChatMessage {
             role: role.into(),
             content: content.into(),

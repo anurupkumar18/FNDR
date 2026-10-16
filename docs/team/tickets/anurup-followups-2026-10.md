@@ -777,3 +777,55 @@ Filed by the parallel-session campaign (`docs/superpowers/plans/2026-10-04-paral
 **Done when.** The `website` workflow is green on `main`, the project URL returns HTTP 200, and the page's Download for Mac action falls back truthfully to GitHub Releases while no full release exists.
 
 **Evidence.** Attach the successful Pages workflow URL and the HTTP status check to the ticket.
+
+## VS-95 Join windows that share a name into one Resume thread
+- assignee: anurupkumar
+- labels: area::vault-search, type::feature, prio::p1
+- milestone: W04-Prove
+- estimate: 6h
+
+**Why.** On the owner's vault 54 of 71 Resume threads hold one or two memories, because a thread is one window title unless a memory has a project. Work sets, Home and meeting prep are built on those threads.
+
+**Result, 2026-10-13.** Built as the ADR 031 addendum: `resume/work_names.rs`, read by `build_resume_threads`, the thread digest and the signals evaluation. Same-project pairs found with labels hidden: 0.06 to 0.33, 0.05 to 0.69, 0.14 to 0.37; right 1.00, 0.98, 0.93. Full Rust suite and frontend suite pass.
+
+**Done when.** The persona score test passes with its floors and a named thread shows its shared words on Home.
+
+**Evidence.** The ADR 031 addendum table and the test output.
+
+## VS-96 See named threads in the running app and on a real week
+- assignee: anurupkumar
+- labels: area::vault-search, type::chore, prio::p1
+- milestone: W04-Prove
+- estimate: 3h
+- depends: VS-95
+
+**Why.** VS-95 was checked by tests only, and its rule was shaped on 86 synthetic entries.
+
+**Progress, 2026-10-13.** Done on a seeded store without the app: the work-set evaluation prints thread counts and, with `FNDR_WORKSET_LIST`, each thread. That run found and fixed three faults (ADR 031 addendum). Still open: the native app, and a copy of a real week.
+
+**Progress, later on 2026-10-13.** On a scratch copy of the owner's vault the evaluation counted 16 memories in the last 7 days, 9 threads and 1 named thread, so a real week cannot be judged until FNDR captures for one. That run showed a named thread with one window in view still saying "Grouped by"; the words now show only when the view holds two windows or more. The Home card renders in the browser preview (`ui-preview.html`, a named thread added to its fixtures). A debug build launched on a seeded profile with `FNDR_DATA_DIR`; the check stopped before Home loaded because the owner was on a video call, and the app was closed.
+
+**Do.** Seed a persona profile, open Home and a work set in the native app, and confirm a named thread opens more than one place. Add a read-only count to the signals evaluation (threads, windows per thread, named threads) and run it on a copy of a vault with at least a week of daily capture. Record wrong groupings by their shared words, never by content.
+
+**Result, native run, 2026-10-13.** A debug build ran on a seeded office profile with its project labels removed (`FNDR_DATA_DIR`, capture paused). Home showed named threads from the real backend, each with its shared words: "Smart Reminders" (Smart Reminders, Launch checklist, reminders launch), the hiring search titled "Imani R", and "Product team" (two standups and a lunch order, a weak grouping). Screenshot: `docs/evidence/W04/named-threads/native-home-seeded.png`. Two fixes followed: a title is the longest phrase its names spell ("Senior Product Designer"), and a name keeps the capitals a title gave it rather than a channel slug's. "Open all" was not pressed. The real-week count waits for a week of capture (the owner's vault held 16 memories in its last 7 days).
+
+**Done when.** A native run is recorded, and the counts exist for one real week.
+
+**Evidence.** Screenshots of a seeded profile and the count output.
+
+## VS-97 Attach a window to a named thread from its on-screen text, with a guard
+- assignee: anurupkumar
+- labels: area::vault-search, type::spike, prio::p2
+- milestone: W05-Retro
+- estimate: 4h
+- depends: VS-96
+
+**Why.** Titles alone find a third to two thirds of a persona's work. A window whose text mentions a thread's name ("HIST 2100" on a rubric page) is the largest part of what is missed. A first try found 0.96 on one persona but was right only 0.43 of the time on another: an inbox mentions every project, and a product name is on every page.
+
+**Do.** Try the text pass with guards: skip a window whose text mentions two threads or more, and skip a name already ignored as a place. Keep the title rule's precision floor.
+
+**Result, 2026-10-13.** Built with one guard that covers both: a window joins only when its text uses two names of one thread and no name of any other. Found went from 0.33, 0.69 and 0.37 to 0.42, 0.84 and 0.46; right is 1.00, 0.98 and 0.94. The floors in the score test were raised to 0.40, 0.80 and 0.44.
+
+**Done when.** Found rises on at least two personas with every precision floor of VS-95 still held, or the pass is dropped with the numbers recorded.
+
+**Evidence.** The score test output before and after.

@@ -51,6 +51,10 @@ pub const DEFAULT_CAPTURE_SEMANTIC_DEDUP_WINDOW_MS: i64 = 90_000;
 pub const DEFAULT_CAPTURE_NOISE_SKIP_THRESHOLD: f32 = 0.97;
 pub const DEFAULT_CAPTURE_DEEP_IDLE_SECONDS: f64 = 300.0;
 pub const DEFAULT_CAPTURE_IDLE_BLEND_SECONDS: f64 = 30.0;
+pub const DEFAULT_CAPTURE_EVENT_DRIVEN: bool = true;
+pub const DEFAULT_CAPTURE_TRIGGER_FALLBACK_SECS: u64 = 10;
+pub const DEFAULT_CAPTURE_INPUT_SETTLE_MS: u64 = 1_500;
+pub const DEFAULT_CAPTURE_TITLE_COOLDOWN_SECS: u64 = 5;
 pub const DEFAULT_FOCUS_DRIFT_SIMILARITY_THRESHOLD: f32 = 0.30;
 pub const DEFAULT_FOCUS_DRIFT_CAPTURE_COUNT: u32 = 3;
 // Adaptive visual-novelty admission for low-OCR frames. These values are
@@ -312,6 +316,23 @@ pub struct CapturePipelineConfig {
     pub deep_idle_seconds: f64,
     #[serde(default = "default_capture_idle_blend_seconds")]
     pub idle_blend_seconds: f64,
+    /// Look at pixels only when something changed (app switch, window title,
+    /// typing or scrolling that has gone quiet), with a timer as the fallback.
+    /// `false` restores the fixed-rate loop driven by `fps_base` and `idle_fps`.
+    #[serde(default = "default_capture_event_driven")]
+    pub event_driven: bool,
+    /// Longest gap between pixel captures while nothing triggers. Doubled
+    /// once the person has stopped giving input (`idle_pause_seconds`).
+    #[serde(default = "default_capture_trigger_fallback_secs")]
+    pub trigger_fallback_secs: u64,
+    /// Quiet time after the last key press, scroll or click before the
+    /// resulting screen is captured.
+    #[serde(default = "default_capture_input_settle_ms")]
+    pub input_settle_ms: u64,
+    /// Minimum gap between captures caused by a window title change alone,
+    /// so an animated terminal or tab title cannot drive the capture rate.
+    #[serde(default = "default_capture_title_cooldown_secs")]
+    pub title_cooldown_secs: u64,
     #[serde(default = "default_focus_drift_similarity_threshold")]
     pub focus_drift_similarity_threshold: f32,
     #[serde(default = "default_focus_drift_capture_count")]
@@ -351,6 +372,10 @@ impl Default for CapturePipelineConfig {
             noise_skip_threshold: default_capture_noise_skip_threshold(),
             deep_idle_seconds: default_capture_deep_idle_seconds(),
             idle_blend_seconds: default_capture_idle_blend_seconds(),
+            event_driven: default_capture_event_driven(),
+            trigger_fallback_secs: default_capture_trigger_fallback_secs(),
+            input_settle_ms: default_capture_input_settle_ms(),
+            title_cooldown_secs: default_capture_title_cooldown_secs(),
             focus_drift_similarity_threshold: default_focus_drift_similarity_threshold(),
             focus_drift_capture_count: default_focus_drift_capture_count(),
             visual_novelty_base: default_visual_novelty_base(),
@@ -371,6 +396,9 @@ impl CapturePipelineConfig {
         self.noise_skip_threshold = self.noise_skip_threshold.clamp(0.0, 1.0);
         self.deep_idle_seconds = self.deep_idle_seconds.clamp(30.0, 86_400.0);
         self.idle_blend_seconds = self.idle_blend_seconds.clamp(1.0, 3_600.0);
+        self.trigger_fallback_secs = self.trigger_fallback_secs.clamp(2, 600);
+        self.input_settle_ms = self.input_settle_ms.clamp(250, 30_000);
+        self.title_cooldown_secs = self.title_cooldown_secs.clamp(1, 300);
         self.focus_drift_similarity_threshold =
             self.focus_drift_similarity_threshold.clamp(0.0, 1.0);
         self.focus_drift_capture_count = self.focus_drift_capture_count.clamp(1, 60);
@@ -708,6 +736,11 @@ pub struct Config {
     pub forced_capture_interval: u64,
     /// Days to retain records
     pub retention_days: u32,
+    /// Days to keep imported rows (browser history, files, mail, and so on),
+    /// counted from each item's own timestamp. The screen sweep above never
+    /// touches them. 0 = keep forever.
+    #[serde(default = "default_import_retention_days")]
+    pub import_retention_days: u32,
     /// Blocked application names and website/title patterns
     pub blocklist: Vec<String>,
     /// Sensitive sites/titles the user dismissed and does not want alerted about again.
@@ -715,6 +748,9 @@ pub struct Config {
     pub dismissed_privacy_alerts: Vec<String>,
     /// Enable pattern redaction (emails, credit cards)
     pub redact_mode: bool,
+    /// Hide ordinary mentions of passwords, secrets and tokens from MCP reads.
+    #[serde(default)]
+    pub mcp_strict_privacy: bool,
     /// Minimum text length to store
     pub min_text_length: usize,
     /// Enable VLM for intelligent image understanding
@@ -727,7 +763,8 @@ pub struct Config {
     /// Per-call VLM timeout in seconds. Falls back to OCR-only if the model doesn't respond.
     #[serde(default = "default_vlm_timeout_secs")]
     pub vlm_timeout_secs: u64,
-    /// Days to retain screenshot files on disk (records kept; only pixel data deleted). 0 = keep forever.
+    /// Compatibility setting with no effect on stable capture. ADR-004 keeps
+    /// screenshots in memory only; the MCP settings echo is its sole reader.
     #[serde(default = "default_screenshot_retention_days")]
     pub screenshot_retention_days: u32,
     /// Enable proactive surface: nudges when current screen is semantically close to old unresolved context.
@@ -748,10 +785,18 @@ pub struct Config {
     /// Kill switch: every command-surface action is refused while true.
     #[serde(default)]
     pub actions_kill_switch: bool,
+    /// Ask before opening an app that was not named in a person's request.
+    #[serde(default)]
+    pub confirm_unnamed_apps: bool,
     /// "Let assistants add notes": `fndr.remember` stores nothing while false
     /// (VS-68). Off by default, because it widens what memory holds.
     #[serde(default)]
     pub agent_notes_enabled: bool,
+    /// Notch Do's spoken progress is muted. `None` until the person first
+    /// mutes or unmutes, so the notch can migrate the older per-window flag
+    /// once (ADR 020 amendment, 2026-10-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notch_do_muted: Option<bool>,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -776,6 +821,147 @@ pub struct Config {
     /// Memory quality thresholds for primary cards and evidence gating.
     #[serde(default)]
     pub memory_quality: MemoryQualityConfig,
+    /// macOS banners for proactive notifications.
+    #[serde(default)]
+    pub notifications: NotificationConfig,
+    /// How FNDR speaks when a surface talks back: which voice and how fast.
+    #[serde(default)]
+    pub voice_output: VoiceOutputConfig,
+    /// The stuck detector, what-changed nudges and meeting prep.
+    #[serde(default)]
+    pub proactive_signals: ProactiveSignalsConfig,
+}
+
+/// Each proactive signal runs on device from stored memories and can be
+/// switched off on its own. Private Mode and the blocklist always apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveSignalsConfig {
+    #[serde(default = "default_proactive_signal_on")]
+    pub stuck: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub thread_updates: bool,
+    #[serde(default = "default_proactive_signal_on")]
+    pub meeting_prep: bool,
+    /// Meeting prep also reads the calendar on this Mac (ADR 029). Off until
+    /// the person turns it on, because it asks for calendar access.
+    #[serde(default)]
+    pub calendar_meeting_prep: bool,
+    /// Calendar ids to read. Empty means every calendar the person did not
+    /// subscribe to.
+    #[serde(default)]
+    pub calendar_ids: Vec<String>,
+}
+
+fn default_proactive_signal_on() -> bool {
+    true
+}
+
+impl Default for ProactiveSignalsConfig {
+    fn default() -> Self {
+        Self {
+            stuck: true,
+            thread_updates: true,
+            meeting_prep: true,
+            calendar_meeting_prep: false,
+            calendar_ids: Vec::new(),
+        }
+    }
+}
+
+/// Spoken output. `provider` is `auto` (the ChatGPT plan voice when signed
+/// in, else the best voice on this Mac) or one provider id the webview's
+/// speech registry knows. `system_voice` is a macOS voice identifier such as
+/// `com.apple.voice.premium.en-US.Zoe`; empty means the best one installed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceOutputConfig {
+    #[serde(default = "default_voice_output_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub system_voice: String,
+    #[serde(default = "default_voice_output_rate")]
+    pub rate: f32,
+    /// The on-device neural voice (ADR 030), a Kokoro voice id such as
+    /// `af_heart`. Empty means its default voice.
+    #[serde(default)]
+    pub neural_voice: String,
+}
+
+const VOICE_OUTPUT_PROVIDERS: [&str; 5] = [
+    "auto",
+    "codex_realtime",
+    "system_enhanced",
+    "local_neural",
+    "webview_basic",
+];
+
+fn default_voice_output_provider() -> String {
+    "auto".to_string()
+}
+
+fn default_voice_output_rate() -> f32 {
+    1.0
+}
+
+impl Default for VoiceOutputConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_voice_output_provider(),
+            system_voice: String::new(),
+            rate: default_voice_output_rate(),
+            neural_voice: String::new(),
+        }
+    }
+}
+
+impl VoiceOutputConfig {
+    pub fn normalized(mut self) -> Self {
+        let provider = self.provider.trim();
+        self.provider = if VOICE_OUTPUT_PROVIDERS.contains(&provider) {
+            provider.to_string()
+        } else {
+            default_voice_output_provider()
+        };
+        let voice = self.system_voice.trim();
+        self.system_voice = if voice.len() <= 200 && !voice.chars().any(char::is_control) {
+            voice.to_string()
+        } else {
+            String::new()
+        };
+        let neural = self.neural_voice.trim();
+        self.neural_voice = if neural.len() <= 32
+            && neural.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        {
+            neural.to_string()
+        } else {
+            String::new()
+        };
+        self.rate = if self.rate.is_finite() {
+            self.rate.clamp(0.5, 2.0)
+        } else {
+            default_voice_output_rate()
+        };
+        self
+    }
+}
+
+/// Banners for the briefing, stale tasks and context-switch nudges when FNDR
+/// is in the background. The text is fixed and never carries memory text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    #[serde(default = "default_notification_banners")]
+    pub banners: bool,
+}
+
+fn default_notification_banners() -> bool {
+    true
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            banners: default_notification_banners(),
+        }
+    }
 }
 
 fn default_embedding_model_name() -> String {
@@ -942,6 +1128,22 @@ fn default_capture_deep_idle_seconds() -> f64 {
     DEFAULT_CAPTURE_DEEP_IDLE_SECONDS
 }
 
+fn default_capture_event_driven() -> bool {
+    DEFAULT_CAPTURE_EVENT_DRIVEN
+}
+
+fn default_capture_trigger_fallback_secs() -> u64 {
+    DEFAULT_CAPTURE_TRIGGER_FALLBACK_SECS
+}
+
+fn default_capture_input_settle_ms() -> u64 {
+    DEFAULT_CAPTURE_INPUT_SETTLE_MS
+}
+
+fn default_capture_title_cooldown_secs() -> u64 {
+    DEFAULT_CAPTURE_TITLE_COOLDOWN_SECS
+}
+
 fn default_capture_idle_blend_seconds() -> f64 {
     DEFAULT_CAPTURE_IDLE_BLEND_SECONDS
 }
@@ -1066,6 +1268,10 @@ fn default_screenshot_retention_days() -> u32 {
     30
 }
 
+fn default_import_retention_days() -> u32 {
+    90
+}
+
 fn default_proactive_surface_enabled() -> bool {
     true
 }
@@ -1115,14 +1321,19 @@ impl Default for Config {
             dedupe_threshold: 5,
             forced_capture_interval: 60,
             retention_days: 7,
+            import_retention_days: default_import_retention_days(),
             blocklist: vec![
                 "1Password".to_string(),
+                "Bitwarden".to_string(),
+                "Dashlane".to_string(),
+                "LastPass".to_string(),
                 "Keychain Access".to_string(),
                 "System Preferences".to_string(),
                 "System Settings".to_string(),
             ],
             dismissed_privacy_alerts: Vec::new(),
             redact_mode: false,
+            mcp_strict_privacy: false,
             min_text_length: 20,
             use_vlm: true,
             vlm_max_calls_per_minute: default_vlm_max_calls_per_minute(),
@@ -1134,7 +1345,9 @@ impl Default for Config {
             screen_guide: ScreenGuideConfig::default(),
             operator: OperatorConfig::default(),
             actions_kill_switch: false,
+            confirm_unnamed_apps: false,
             agent_notes_enabled: false,
+            notch_do_muted: None,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             search: SearchConfig::default(),
@@ -1143,6 +1356,9 @@ impl Default for Config {
             store: StoreConfig::default(),
             proactive: ProactiveConfig::default(),
             memory_quality: MemoryQualityConfig::default(),
+            notifications: NotificationConfig::default(),
+            voice_output: VoiceOutputConfig::default(),
+            proactive_signals: ProactiveSignalsConfig::default(),
         }
     }
 }
@@ -1153,6 +1369,7 @@ impl Config {
         self.dismissed_privacy_alerts = dedupe_trimmed(self.dismissed_privacy_alerts);
         self.autofill = self.autofill.normalized();
         self.screen_guide = self.screen_guide.normalized();
+        self.voice_output = self.voice_output.normalized();
         if self.screen_guide.operate_computer {
             // An older file kept this opt-in under Screen Guide.
             self.operator.enabled = true;
@@ -1172,6 +1389,7 @@ impl Config {
         self.dedupe_threshold = self.dedupe_threshold.min(64);
         self.forced_capture_interval = self.forced_capture_interval.clamp(5, 3600);
         self.retention_days = self.retention_days.min(3650);
+        self.import_retention_days = self.import_retention_days.min(3650);
         self.min_text_length = self.min_text_length.clamp(1, 2000);
         self.screenshot_retention_days = self.screenshot_retention_days.min(3650);
         self.decay_half_life_days = self.decay_half_life_days.clamp(1, 3650);
@@ -1307,6 +1525,122 @@ mod tests {
             .normalized()
             .validate()
             .expect("default config should stay internally consistent");
+    }
+
+    #[test]
+    fn capture_triggers_default_on_for_an_older_file() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file = current
+            .lines()
+            .filter(|line| {
+                ![
+                    "event_driven =",
+                    "trigger_fallback_secs =",
+                    "input_settle_ms =",
+                    "title_cooldown_secs =",
+                ]
+                .iter()
+                .any(|key| line.starts_with(key))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert!(older.capture_pipeline.event_driven);
+        assert_eq!(older.capture_pipeline.trigger_fallback_secs, 10);
+        assert_eq!(older.capture_pipeline.input_settle_ms, 1_500);
+        assert_eq!(older.capture_pipeline.title_cooldown_secs, 5);
+    }
+
+    #[test]
+    fn proactive_signals_are_on_for_an_older_file_and_each_switches_off_alone() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file = current
+            .split("[proactive_signals]")
+            .next()
+            .unwrap()
+            .to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert!(older.proactive_signals.stuck);
+        assert!(older.proactive_signals.thread_updates);
+        assert!(older.proactive_signals.meeting_prep);
+
+        let partial: ProactiveSignalsConfig = toml::from_str("stuck = false").unwrap();
+        assert!(!partial.stuck);
+        assert!(partial.thread_updates && partial.meeting_prep);
+    }
+
+    #[test]
+    fn calendar_meeting_prep_is_off_by_default_and_for_an_older_file() {
+        let fresh = ProactiveSignalsConfig::default();
+        assert!(!fresh.calendar_meeting_prep);
+        assert!(fresh.calendar_ids.is_empty());
+
+        let older: ProactiveSignalsConfig =
+            toml::from_str("stuck = true\nthread_updates = true\nmeeting_prep = true").unwrap();
+        assert!(!older.calendar_meeting_prep);
+        assert!(older.calendar_ids.is_empty());
+
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let reloaded: Config = toml::from_str(&current).expect("config reloads");
+        assert!(!reloaded.proactive_signals.calendar_meeting_prep);
+
+        let chosen: ProactiveSignalsConfig =
+            toml::from_str("calendar_meeting_prep = true\ncalendar_ids = [\"work\"]").unwrap();
+        assert!(chosen.calendar_meeting_prep && chosen.meeting_prep);
+        assert_eq!(chosen.calendar_ids, vec!["work".to_string()]);
+    }
+
+    #[test]
+    fn notch_do_mute_is_unset_for_an_older_file_and_survives_a_round_trip() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        assert!(!current.contains("notch_do_muted"));
+        let older: Config = toml::from_str(&current).expect("an older config still loads");
+        assert_eq!(older.notch_do_muted, None);
+
+        let muted = Config {
+            notch_do_muted: Some(true),
+            ..Config::default()
+        };
+        let saved = toml::to_string(&muted).expect("config serializes");
+        let loaded: Config = toml::from_str(&saved).expect("config loads");
+        assert_eq!(loaded.notch_do_muted, Some(true));
+    }
+
+    #[test]
+    fn voice_output_defaults_for_an_older_file_and_rejects_bad_values() {
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older_file: String = current.split("[voice_output]").next().unwrap().to_string();
+        let older: Config = toml::from_str(&older_file).expect("an older config still loads");
+        assert_eq!(older.voice_output, VoiceOutputConfig::default());
+        assert_eq!(older.voice_output.provider, "auto");
+
+        let chosen: VoiceOutputConfig = toml::from_str(
+            "provider = \"system_enhanced\"\nsystem_voice = \"com.apple.voice.premium.en-US.Zoe\"\nrate = 1.2",
+        )
+        .unwrap();
+        let chosen = chosen.normalized();
+        assert_eq!(chosen.provider, "system_enhanced");
+        assert_eq!(chosen.system_voice, "com.apple.voice.premium.en-US.Zoe");
+        assert!((chosen.rate - 1.2).abs() < 1e-6);
+
+        let bad = VoiceOutputConfig {
+            provider: "elevenlabs".into(),
+            system_voice: "x".repeat(300),
+            rate: f32::NAN,
+            neural_voice: "../af_heart".into(),
+        }
+        .normalized();
+        assert_eq!(bad, VoiceOutputConfig::default());
+        let fast = VoiceOutputConfig {
+            rate: 9.0,
+            ..VoiceOutputConfig::default()
+        }
+        .normalized();
+        assert_eq!(fast.rate, 2.0);
+
+        assert_eq!(older.voice_output.neural_voice, "");
+        let neural: VoiceOutputConfig = toml::from_str("neural_voice = \"bf_emma\"").unwrap();
+        assert_eq!(neural.normalized().neural_voice, "bf_emma");
     }
 
     #[test]

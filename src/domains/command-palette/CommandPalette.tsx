@@ -51,6 +51,7 @@ export type PanelKey =
     | "todo"
     | "meeting"
     | "dailySummary"
+    | "outputs"
     | "wrapped"
     | "searchHistory"
     | "focusSession"
@@ -70,6 +71,7 @@ export const DEMO_COMMAND_IDS = [
     "memory-cards",
     "ask-fndr",
     "daily-summary",
+    "daily-outputs",
     "stats",
     "todo",
     "wrapped",
@@ -160,6 +162,14 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["summary", "today", "daily", "recap"],
         run: ({ onOpenPanel }) => onOpenPanel("dailySummary"),
+    },
+    {
+        id: "daily-outputs",
+        label: "Daily outputs",
+        description: "Make a cited standup, weekly status or timesheet",
+        category: "navigate",
+        keywords: ["standup", "timesheet", "weekly", "status", "export"],
+        run: ({ onOpenPanel }) => onOpenPanel("outputs"),
     },
     {
         id: "search-history",

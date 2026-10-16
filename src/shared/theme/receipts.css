@@ -1,0 +1,103 @@
+/* Receipts: the shared surface language for the first-five-minutes screens.
+   One idea: every claim is a plain statement with its fact set beside it
+   (a count, a destination, a size, an undo note), so a person can check what
+   FNDR did without reading prose. Blue marks what stays on this Mac. Clay
+   (--alarm) marks what leaves it or cannot be undone. */
+
+/* Scope tokens. The app theme drives them everywhere except the first-run
+   overlay, whose card is a fixed warm paper surface in every theme. */
+:root {
+    --rc-text: var(--text-primary);
+    --rc-text-2: var(--text-secondary);
+    --rc-line: var(--hairline);
+    --rc-line-strong: var(--hairline-strong);
+    --rc-surface: var(--surface);
+    --rc-raised: var(--bg-3, var(--surface-elevated));
+    --rc-accent: var(--accent);
+    --rc-on-accent: #fff;
+    --rc-clay: var(--alarm-2);
+    --rc-clay-solid: var(--alarm);
+}
+.ob-card {
+    --rc-text: var(--ob-text-primary);
+    --rc-text-2: var(--ob-text-secondary);
+    --rc-line: var(--ob-border);
+    --rc-line-strong: color-mix(in srgb, var(--ob-text-primary) 28%, transparent);
+    --rc-surface: var(--ob-surface-muted);
+    --rc-raised: var(--ob-card-bg);
+    --rc-accent: var(--ob-accent);
+    --rc-on-accent: var(--ob-card-bg);
+    --rc-clay: var(--ob-danger);
+    --rc-clay-solid: var(--ob-danger);
+}
+.ob-card .fndr-switch { background: color-mix(in srgb, var(--ob-text-primary) 24%, transparent); }
+.ob-card .fndr-switch:checked { background: var(--ob-accent); }
+
+.rcpt-primary {
+    height: 36px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: var(--film-radius-md);
+    background: var(--rc-accent);
+    color: var(--rc-on-accent);
+    font: 600 13px/1 var(--font-body);
+    letter-spacing: -0.005em;
+    cursor: pointer;
+    transition: filter var(--film-dur-fast) var(--film-ease-shutter),
+        transform var(--film-dur-fast) var(--film-ease-shutter);
+}
+.rcpt-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.rcpt-primary:active:not(:disabled) { transform: scale(0.985); }
+.rcpt-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.rcpt-primary:focus-visible,
+.rcpt-quiet:focus-visible,
+.rcpt-danger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.rcpt-quiet,
+.rcpt-danger {
+    padding: 6px 2px;
+    border: 0;
+    background: none;
+    color: var(--rc-text-2);
+    font: 500 13px/1.2 var(--font-body);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--rc-line-strong);
+    text-underline-offset: 4px;
+}
+.rcpt-quiet:hover:not(:disabled) { color: var(--rc-text); text-decoration-color: currentColor; }
+.rcpt-danger { color: var(--rc-clay); text-decoration-color: color-mix(in srgb, var(--rc-clay-solid) 55%, transparent); }
+.rcpt-danger:hover:not(:disabled) { color: var(--rc-clay); text-decoration-color: currentColor; }
+.rcpt-quiet:disabled,
+.rcpt-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* The dotted leader that ties a label to its figure. */
+.rcpt-leader {
+    flex: 1 1 24px;
+    min-width: 16px;
+    align-self: end;
+    margin: 0 10px 0.34em;
+    border-bottom: 1px dotted var(--rc-line-strong);
+}
+.rcpt-figure { font-variant-numeric: tabular-nums; color: var(--rc-text-2); white-space: nowrap; }
+
+.rcpt-field {
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--rc-line-strong);
+    border-radius: var(--film-radius-md);
+    background: var(--rc-surface);
+    color: var(--rc-text);
+    font: 400 14px/1 var(--font-body);
+}
+.rcpt-field:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: transparent; }
+
+.rcpt-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}

@@ -54,7 +54,9 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
         void listConfiguredPeers()
             .then((rows) => { if (mounted) setPeers(rows); })
             .catch((reason) => { if (mounted) setError(errorText(reason)); });
-        void listPeerRuns().then((rows) => { if (mounted) setRecentRuns(rows); }).catch(() => {});
+        void listPeerRuns()
+            .then((rows) => { if (mounted) setRecentRuns(rows); })
+            .catch((reason) => { if (mounted) setError(`Could not load peer send history: ${errorText(reason)}`); });
         return () => { mounted = false; };
     }, []);
 
@@ -132,7 +134,12 @@ export function PeerDirectory({ onBack, selectedMemories = [] }: PeerDirectoryPr
         } catch (reason) {
             setError(`${errorText(reason)}. If delivery began, its status may be uncertain; preview again before another attempt.`);
         } finally {
-            void listPeerRuns().then(setRecentRuns).catch(() => {});
+            void listPeerRuns()
+                .then(setRecentRuns)
+                .catch((reason) => setError((current) => {
+                    const historyError = `Could not load peer send history: ${errorText(reason)}`;
+                    return current ? `${current} ${historyError}` : historyError;
+                }));
             setBusy(false);
         }
     };

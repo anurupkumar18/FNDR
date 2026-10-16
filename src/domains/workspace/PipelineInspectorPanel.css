@@ -1058,7 +1058,6 @@
 
 .pipeline-skip-reasons li span {
     color: rgba(223, 227, 237, 0.86);
-    text-transform: capitalize;
 }
 
 .pipeline-skip-reasons li strong {
@@ -1072,8 +1071,64 @@
     color: rgba(223, 227, 237, 0.86);
 }
 
-.pipeline-privacy-note {
-    margin-top: 12px;
+.pipeline-panel--privacy .pipeline-muted {
+    margin: 4px 0 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.pipeline-panel--privacy .pipeline-privacy-note {
+    margin: 12px 0 0;
+}
+
+.pipeline-range-controls {
+    display: grid;
+    gap: 10px;
+}
+
+.pipeline-range-controls label {
+    display: grid;
+    gap: 5px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.pipeline-range-controls input {
+    min-height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-translucent);
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font: inherit;
+}
+
+.pipeline-range-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pipeline-range-actions button {
+    min-height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-translucent);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.pipeline-range-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.pipeline-range-controls :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* ===== Light Theme ===== */

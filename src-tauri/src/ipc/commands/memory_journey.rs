@@ -9,6 +9,16 @@ use crate::AppState;
 use std::sync::Arc;
 use tauri::State;
 
+fn answer_refused(
+    verify: &crate::context_runtime::context_pack::VerifyOutcome,
+    answer: &str,
+) -> bool {
+    matches!(
+        verify,
+        crate::context_runtime::context_pack::VerifyOutcome::NotEnoughEvidence { .. }
+    ) || answer.trim() == crate::inference::prompts::ANSWER_NOT_FOUND
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemoryJourneyQueryReceipt {
     pub manifest: MemoryJourneyManifestV1,
@@ -172,10 +182,7 @@ pub async fn run_memory_journey_query(
             {
                 citation_ids.extend(ids.iter().cloned());
             }
-            let refusal = matches!(
-                &composed.verify_outcome,
-                crate::context_runtime::context_pack::VerifyOutcome::NotEnoughEvidence { .. }
-            );
+            let refusal = answer_refused(&composed.verify_outcome, &composed.answer);
             let presentation = serde_json::json!({
                 "card_count": composed.cards.len(),
                 "cards": composed.cards.iter().map(|card| serde_json::json!({
@@ -266,4 +273,26 @@ pub async fn delete_all_memory_journeys(
     state.memory_journey.delete_all()?;
     state.emit_memory_journey_status();
     state.memory_journey.status()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::answer_refused;
+    use crate::context_runtime::context_pack::VerifyOutcome;
+
+    #[test]
+    fn refusal_reflects_the_final_answer_when_verifier_found_candidates() {
+        let grounded = VerifyOutcome::Grounded { confidence: 0.6 };
+        assert!(answer_refused(
+            &grounded,
+            "I couldn't find that in your memories."
+        ));
+        assert!(!answer_refused(&grounded, "The release improved search."));
+        assert!(answer_refused(
+            &VerifyOutcome::NotEnoughEvidence {
+                reason: "no fused hits".to_string(),
+            },
+            "I don't have enough grounded evidence to answer that yet."
+        ));
+    }
 }

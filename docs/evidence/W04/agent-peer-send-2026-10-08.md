@@ -25,6 +25,8 @@ Card output compatibility: FNDR requests and displays `text/plain`, but the vali
 
 Direct replies without text are now recorded as confirmed replies with unsupported content. Before the change, a data-only A2A Message was labeled a normal direct reply and the review panel showed no result. Parser, Peer UI and Privacy Activity regressions failed on that behavior. FNDR now stores a distinct content-free state and says the reply cannot be displayed; it does not fabricate a remote task ID or resend. The isolated peer binary passed 19 local tests with 2 external tests ignored; frontend tests passed 21/21 and typecheck passed. This is a controlled fixture, not a live non-text peer check.
 
+Long-running Send: the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.1/specification/) says Send waits for completion by default. FNDR's HTTP timeout is 20 seconds, so that default could leave a long-running accepted task without a known ID. A red wire-shape test confirmed FNDR omitted `returnImmediately`; Send now sets it to `true` and can record the peer's task ID for later Get. The isolated peer suite passed 19 local tests with 2 ignored, and both opt-in live Sends passed with the new request. Those peers returned direct answers; a live long-running task and native status polling are still unverified.
+
 ## Acceptance still open
 
 - Native reviewed-text and ledger verification for the real peer path. The two live transport tests check synthetic questions and relevant replies; the local fixture checks the exact JSONRPC request body. Bearer credential binding is still absent.
