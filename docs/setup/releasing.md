@@ -4,7 +4,7 @@ A release is one tag push. `.github/workflows/release.yml` typechecks and tests,
 
 ```bash
 # first set the same version in package.json, package-lock.json,
-# src-tauri/tauri.conf.json, src-tauri/Cargo.toml and src-tauri/Cargo.lock
+# src-tauri/tauri.conf.json, src-tauri/Info.plist (both strings), src-tauri/Cargo.toml and src-tauri/Cargo.lock
 git tag v0.3.1
 git push gh v0.3.1
 ```
