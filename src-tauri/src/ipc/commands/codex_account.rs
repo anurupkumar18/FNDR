@@ -656,9 +656,9 @@ pub(crate) fn codex_knows_feature(name: &str) -> Option<bool> {
         .map(|known| known.iter().any(|feature| feature == name))
 }
 
-/// `--disable` flags for every acting feature the installed Codex has.
-fn disable_flags(known: Option<&[String]>) -> Vec<String> {
-    READ_ONLY_DISABLED_FEATURES
+/// `--disable` flags for each of `features` the installed Codex has.
+fn disable_flags(features: &[&str], known: Option<&[String]>) -> Vec<String> {
+    features
         .iter()
         .filter(|feature| known.is_none_or(|known| known.iter().any(|name| name == *feature)))
         .flat_map(|feature| ["--disable".to_string(), (*feature).to_string()])
@@ -667,10 +667,15 @@ fn disable_flags(known: Option<&[String]>) -> Vec<String> {
 
 /// The flags for the Codex last asked; every flag when none was asked yet.
 pub(crate) fn read_only_feature_args() -> Vec<String> {
+    known_feature_args(READ_ONLY_DISABLED_FEATURES)
+}
+
+/// `--disable` flags for `features`, filtered through the Codex last asked.
+pub(crate) fn known_feature_args(features: &[&str]) -> Vec<String> {
     let known = KNOWN_CODEX_FEATURES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    disable_flags(known.as_deref())
+    disable_flags(features, known.as_deref())
 }
 
 const SCREEN_GUIDE_SCREENSHOT_NOTE: &str = "A screenshot of the same display is attached for \
@@ -729,11 +734,15 @@ impl Drop for ScratchDir {
     }
 }
 
+/// A name Codex's `-c` parser reaches bare. It splits keys on dots and keeps
+/// quotes as part of a name, so a quoted key addresses a new entry; `@`
+/// (plugin names such as `browser@openai-bundled`) works bare (hand-off
+/// spike S1, Codex 0.151.0).
 pub(crate) fn is_plain_config_key(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '@'))
 }
 
 /// Arguments that turn the user's Codex config into a tool-less session for
@@ -1029,7 +1038,7 @@ mod tests {
             "shell_tool   stable   true\nunified_exec stable true\nmemories stable true\n",
         );
         assert_eq!(known, ["shell_tool", "unified_exec", "memories"]);
-        let flags = disable_flags(Some(&known));
+        let flags = disable_flags(READ_ONLY_DISABLED_FEATURES, Some(&known));
         assert_eq!(
             flags,
             [
@@ -1043,7 +1052,7 @@ mod tests {
         );
         // Before any Codex was asked, nothing is left out.
         assert_eq!(
-            disable_flags(None).len(),
+            disable_flags(READ_ONLY_DISABLED_FEATURES, None).len(),
             READ_ONLY_DISABLED_FEATURES.len() * 2
         );
     }
@@ -1156,6 +1165,8 @@ mod tests {
     fn refuses_mcp_server_names_it_cannot_address() {
         assert!(read_only_session_args(&["weird name".into()]).is_err());
         assert!(read_only_session_args(&["a.b".into()]).is_err());
+        assert!(read_only_session_args(&["\"quoted\"".into()]).is_err());
+        assert!(is_plain_config_key("browser@openai-bundled"));
     }
 
     #[tokio::test]

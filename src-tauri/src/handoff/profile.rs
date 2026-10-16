@@ -13,22 +13,25 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::ipc::commands::codex_account::{
+    codex_knows_feature, is_plain_config_key, known_feature_args, READ_ONLY_DISABLED_FEATURES,
+};
+
 /// The worker's permission profile name in Codex's configuration.
 pub const PROFILE: &str = "fndr_hand_off";
 
+/// The worker runs code inside its sandbox; everything else that acts stays
+/// off, the same list Screen Guide and voice use.
+const WORKER_KEEPS: &[&str] = &["shell_tool", "unified_exec"];
+
 /// Features switched off for every worker process.
-pub const FEATURES_OFF: &[&str] = &[
-    "computer_use",
-    "browser_use",
-    "browser_use_external",
-    "in_app_browser",
-    "apps",
-    "plugins",
-    "memories",
-    "hooks",
-    "image_generation",
-    "multi_agent",
-];
+pub fn worker_disabled_features() -> Vec<&'static str> {
+    READ_ONLY_DISABLED_FEATURES
+        .iter()
+        .copied()
+        .filter(|feature| !WORKER_KEEPS.contains(feature))
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebSearchMode {
@@ -111,7 +114,7 @@ pub fn worker_config_args(
         .iter()
         .map(|name| ("MCP server", name))
         .chain(person.plugins.iter().map(|name| ("plugin", name)))
-        .filter(|(_, name)| !addressable(name))
+        .filter(|(_, name)| !is_plain_config_key(name))
         .map(|(kind, name)| Refusal::UnaddressableName {
             kind,
             name: name.clone(),
@@ -172,22 +175,12 @@ pub fn worker_config_args(
     for value in head {
         args.extend(["-c".to_string(), value.clone()]);
     }
-    for feature in FEATURES_OFF {
-        args.extend(["--disable".to_string(), (*feature).to_string()]);
-    }
+    // Only features this Codex knows: it exits on an unknown `--disable`.
+    args.extend(known_feature_args(&worker_disabled_features()));
     for value in tail {
         args.extend(["-c".to_string(), value.clone()]);
     }
     Ok(args)
-}
-
-/// Codex's `-c` parser splits keys on dots and keeps quotes, so only a name
-/// with none of these characters reaches the entry it names (S1).
-fn addressable(name: &str) -> bool {
-    !name.is_empty()
-        && !name
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || ".\"'=[]{},#".contains(c))
 }
 
 /// A TOML basic string.
@@ -281,13 +274,16 @@ pub fn check_effective(
     if web_search != Some(inputs.web_search.as_str()) {
         found.push(Mismatch::WebSearch(web_search.map(str::to_string)));
     }
-    for feature in FEATURES_OFF {
+    for feature in worker_disabled_features() {
+        if codex_knows_feature(feature) == Some(false) {
+            continue;
+        }
         if config
             .pointer(&format!("/features/{feature}"))
             .and_then(Value::as_bool)
             != Some(false)
         {
-            found.push(Mismatch::FeatureOn((*feature).to_string()));
+            found.push(Mismatch::FeatureOn(feature.to_string()));
         }
     }
     for (key, mismatch) in [
@@ -416,8 +412,8 @@ mod tests {
         filesystem.insert(i.toolchain.display().to_string(), json!("read"));
         filesystem.insert(i.job_folder.display().to_string(), json!("write"));
         let mut features = serde_json::Map::new();
-        for f in FEATURES_OFF {
-            features.insert((*f).into(), json!(false));
+        for f in worker_disabled_features() {
+            features.insert(f.into(), json!(false));
         }
         features.insert("mentions_v2".into(), json!(true));
         json!({ "config": {
@@ -491,7 +487,12 @@ mod tests {
             .filter(|w| w[0] == "--disable")
             .map(|w| w[1].as_str())
             .collect();
-        assert_eq!(off, FEATURES_OFF);
+        assert_eq!(off, worker_disabled_features());
+        assert!(
+            !off.contains(&"shell_tool"),
+            "the worker runs code in its sandbox"
+        );
+        assert!(off.contains(&"goals") && off.contains(&"plugins"));
     }
 
     #[test]
@@ -676,5 +677,62 @@ mod tests {
                 found: None
             }]
         );
+    }
+
+    /// Starts the installed Codex twice: once as the person's own setup, to
+    /// learn what it would attach, then as a worker with `worker_config_args`,
+    /// and checks what that worker reports. No model turn, no plan usage.
+    #[tokio::test]
+    #[ignore = "Requires an installed Codex CLI; run: cargo test --lib live_worker_profile_matches_what_codex_reports -- --ignored --nocapture"]
+    async fn live_worker_profile_matches_what_codex_reports() {
+        use crate::ipc::commands::codex_account::{
+            ready_executable, refresh_codex_features, AppServer,
+        };
+
+        let codex = ready_executable().expect("codex on PATH");
+        refresh_codex_features(&codex).await.unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let job = base.path().join("job");
+        std::fs::create_dir_all(job.join(".agents/skills/readout-docx")).unwrap();
+        std::fs::write(
+            job.join(".agents/skills/readout-docx/SKILL.md"),
+            "---\nname: readout-docx\ndescription: Render a readout.\n---\nRender it.\n",
+        )
+        .unwrap();
+        let inputs = ProfileInputs {
+            job_folder: job.clone(),
+            toolchain: base.path().join("toolchain"),
+            codex_state: base.path().join("codex"),
+            web_search: WebSearchMode::Cached,
+        };
+        let read = |args: Vec<String>| {
+            let codex = codex.clone();
+            let job = job.clone();
+            async move {
+                let mut server = AppServer::spawn_with(&codex, &args).await.unwrap();
+                let config = server
+                    .request("config/read", json!({ "cwd": job }))
+                    .await
+                    .unwrap();
+                let skills = server
+                    .request("skills/list", json!({ "cwds": [job], "forceReload": true }))
+                    .await
+                    .unwrap();
+                server.shutdown().await;
+                (config, skills)
+            }
+        };
+
+        let (config, skills) = read(Vec::new()).await;
+        let person = PersonCodexConfig::from_codex(&config, &skills, &job);
+        eprintln!(
+            "person: {} servers, {} plugins, {} skills",
+            person.mcp_servers.len(),
+            person.plugins.len(),
+            person.skill_paths.len()
+        );
+        let args = worker_config_args(&inputs, &person).unwrap();
+        let (config, skills) = read(args).await;
+        assert_eq!(check_effective(&inputs, &config, &skills), Ok(()));
     }
 }

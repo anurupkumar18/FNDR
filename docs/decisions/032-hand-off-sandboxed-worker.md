@@ -45,7 +45,7 @@ A spike ran `codex sandbox` (the same Seatbelt policy the app-server applies to 
 Full results in the [evidence file](../evidence/W05/hand-off-spikes.md). What changed this decision:
 
 - Through `codex app-server` and `command/exec` (no model), 15 of 17 probes held: the home folder, `~/.codex/auth.json`, `~/.fndr/mcp_token`, FNDR's app data, a symlink out of the folder, the clipboard, AppleScript, opening an app and the network were denied. **`/private/tmp` stayed readable and writable** under every profile tried; it comes from Codex's base policy.
-- `mcp_servers={}` and `features.plugins=false` do not detach the person's own MCP servers and plugins; each must be disabled by its bare name. The person's 38 Codex skills are offered to the worker unless each is disabled.
+- `mcp_servers={}` does not detach the person's own MCP servers; each must be disabled by its bare name. `features.plugins=false` probably detaches plugins (none of their skills were offered), but `config/read` still lists them as enabled, so each is disabled by name as well and the check can confirm it. The person's 38 Codex skills are offered to the worker unless each is disabled.
 - An ephemeral thread writes its prompt and commands to `~/.codex/logs_2.sqlite`. `sqlite_home` and `log_dir` move Codex's stores to a folder FNDR chooses.
 - The model declined, on its own, to run commands outside the folder, so a sandbox test through a model proves nothing; the self-test uses `command/exec`.
 - `thread/start` reported `/tmp` excluded while it was open: a reported policy is not proof.

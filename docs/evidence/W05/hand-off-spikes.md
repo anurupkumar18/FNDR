@@ -28,7 +28,7 @@ Inputs were synthetic: decoy files with fake text (`~/fndr-handoff-canary/canary
 | `--disable` for `computer_use`, `browser_use`, `browser_use_external`, `in_app_browser`, `apps`, `plugins`, `memories`, `hooks`, `image_generation`, `multi_agent` | Yes, all `false` |
 | `mcp_servers={}` | **No.** Merged, not replaced: all five servers in the person's `~/.codex/config.toml` stayed enabled (`computer-use`, `evidence-engine`, `node_repl`, `notion`, `openaiDeveloperDocs`) |
 | `mcp_servers.<name>.enabled=false`, one per server | Yes, all five `false` |
-| `features.plugins=false` alone | **No.** All 20 configured plugins (including `browser`, `computer-use`, `unified-computer-use`) still read `enabled: true` |
+| `features.plugins=false` alone | `config/read` still lists all 20 configured plugins (including `browser`, `computer-use`, `unified-computer-use`) as `enabled: true`. In S3, with the feature off, none of their skills appeared in `skills/list`, so the switch probably does detach them; `config/read` cannot prove it either way |
 | `plugins.<name>.enabled=false`, one per plugin | Yes, all 20 `false` |
 
 Codex's `-c` key parser keeps TOML quotes as part of the name: `mcp_servers."computer-use".enabled=false` created a new server literally named `"computer-use"` and Codex refused to start ("invalid transport"); `plugins."x@y".enabled=false` added 20 new entries instead of changing the existing ones. Bare keys work, including names with `-` and `@`. A name containing a dot cannot be expressed this way.
