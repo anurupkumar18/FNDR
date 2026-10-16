@@ -221,7 +221,7 @@ pub async fn send_delegation(
     })
 }
 
-fn shareable_summary(record: &MemoryRecord) -> Result<&str, String> {
+pub(crate) fn shareable_summary(record: &MemoryRecord) -> Result<&str, String> {
     let summary = record.display_summary.trim();
     if summary.is_empty() {
         return Err("An attached memory has no shareable summary".into());

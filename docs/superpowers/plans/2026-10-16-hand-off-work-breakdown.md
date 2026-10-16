@@ -97,6 +97,8 @@ Tests (tempdir): naming and dedupe; each refusal; total cap across five files; a
 
 ## Part 3: `handoff::draft`
 
+**Status 2026-10-16:** `assemble` (pure), `build` and `recheck` are written; 9 tests on fixture records. The draft reuses the delegation preview's `shareable_summary` and `context_source_memories`, and `folder::planned_input_names` so the names it shows are the names `copy_input` gives (tested). The two prompts are in `prompts.rs` at v14. `build` and `recheck` read the store and are not yet run on a seeded profile; that check comes with Part 8's commands.
+
 Files: `src-tauri/src/handoff/draft.rs`; `src-tauri/src/agent/delegation.rs` (destination enum); `src/dev/memoryReadDrift.test.ts` (new listed reader).
 
 ```rust

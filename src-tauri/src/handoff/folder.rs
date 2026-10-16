@@ -177,21 +177,39 @@ pub fn copy_input(folder: &JobFolder, source: &Path, caps: &Caps) -> Result<Path
     }
 }
 
-/// A file under `dir` named like `source`, created here and now, never an
-/// existing one: "notes.md", then "notes 2.md".
-fn new_file_for(dir: &Path, source: &Path) -> io::Result<(PathBuf, fs::File)> {
+/// The names `copy_input` gives these files, in order, in an empty
+/// `inputs/`: the file's own name, then "notes 2.md" for a second "notes.md".
+/// The draft shows these names, so they must match what the job holds.
+pub fn planned_input_names(sources: &[PathBuf]) -> Vec<String> {
+    let mut taken: Vec<String> = Vec::new();
+    for source in sources {
+        let name = (1..)
+            .map(|n| numbered_name(source, n))
+            .find(|name| !taken.contains(name))
+            .unwrap_or_default();
+        taken.push(name);
+    }
+    taken
+}
+
+fn numbered_name(source: &Path, n: usize) -> String {
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("input");
-    let ext = source.extension().and_then(|e| e.to_str());
+    match (n, source.extension().and_then(|e| e.to_str())) {
+        (1, Some(ext)) => format!("{stem}.{ext}"),
+        (1, None) => stem.to_string(),
+        (n, Some(ext)) => format!("{stem} {n}.{ext}"),
+        (n, None) => format!("{stem} {n}"),
+    }
+}
+
+/// A file under `dir` named like `source`, created here and now, never an
+/// existing one: "notes.md", then "notes 2.md".
+fn new_file_for(dir: &Path, source: &Path) -> io::Result<(PathBuf, fs::File)> {
     for n in 1.. {
-        let name = match (n, ext) {
-            (1, Some(ext)) => format!("{stem}.{ext}"),
-            (1, None) => stem.to_string(),
-            (n, Some(ext)) => format!("{stem} {n}.{ext}"),
-            (n, None) => format!("{stem} {n}"),
-        };
+        let name = numbered_name(source, n);
         let path = dir.join(name);
         match fs::OpenOptions::new()
             .write(true)
@@ -370,6 +388,26 @@ mod tests {
             copy_input(&job, &c, &caps),
             Err(InputRefusal::TooMany { cap: 2 })
         );
+    }
+
+    #[test]
+    fn planned_names_are_the_names_copy_input_gives() {
+        let base = tempfile::tempdir().unwrap();
+        let job = create(base.path(), "t", day()).unwrap();
+        let dirs = ["a", "b", "c"].map(|d| base.path().join(d));
+        let mut sources = Vec::new();
+        for (dir, name) in dirs.iter().zip(["notes.md", "notes.md", "survey.csv"]) {
+            fs::create_dir_all(dir).unwrap();
+            write(&dir.join(name), 2);
+            sources.push(dir.join(name));
+        }
+        let copied: Vec<String> = sources
+            .iter()
+            .map(|s| copy_input(&job, s, &Caps::default()).unwrap())
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(planned_input_names(&sources), copied);
+        assert_eq!(copied, ["notes.md", "notes 2.md", "survey.csv"]);
     }
 
     #[test]
