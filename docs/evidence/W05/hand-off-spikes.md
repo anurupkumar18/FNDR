@@ -69,6 +69,7 @@ Account default model from `model/list` (`gpt-5.6-sol`; the person's `config.tom
 - It confirmed: `/tmp` read and write allowed, `curl` failed to resolve, the job-folder write and Python ran.
 - It produced an empty structured answer early, then stalled mid-answer for 180 s with no `turn/completed`; the run was cut by the idle limit. The plan's 5-hour window read 100 percent from the first rate-limit event.
 - No web search ran.
+- Two things in the item stream the job runner must handle: the first `agentMessage` (the empty answer) had `phase: "commentary"`, so the manifest is read only from a final-phase message; and commands ran as `/bin/zsh -lc`, a login shell that tries to read the person's dotfiles (`allow_login_shell` is on by default). The worker profile now sets `allow_login_shell=false`, and Codex reads it back as false.
 - 114,798 tokens in total for a 34-second turn (113,805 input, 97,664 of them cached; 993 output): every step resends the context.
 - Peak memory of the app-server process group: 138 MB. First event 1.9 s after `turn/start`.
 

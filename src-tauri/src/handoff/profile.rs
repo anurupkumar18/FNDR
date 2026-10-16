@@ -141,6 +141,9 @@ pub fn worker_config_args(
         format!("sqlite_home={}", toml_string(&state_dir(inputs, "sqlite"))),
         format!("log_dir={}", toml_string(&state_dir(inputs, "logs"))),
         format!("history.persistence={}", toml_string("none")),
+        // Commands run under `zsh -c`, not a login shell reading the
+        // person's dotfiles (S1 turns ran `/bin/zsh -lc`).
+        "allow_login_shell=false".to_string(),
     ];
     config.extend(
         person
@@ -171,7 +174,7 @@ pub fn worker_config_args(
     let mut args = Vec::new();
     // Profile and state first, then features, then the person's own setup,
     // so a reader of a process listing sees the sandbox first.
-    let (head, tail) = config.split_at(8);
+    let (head, tail) = config.split_at(9);
     for value in head {
         args.extend(["-c".to_string(), value.clone()]);
     }
@@ -243,6 +246,7 @@ pub enum Mismatch {
     SkillEnabled(String),
     StateNotIsolated(&'static str),
     HistoryKept,
+    LoginShell,
 }
 
 /// Compare `config/read` and `skills/list` with what was asked; every
@@ -326,6 +330,9 @@ pub fn check_effective(
         != Some("none")
     {
         found.push(Mismatch::HistoryKept);
+    }
+    if config.get("allow_login_shell").and_then(Value::as_bool) != Some(false) {
+        found.push(Mismatch::LoginShell);
     }
 
     if found.is_empty() {
@@ -435,7 +442,8 @@ mod tests {
             },
             "sqlite_home": i.codex_state.join("sqlite").display().to_string(),
             "log_dir": i.codex_state.join("logs").display().to_string(),
-            "history": { "persistence": "none", "max_bytes": null }
+            "history": { "persistence": "none", "max_bytes": null },
+            "allow_login_shell": false
         }})
     }
 
@@ -541,6 +549,10 @@ mod tests {
             value_of(&args, "history.persistence="),
             [r#"history.persistence="none""#]
         );
+        assert_eq!(
+            value_of(&args, "allow_login_shell="),
+            ["allow_login_shell=false"]
+        );
     }
 
     #[test]
@@ -624,6 +636,7 @@ mod tests {
         cfg["plugins"]["browser@openai-bundled"]["enabled"] = json!(true);
         cfg["sqlite_home"] = Value::Null;
         cfg["history"]["persistence"] = json!("save-all");
+        cfg["allow_login_shell"] = json!(true);
         let found = check_effective(&inputs(), &c, &skills(true, true)).unwrap_err();
         assert_eq!(
             found,
@@ -641,6 +654,7 @@ mod tests {
                 Mismatch::SkillEnabled("/Users/sam/.codex/skills/sentry/SKILL.md".into()),
                 Mismatch::StateNotIsolated("sqlite_home"),
                 Mismatch::HistoryKept,
+                Mismatch::LoginShell,
             ]
         );
     }
