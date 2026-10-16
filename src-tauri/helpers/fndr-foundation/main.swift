@@ -60,6 +60,9 @@ func schema(for fields: [Field], rootDescription: String) throws -> GenerationSc
 
 @available(macOS 26.0, *)
 func errorCode(_ error: Error) -> String {
+    // LanguageModelError only exists in the macOS 27 SDK. The macOS 26 SDKs
+    // (Swift 6.3 and older) lack it, so they skip this branch at compile time.
+    #if compiler(>=6.4)
     if #available(macOS 27.0, *), let error = error as? LanguageModelError {
         switch error {
         case .contextSizeExceeded: return "context_size"
@@ -68,6 +71,7 @@ func errorCode(_ error: Error) -> String {
         default: return "generation_failed"
         }
     }
+    #endif
     if let error = error as? LanguageModelSession.GenerationError {
         switch error {
         case .exceededContextWindowSize: return "context_size"
