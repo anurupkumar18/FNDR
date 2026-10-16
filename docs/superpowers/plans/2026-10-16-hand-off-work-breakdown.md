@@ -223,7 +223,9 @@ Tests: each script renders its fixture spec under the real toolchain (`make test
 
 Files: `src-tauri/src/handoff/store.rs`; `src-tauri/src/ipc/commands/hand_off.rs`; `src-tauri/src/privacy_proof.rs` (`Feature::HandOff`); `src/shared/ipc/` wrappers.
 
-Store: `hand-offs.json` in app data, mode 0600, newest 50 kept, written atomically. At launch any `Working` or `Starting` job becomes `Stopped`.
+Store: the state store under `hand_off_jobs_v1`, the same way `agent::peer_runs` keeps peer runs; newest 50 kept, at most one running. At launch any running job becomes `Stopped`.
+
+**Status 2026-10-16:** `handoff::store` is built (5 tests: restart, one running job, the cap, the launch sweep, ratings). The commands and calling the sweep at launch are not.
 
 Commands: `hand_off_draft(source)`, `hand_off_update_draft(draft_id, ticks, goal)`, `hand_off_start(draft_id)`, `hand_off_stop(job_id)`, `hand_off_revise(job_id, text)`, `hand_off_keep(job_id)`, `hand_off_rate(job_id, rating)`, `hand_off_list()`, `hand_off_get(job_id)`, `hand_off_open(job_id, path)`, `hand_off_settings()`, `hand_off_set_settings(...)`, `hand_off_self_test()`, `hand_off_install_toolchain()`. Event channel `hand_off://progress` carries `{ job_id, event }` (ADR 011: one initial fetch, then events).
 
