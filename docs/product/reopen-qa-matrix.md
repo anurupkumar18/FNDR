@@ -198,6 +198,19 @@ Live Accessibility probe (2026-10-08):
 
 `open cursor://file/private/tmp/re10-fixtures/re10-notes.txt` launched Cursor on the fixture. Unit tests: `app_deep_link_for_maps_editor_titles_and_document_paths_r19`, `build_reopen_target_orders_url_then_deep_link_then_file_then_app`, `resolve_and_plan_vscode_deep_link_opens_r19`. `cd src-tauri && cargo test --lib reopen` and `cargo test --lib plan_reopen` pass.
 
+## RE-11 follow-up (2026-10-15)
+
+Memories stored before the RE fixes now get a better reopen target written to Lance, not just resolved when opened. `upgraded_reopen_target` (`memory/reopen.rs`) rebuilds a target from what the row already stores: `url` (credentials stripped), an editor path in the window title, `files_touched` (absolute paths first), and the app. It also reads a page from the window title or a `#page=` fragment. The new target replaces the stored one only when it ranks strictly higher (RE-06 ranks). The stored target wins every tie, so a capture-time document path or passage is never swapped for a `files_touched` guess. Agent notes are skipped.
+
+Two places use it:
+
+1. `normalize_record_for_index` runs it on every write. Before, it only filled `unknown` rows, so an `app_bundle` row with a stored URL never upgraded.
+2. `memory/reopen_backfill.rs` makes one pass over every memory at startup (after the 60 s maintenance delay). It runs only while `allows_graph_idle_commit` allows (not paused, charging or battery above 40%, CPU under 60%) and never pauses capture. It re-reads each batch of 16 before writing and writes each batch as one merge-insert that keeps chunks. Progress is saved to `reopen_backfill_checkpoint.json` (last id, upgraded count, complete) and `reopen_backfill_progress.json` in the data dir. The pass resumes after a restart and stops for good once complete. Bump `CHECKPOINT_VERSION` to run it again after the rules change.
+
+Vault health on the owner profile (aggregate only), 2026-10-15: `memories_v4_minilm_384` has 4 rows, 25.0% exact reopen. A dry run of the pass on a `/tmp` copy of that profile scanned the 4 rows and upgraded 0: none stores a URL, absolute path, or title path beyond what its target already has, so they stay honest app only. Opening the copy also ran the existing legacy-table migration (17 rows, 47.1% exact). That migration comes from `Store::new`, not this pass. The copy was deleted.
+
+Unit tests: `upgraded_reopen_target_*` (URL, credential strip, absolute file, Preview page, browser PDF page, editor deep link, honest app only, no downgrade, page added to a stored document path, agent note), `normalize_upgrades_a_stored_app_target_from_the_stored_url_r37`, and `reopen_backfill_persists_upgrades_for_legacy_rows_and_then_stops_r37`. That last test writes `app_bundle` rows raw, bypassing normalize. The pass upgrades the row with a URL to `browser_url`, leaves the app-only row alone, and a second run does nothing. `cd src-tauri && cargo test --lib reopen` (76 passed). `make test`: typecheck, 88 frontend test files, and 1312 Rust lib tests pass.
+
 ## Matrix
 
 | Row | Scenario | Expected target | Expected reopen | Stored target | Reopen result | Build | Date | Notes |
@@ -238,7 +251,7 @@ Live Accessibility probe (2026-10-08):
 | R34 | Downloaded file renamed in Finder | Found again | Opens the renamed file | Extra tracker row `fndr-re01-report-renamed.pdf`; old name row remains | wrong | `123cd75` | 2026-09-28 | Watcher treated rename as a new file. No “found again” / `OpenedMoved`. |
 | R35 | `.dmg`, `.pkg`, `.app`, or `.command` download | File path | Revealed in Finder, never opened or run | `file_path` for the installer/script | reveal in Finder (`open -R`); never launched | RE-09 | 2026-10-07 | Extension list plus quarantined unix-executable. Quarantined PDF still opens. MCP returns `reveal_only` and does not launch. See RE-09 section. |
 | R36 | Memory merged from frames with different targets | The most specific, newest target | That target | Merge of the RE-01 Chrome card (`app_bundle` plus a stray file path) with a `browser_url` capture: `browser_url` `https://en.wikipedia.org/wiki/Nitrogen`, no file path | pass: reopens the URL | RE-06 | 2026-10-05 | Whole-target merge by rank (see RE-06 section). Covered by `merge_keeps_browser_target_over_app_with_stray_file_r36`. Unit-test verified, not a live capture. |
-| R37 | Memory captured before this change | Backfilled target or honest "app only" | As stored | | n/a | `123cd75` | 2026-09-28 | Fresh profile has no pre-change rows. Read path: `normalize_embed_migrate.rs` backfills `Unknown` from `url` / `files_touched` / bundle. |
+| R37 | Memory captured before this change | Backfilled target or honest "app only" | As stored | Legacy `app_bundle` row with a stored https `url` rewritten to `browser_url`; legacy app-only row stays `app_bundle` | pass: backfilled or honest app only | RE-11 | 2026-10-15 | Idle pass `memory/reopen_backfill.rs` plus normalize upgrade. Owner profile: 4 rows, 0 upgradable (all honest app only or already exact). Covered by `reopen_backfill_persists_upgrades_for_legacy_rows_and_then_stops_r37`. See RE-11 section. |
 | R38 | Deleted memory | Nothing | Not reachable | Not deleted in the UI | n/a | `123cd75` | 2026-09-28 | Not exercised live. `reopen_memory` errors `Memory not found` if the id is gone. |
 | R39 | Blocklisted site | Nothing stored | Not applicable | Blocklist not changed in Settings | n/a | `123cd75` | 2026-09-28 | Default blocklist is apps (1Password, Keychain, System Settings). Skip path: `capture_context_skip_reason` + `Blocklist`. |
 | R40 | Document on the second display | Same as single display | Same | | not available | `123cd75` | 2026-09-28 | No second display in this run |

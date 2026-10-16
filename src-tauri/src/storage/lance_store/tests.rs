@@ -1295,6 +1295,74 @@ async fn remember_keeps_full_note_text() {
     assert_eq!(hit_ids(&hits), vec!["note-1"]);
 }
 
+#[test]
+fn normalize_upgrades_a_stored_app_target_from_the_stored_url_r37() {
+    use crate::memory::reopen::ReopenKind;
+    let mut row = record(Some("https://example.com/a"), "Example", "Example text");
+    row.bundle_id = Some("com.google.Chrome".into());
+    row.reopen_kind = ReopenKind::AppBundle;
+    row.reopen_app_bundle_id = Some("com.google.Chrome".into());
+
+    let normalized = normalize_record_for_index(&row);
+    assert_eq!(normalized.reopen_kind, ReopenKind::BrowserUrl);
+    assert_eq!(normalized.reopen_url.as_deref(), Some("https://example.com/a"));
+    assert_eq!(normalized.reopen_app_bundle_id, None);
+
+    row.url = None;
+    let app_only = normalize_record_for_index(&row);
+    assert_eq!(app_only.reopen_kind, ReopenKind::AppBundle);
+    assert_eq!(app_only.reopen_app_bundle_id.as_deref(), Some("com.google.Chrome"));
+}
+
+#[tokio::test]
+async fn reopen_backfill_persists_upgrades_for_legacy_rows_and_then_stops_r37() {
+    use crate::memory::reopen::ReopenKind;
+    use crate::memory::reopen_backfill::{checkpoint_path, run_reopen_backfill};
+    use std::time::Duration;
+
+    let legacy = |id: &str, url: Option<&str>| {
+        let mut row = record(url, "Example", "Example text");
+        row.id = id.to_string();
+        row.bundle_id = Some("com.google.Chrome".into());
+        row.reopen_kind = ReopenKind::AppBundle;
+        row.reopen_app_bundle_id = Some("com.google.Chrome".into());
+        row
+    };
+    let rows = vec![
+        legacy("legacy-url", Some("https://example.com/a")),
+        legacy("legacy-app", None),
+    ];
+    let (dir, store) = keyword_store(Vec::new()).await;
+    // Written raw, as a row stored before normalize upgraded targets.
+    let batch = records_to_batch(&rows).expect("batch");
+    let schema = Arc::new(memory_schema());
+    store
+        .table
+        .add(Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema))
+            as Box<dyn RecordBatchReader + Send>)
+        .execute()
+        .await
+        .expect("raw add");
+
+    let progress = run_reopen_backfill(&store, dir.path(), || true, Duration::ZERO, Duration::ZERO)
+        .await
+        .expect("backfill");
+    assert_eq!((progress.total, progress.processed, progress.upgraded), (2, 2, 1));
+    assert_eq!(progress.phase, "complete");
+
+    let upgraded = store.get_memory_by_id("legacy-url").await.unwrap().unwrap();
+    assert_eq!(upgraded.reopen_kind, ReopenKind::BrowserUrl);
+    assert_eq!(upgraded.reopen_url.as_deref(), Some("https://example.com/a"));
+    let app_only = store.get_memory_by_id("legacy-app").await.unwrap().unwrap();
+    assert_eq!(app_only.reopen_kind, ReopenKind::AppBundle);
+    assert!(checkpoint_path(dir.path()).exists());
+
+    let again = run_reopen_backfill(&store, dir.path(), || true, Duration::ZERO, Duration::ZERO)
+        .await
+        .expect("second run");
+    assert_eq!((again.phase.as_str(), again.upgraded, again.total), ("complete", 1, 0));
+}
+
 #[tokio::test]
 async fn agent_note_search_projection_preserves_provenance_from_storage() {
     let mut note = keyword_row(
