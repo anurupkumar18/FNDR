@@ -21,9 +21,12 @@ import {
 import {
     type ModelInfo,
     type OnboardingState,
+    type AppleModelStatus,
+    getAppleModelStatus,
     getOnboardingState,
     listAvailableModels,
     saveOnboardingState,
+    setAppleModelEnabled,
 } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { STORAGE_KEYS } from "@/shared/utils/config";
@@ -51,6 +54,7 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { PrivacyPanel } from "./PrivacyPanel";
+import { ActionApprovalPanel } from "@/domains/actions/ActionApprovalPanel";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
@@ -191,6 +195,9 @@ export function ControlPanel({
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMessage, setProfileMessage] = useState<string | null>(null);
     const [models, setModels] = useState<ModelInfo[]>([]);
+    const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
+    const [appleModelBusy, setAppleModelBusy] = useState(false);
+    const [appleModelError, setAppleModelError] = useState<string | null>(null);
     const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
     const [settingsError, setSettingsError] = useState<string | null>(null);
     const [agentNotesEnabled, setAgentNotesEnabledState] = useState<boolean | null>(null);
@@ -212,15 +219,18 @@ export function ControlPanel({
         setSettingsError(null);
         setAgentNotesEnabledState(null);
         setAgentNotesError(null);
+        setAppleModel(null);
+        setAppleModelError(null);
         const results = await Promise.allSettled([
             getBlocklist(),
             getOnboardingState(),
             listAvailableModels(),
             fndrQualityStatus(),
             getAgentNotesEnabled(),
+            getAppleModelStatus(),
         ] as const);
         if (version !== settingsLoadVersion.current) return;
-        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult] = results;
+        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult, appleResult] = results;
         const unavailable: string[] = [];
 
         if (blocklistResult.status === "fulfilled") {
@@ -249,6 +259,11 @@ export function ControlPanel({
             setAgentNotesEnabledState(agentNotesResult.value);
         } else {
             unavailable.push("assistant notes");
+        }
+        if (appleResult.status === "fulfilled") {
+            setAppleModel(appleResult.value);
+        } else {
+            unavailable.push("Apple model");
         }
 
         if (unavailable.length > 0) {
@@ -402,6 +417,21 @@ export function ControlPanel({
             setAgentNotesError(`Assistant notes update failed: ${String(error)}`);
         } finally {
             setAgentNotesBusy(false);
+        }
+    };
+
+    const handleToggleAppleModel = async () => {
+        if (!appleModel || appleModelBusy || appleModel.availability !== "available") return;
+        setAppleModelBusy(true);
+        setAppleModelError(null);
+        try {
+            const next = await setAppleModelEnabled(!appleModel.enabled);
+            settingsLoadVersion.current += 1;
+            setAppleModel(next);
+        } catch (error) {
+            setAppleModelError(`Apple model update failed: ${String(error)}`);
+        } finally {
+            setAppleModelBusy(false);
         }
     };
 
@@ -828,12 +858,41 @@ export function ControlPanel({
                                         </p>
                                     )}
                                 </section>
+                                <section className="panel-section" aria-label="Action controls">
+                                    <ActionApprovalPanel embedded />
+                                </section>
                                 <NotchDoSettings />
                                 <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
                                     <h3 id="settings-models-title">Models</h3>
                                     <p className="section-hint">
                                         What intelligence is available locally, and why a feature may be limited.
                                     </p>
+                                    <p className="section-hint">
+                                        Last text backend: {status?.last_text_backend === "apple_foundation"
+                                            ? "Apple on-device model"
+                                            : status?.last_text_backend === "local_gguf"
+                                                ? "Downloaded Qwen model"
+                                                : status?.last_text_backend === "unavailable"
+                                                    ? "No text model available"
+                                                : "No text model call yet"}
+                                    </p>
+                                    <label className="settings-switch-row">
+                                        <span>Use Apple on-device model</span>
+                                        <input
+                                            type="checkbox"
+                                            role="switch"
+                                            className="settings-switch"
+                                            checked={appleModel?.enabled === true}
+                                            disabled={!appleModel || appleModelBusy || appleModel.availability !== "available"}
+                                            onChange={() => void handleToggleAppleModel()}
+                                        />
+                                    </label>
+                                    <p className="section-hint">
+                                        {appleModel?.availability === "available"
+                                            ? "Uses Apple's local model for extraction, snippets and answers when Qwen is not installed. Downloaded Qwen adds broader text and visual understanding."
+                                            : "Requires macOS 26 or later, a supported Mac, and Apple Intelligence turned on and ready."}
+                                    </p>
+                                    {appleModelError && <p className="settings-message settings-message--error" role="alert">{appleModelError}</p>}
                                     {status?.embedding_backend === "unavailable" && (
                                         <p className="model-error" role="alert">
                                             Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.

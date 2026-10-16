@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     beginActivityTrace,
     recordActivityStep,
@@ -7,6 +7,11 @@ import {
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     getPrivacyProof,
+    deleteMemoriesInRange,
+    exportMemoriesArchive,
+    importMemoriesArchive,
+    getPrivacyExclusions,
+    type PrivacyExclusion,
     listPeerRuns,
     type ModelRequest,
     type OperatorRunSummary,
@@ -17,6 +22,7 @@ import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import "../workspace/PipelineInspectorPanel.css";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { EncryptionStatus } from "./EncryptionStatus";
 
 interface Proof {
     evaluated: number;
@@ -41,6 +47,7 @@ function runOutcome(run: OperatorRunSummary): string {
 }
 
 const FEATURE_LABELS: Record<string, string> = {
+    daily_output_send: "Daily output sent",
     notch_do_plan: "Notch Do planned a request",
     notch_do_step: "Notch Do ran a step",
     notch_do_screen_text: "Notch Do sent what an app showed",
@@ -49,6 +56,7 @@ const FEATURE_LABELS: Record<string, string> = {
 };
 
 const INCLUDED_LABELS: Record<string, string> = {
+    memory_summaries: "memory summaries",
     memories: "memories",
     screen_text: "on-screen text",
     screenshot: "a screenshot",
@@ -203,6 +211,147 @@ interface PrivacyProofPanelProps {
     onClose: () => void;
 }
 
+function RangeEraseControls() {
+    const [from, setFrom] = useState("");
+    const [until, setUntil] = useState("");
+    const [preview, setPreview] = useState<{ startMs: number; endMs: number; matched: number } | null>(null);
+    const [deleted, setDeleted] = useState<number | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const startMs = from ? new Date(from).getTime() : NaN;
+    const endMs = until ? new Date(until).getTime() : NaN;
+    const validRange = Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs;
+    const matched = preview?.startMs === startMs && preview.endMs === endMs ? preview.matched : null;
+
+    async function previewRange() {
+        if (!validRange) return;
+        setBusy(true);
+        setError(null);
+        setDeleted(null);
+        try {
+            const result = await deleteMemoriesInRange(startMs, endMs, true);
+            setPreview({ startMs, endMs, matched: result.matched });
+        } catch {
+            setError("FNDR could not preview this range.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function deleteRange() {
+        if (!preview || matched === null || matched === 0 || busy) return;
+        setBusy(true);
+        setError(null);
+        try {
+            const result = await deleteMemoriesInRange(preview.startMs, preview.endMs, false);
+            setDeleted(result.deleted);
+            setPreview(null);
+        } catch {
+            setError("FNDR could not complete the deletion. Check the range and try again.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <section aria-label="Delete memories by time range" className="pipeline-panel-card pipeline-range-controls">
+            <h3>Delete memories by time range</h3>
+            <p className="pipeline-muted">Preview the count before deleting. The end time is excluded.</p>
+            <label>From <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+            <label>Until <input type="datetime-local" value={until} onChange={(event) => setUntil(event.target.value)} /></label>
+            <div className="pipeline-range-actions">
+                <button type="button" disabled={!validRange || busy} onClick={previewRange}>Preview deletion</button>
+                <button type="button" disabled={matched === null || matched === 0 || busy} onClick={deleteRange}>
+                    {matched === null ? "Delete matching memories" : `Delete ${matched} ${matched === 1 ? "memory" : "memories"}`}
+                </button>
+            </div>
+            <p aria-live="polite">
+                {matched !== null && `${matched} ${matched === 1 ? "memory matches" : "memories match"} this range.`}
+                {deleted !== null && `${deleted} ${deleted === 1 ? "memory" : "memories"} deleted.`}
+            </p>
+            {error && <p role="alert">{error}</p>}
+        </section>
+    );
+}
+
+function ArchiveControls() {
+    const [busy, setBusy] = useState(false);
+    const [message, setMessage] = useState<string | null>(null);
+    const [directory, setDirectory] = useState<string | null>(null);
+
+    async function exportArchive() {
+        setBusy(true);
+        setMessage(null);
+        setDirectory(null);
+        try {
+            const report = await exportMemoriesArchive();
+            setMessage(`${report.exported} ${report.exported === 1 ? "memory" : "memories"} exported as encrypted JSONL and Markdown.`);
+            setDirectory(report.jsonl_path.replace(/\/[^/]+$/, ""));
+        } catch {
+            setMessage("The encrypted export was not saved.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function importArchive() {
+        setBusy(true);
+        setMessage(null);
+        setDirectory(null);
+        try {
+            const count = await importMemoriesArchive();
+            setMessage(`${count} ${count === 1 ? "memory" : "memories"} restored.`);
+        } catch {
+            setMessage("FNDR could not restore this archive. Choose a JSONL archive encrypted on this Mac.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <section aria-label="Memory archive" className="pipeline-panel-card pipeline-range-controls">
+            <h3>Memory archive</h3>
+            <p className="pipeline-muted">Save JSONL and Markdown together. Both files are encrypted with this Mac's Keychain key. Restore uses the JSONL file.</p>
+            <div className="pipeline-range-actions">
+                <button type="button" disabled={busy} onClick={exportArchive}>Export encrypted memories</button>
+                <button type="button" disabled={busy} onClick={importArchive}>Import encrypted memories</button>
+            </div>
+            {message && <p aria-live="polite">{message}</p>}
+            {directory && <p className="pipeline-muted">Saved in {directory}</p>}
+        </section>
+    );
+}
+
+function DefaultExclusions() {
+    const [categories, setCategories] = useState<PrivacyExclusion[]>([]);
+    const [failed, setFailed] = useState(false);
+    useEffect(() => {
+        let current = true;
+        getPrivacyExclusions().then(
+            (result) => { if (current) setCategories(result); },
+            () => { if (current) setFailed(true); },
+        );
+        return () => { current = false; };
+    }, []);
+    if (categories.length === 0) {
+        return failed ? <p role="alert">Default exclusions could not be loaded.</p> : null;
+    }
+    return (
+        <section aria-label="Default capture exclusions" className="pipeline-panel-card">
+            <h3>Excluded from capture by default</h3>
+            <ul className="pipeline-skip-reasons">
+                {categories.map((category) => (
+                    <li key={category.id}>
+                        <strong>{category.label}</strong>
+                        <span>{category.examples}</span>
+                    </li>
+                ))}
+            </ul>
+            <p className="pipeline-muted">Private windows are recognized by title markers. A browser that shows no marker may not be detected.</p>
+        </section>
+    );
+}
+
 /** Self-fetching panel wrapper around {@link PrivacyProof}, following the same
  *  isVisible/onClose + polling contract as EngineMetricsPanel/EngineMetricsCard. */
 export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps) {
@@ -317,6 +466,10 @@ export function PrivacyProofPanel({ isVisible, onClose }: PrivacyProofPanelProps
                 {error && <div className="pipeline-error" role="alert">{error}</div>}
                 {peerRunsUnavailable && <p className="pipeline-muted">Peer send history could not be loaded.</p>}
                 {proof ? <PrivacyProof proof={proof} /> : null}
+                <DefaultExclusions />
+                <EncryptionStatus />
+                <RangeEraseControls />
+                <ArchiveControls />
             </div>
         </div>
     );

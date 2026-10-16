@@ -63,9 +63,33 @@ pub const AGENT_NOTE_SOURCE_TYPE: &str = "agent";
 /// Session-key prefix that keeps every agent note its own card.
 pub const AGENT_NOTE_SESSION_PREFIX: &str = "agent_note:";
 
+/// Prefix of the `source_type` of a row an import connector produced
+/// (`import:<kind>`). Written only by `crate::import`.
+pub const IMPORT_SOURCE_TYPE_PREFIX: &str = "import:";
+
+/// Session-key prefix of imported rows (`import:<kind>:<external id>`). It
+/// keeps every imported item its own card.
+pub const IMPORT_SESSION_PREFIX: &str = "import:";
+
+/// True for a `source_type` that marks a leaf row: stored whole, found,
+/// shown with provenance, deleted; never merged, reviewed, repaired, or fed to
+/// derived artifacts. Agent notes and imports are leaves.
+pub fn is_leaf_source_type(source_type: &str) -> bool {
+    source_type == AGENT_NOTE_SOURCE_TYPE || source_type.starts_with(IMPORT_SOURCE_TYPE_PREFIX)
+}
+
 impl MemoryRecord {
     pub fn is_agent_note(&self) -> bool {
         self.source_type == AGENT_NOTE_SOURCE_TYPE
+    }
+
+    pub fn is_import(&self) -> bool {
+        self.source_type.starts_with(IMPORT_SOURCE_TYPE_PREFIX)
+    }
+
+    /// The one leaf rule: see [`is_leaf_source_type`].
+    pub fn is_leaf_row(&self) -> bool {
+        is_leaf_source_type(&self.source_type)
     }
 
     pub fn added_by(&self) -> Option<String> {
@@ -833,6 +857,15 @@ pub struct SearchResult {
 impl SearchResult {
     pub fn is_agent_note(&self) -> bool {
         self.source_type == AGENT_NOTE_SOURCE_TYPE
+    }
+
+    pub fn is_import(&self) -> bool {
+        self.source_type.starts_with(IMPORT_SOURCE_TYPE_PREFIX)
+    }
+
+    /// The one leaf rule: see [`is_leaf_source_type`].
+    pub fn is_leaf_row(&self) -> bool {
+        is_leaf_source_type(&self.source_type)
     }
 }
 

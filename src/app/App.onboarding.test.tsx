@@ -47,10 +47,15 @@ vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: vi.fn() }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState,
+    getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
     listAvailableModels: vi.fn().mockResolvedValue([]),
     saveOnboardingState: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/shared/ipc/tauri", () => ({
+    getActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    setActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    listActionApprovals: vi.fn().mockResolvedValue([]),
+    resolveActionApproval: vi.fn().mockResolvedValue(undefined),
     CAPTURE_STATUS_EVENT: "capture-status",
     OMNIBAR_OPEN_MEMORY_EVENT: "omnibar-open-memory",
     PRIVACY_ALERTS_EVENT: "privacy-alerts",

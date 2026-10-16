@@ -10,6 +10,8 @@ import {
 import { openExternalUrl } from "@/shared/utils/openExternalUrl";
 import { OperatorPermissions } from "@/domains/screen-guide/OperatorPermissions";
 import { CalendarMeetingPrep } from "./CalendarMeetingPrep";
+import { ImportSources } from "./ImportSources";
+import { McpConnectCards } from "./McpConnectCards";
 import "./SetupCenter.css";
 
 function message(reason: unknown): string {
@@ -140,9 +142,12 @@ export function SetupCenter({ embedded = false }: { embedded?: boolean }) {
                 ))}
             </ul>
 
+            <McpConnectCards />
+
             <h4>macOS permissions</h4>
             <OperatorPermissions />
             <CalendarMeetingPrep />
+            <ImportSources mode="settings" />
 
             {error ? (
                 <p className="sg-diagnostics-error" role="alert">

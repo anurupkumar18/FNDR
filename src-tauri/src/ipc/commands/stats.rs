@@ -65,6 +65,7 @@ pub struct CaptureStatus {
     pub ai_model_available: bool,
     pub ai_model_loaded: bool,
     pub loaded_model_id: Option<String>,
+    pub last_text_backend: String,
     pub embedding_backend: String,
     pub embedding_degraded: bool,
     pub embedding_detail: String,
@@ -94,6 +95,7 @@ pub fn build_capture_status(state: &AppState) -> CaptureStatus {
         ai_model_available: state.ai_model_available(),
         ai_model_loaded: state.ai_model_loaded(),
         loaded_model_id: state.loaded_model_id(),
+        last_text_backend: state.last_text_backend(),
         embedding_backend: embed_status.backend,
         embedding_degraded: embed_status.degraded,
         embedding_detail: embed_status.detail,
@@ -109,6 +111,7 @@ pub fn build_capture_status(state: &AppState) -> CaptureStatus {
 pub fn emit_capture_status(state: &AppState) {
     let handle = state.app_handle.read().clone();
     if let Some(handle) = handle {
+        crate::privacy::recording::refresh_indicator(&handle, state);
         let _ = handle.emit("capture://status", build_capture_status(state));
     }
 }
@@ -267,6 +270,16 @@ fn resume_capture_for_user(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn toggle_capture_for_user(state: &AppState) -> Result<bool, String> {
+    if state.is_user_capture_paused() {
+        resume_capture_for_user(state)?;
+        Ok(false)
+    } else {
+        set_capture_paused_for_user(state, true)?;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod capture_pause_persistence_tests {
     use super::*;
@@ -348,6 +361,16 @@ mod capture_pause_persistence_tests {
         let relaunched = fixture.app_state();
         assert!(!relaunched.is_paused.load(Ordering::SeqCst));
         assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn shortcut_toggle_persists_pause_and_resume() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        assert_eq!(toggle_capture_for_user(&state).unwrap(), true);
+        assert!(!fixture.app_state().is_capturing());
+        assert_eq!(toggle_capture_for_user(&state).unwrap(), false);
+        assert!(fixture.app_state().is_capturing());
     }
 
     #[test]
@@ -1487,6 +1510,7 @@ pub fn current_runtime_snapshot(
 pub async fn get_runtime_metrics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot, String> {
+    crate::telemetry::system_metrics::note_display_read();
     Ok(current_runtime_snapshot(state.inner()))
 }
 

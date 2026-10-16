@@ -28,7 +28,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ProcessMemorySnapshot {
@@ -62,6 +62,24 @@ pub struct ProcessEnergySnapshot {
     /// Coarse label derived from idle wakeups + billed time over the interval:
     /// `low`, `moderate`, `high`.
     pub label: String,
+}
+
+/// Cumulative process counters since launch. Two samples bracket a window; see
+/// `telemetry::footprint`. CPU time comes from getrusage, which includes work
+/// done by threads that have exited during the window.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct ProcessCounters {
+    pub cpu_time_ms: u64,
+    pub idle_wakeups: u64,
+    pub interrupt_wakeups: u64,
+    pub billed_system_time_ns: u64,
+    pub disk_bytes_written: u64,
+    pub rss_bytes: u64,
+    pub phys_footprint_bytes: u64,
+}
+
+pub fn process_counters() -> ProcessCounters {
+    sample_process_counters()
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -118,6 +136,56 @@ pub struct SystemMetricsSnapshot {
 
 static SNAPSHOT: OnceLock<Mutex<SystemMetricsSnapshot>> = OnceLock::new();
 static LAST_REFRESH_MS: AtomicI64 = AtomicI64::new(0);
+static LAST_DISPLAY_READ_MS: AtomicI64 = AtomicI64::new(0);
+
+/// Sampling cadence while a screen is showing these numbers.
+pub const DISPLAYED_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+/// Sampling cadence with nobody looking. Memory pressure and the CPU gate
+/// still read the snapshot, and a few seconds of staleness does not change them.
+pub const BACKGROUND_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+/// How long after the last display read the numbers count as being watched.
+const DISPLAY_DEMAND_WINDOW_MS: i64 = 10_000;
+
+/// What the next refresh should do. `ioreg` is a spawned process (about 14 ms of
+/// CPU per call on an M-series Mac, measured 2026-10-15), so GPU is read only
+/// while a screen shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SamplerPlan {
+    pub next_interval: Duration,
+    pub sample_gpu: bool,
+}
+
+pub fn sampler_plan(now_ms: i64, last_display_read_ms: i64) -> SamplerPlan {
+    let watched = last_display_read_ms > 0
+        && now_ms.saturating_sub(last_display_read_ms) < DISPLAY_DEMAND_WINDOW_MS;
+    SamplerPlan {
+        next_interval: if watched {
+            DISPLAYED_SAMPLE_INTERVAL
+        } else {
+            BACKGROUND_SAMPLE_INTERVAL
+        },
+        sample_gpu: watched,
+    }
+}
+
+fn current_sampler_plan() -> SamplerPlan {
+    sampler_plan(
+        chrono::Utc::now().timestamp_millis(),
+        LAST_DISPLAY_READ_MS.load(Ordering::Relaxed),
+    )
+}
+
+/// The snapshot for a screen that shows it. Reading it for display switches the
+/// sampler to its fast cadence and turns GPU sampling on until the screen stops
+/// asking.
+pub fn latest_snapshot_for_display() -> SystemMetricsSnapshot {
+    note_display_read();
+    latest_snapshot()
+}
+
+pub fn note_display_read() {
+    LAST_DISPLAY_READ_MS.store(chrono::Utc::now().timestamp_millis(), Ordering::Relaxed);
+}
 
 fn snapshot_slot() -> &'static Mutex<SystemMetricsSnapshot> {
     SNAPSHOT.get_or_init(|| Mutex::new(SystemMetricsSnapshot::default()))
@@ -276,7 +344,11 @@ pub fn refresh_once(model_memory: Vec<ModelMemoryEntry>) {
     let process_energy = sample_process_energy(interval_ms);
     let host_cpu = sample_host_cpu();
     let host_memory = sample_host_memory();
-    let gpu = sample_gpu();
+    let gpu = if current_sampler_plan().sample_gpu {
+        sample_gpu()
+    } else {
+        snapshot_slot().lock().gpu.clone()
+    };
 
     let snap = SystemMetricsSnapshot {
         generated_at_ms: now_ms,
@@ -369,16 +441,12 @@ where
     F: Fn() -> Vec<ModelMemoryEntry> + Send + 'static,
 {
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(1_000));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            interval.tick().await;
-            let started = Instant::now();
             let model_memory = loader();
             // Sampling is all blocking syscalls; keep it cheap (<10ms typical)
             // and run on the current thread so we don't fan out spawn_blocking.
             refresh_once(model_memory);
-            let _ = started.elapsed();
+            tokio::time::sleep(current_sampler_plan().next_interval).await;
         }
     });
 }
@@ -488,6 +556,45 @@ mod imp {
     #[allow(dead_code)]
     #[doc(hidden)]
     pub type ThreadAct = u32;
+
+    pub fn sample_process_counters() -> ProcessCounters {
+        let mut info = MaybeUninit::<mach_task_basic_info>::uninit();
+        let mut count = MACH_TASK_BASIC_INFO_COUNT;
+        let kr = unsafe {
+            task_info(
+                mach_task_self(),
+                MACH_TASK_BASIC_INFO,
+                info.as_mut_ptr() as *mut _,
+                &mut count,
+            )
+        };
+        if kr != KERN_SUCCESS {
+            return ProcessCounters::default();
+        }
+        let info = unsafe { info.assume_init() };
+        let rusage = sample_rusage();
+        let mut cpu_usage = MaybeUninit::<libc::rusage>::uninit();
+        let cpu_time_ms =
+            if unsafe { libc::getrusage(libc::RUSAGE_SELF, cpu_usage.as_mut_ptr()) } == 0 {
+                let cpu_usage = unsafe { cpu_usage.assume_init() };
+                let time_ms = |time: libc::timeval| {
+                    (time.tv_sec.max(0) as u64).saturating_mul(1_000)
+                        + (time.tv_usec.max(0) as u64) / 1_000
+                };
+                time_ms(cpu_usage.ru_utime).saturating_add(time_ms(cpu_usage.ru_stime))
+            } else {
+                0
+            };
+        ProcessCounters {
+            cpu_time_ms,
+            idle_wakeups: rusage.map(|r| r.ri_pkg_idle_wkups).unwrap_or(0),
+            interrupt_wakeups: rusage.map(|r| r.ri_interrupt_wkups).unwrap_or(0),
+            billed_system_time_ns: rusage.map(|r| r.ri_billed_system_time).unwrap_or(0),
+            disk_bytes_written: rusage.map(|r| r.ri_diskio_byteswritten).unwrap_or(0),
+            rss_bytes: info.resident_size,
+            phys_footprint_bytes: rusage.map(|r| r.ri_phys_footprint).unwrap_or(0),
+        }
+    }
 
     pub fn sample_process_memory() -> ProcessMemorySnapshot {
         let mut info = MaybeUninit::<mach_task_basic_info>::uninit();
@@ -787,11 +894,15 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 use imp::{
-    sample_gpu, sample_host_cpu, sample_host_memory, sample_process_cpu, sample_process_energy,
-    sample_process_io, sample_process_memory,
+    sample_gpu, sample_host_cpu, sample_host_memory, sample_process_counters, sample_process_cpu,
+    sample_process_energy, sample_process_io, sample_process_memory,
 };
 
 // Non-macOS stubs keep the rest of the codebase platform-agnostic.
+#[cfg(not(target_os = "macos"))]
+fn sample_process_counters() -> ProcessCounters {
+    ProcessCounters::default()
+}
 #[cfg(not(target_os = "macos"))]
 fn sample_process_cpu(_interval_ms: u64) -> ProcessCpuSnapshot {
     ProcessCpuSnapshot::default()
@@ -825,6 +936,53 @@ fn sample_gpu() -> GpuSnapshot {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn nobody_watching_means_slow_sampling_and_no_gpu_process() {
+        let plan = sampler_plan(100_000, 0);
+        assert_eq!(plan.next_interval, BACKGROUND_SAMPLE_INTERVAL);
+        assert!(!plan.sample_gpu);
+        let stale = sampler_plan(100_000, 100_000 - DISPLAY_DEMAND_WINDOW_MS);
+        assert_eq!(stale, plan);
+    }
+
+    #[test]
+    fn a_screen_reading_the_numbers_gets_one_second_samples_with_gpu() {
+        let plan = sampler_plan(100_000, 95_000);
+        assert_eq!(plan.next_interval, DISPLAYED_SAMPLE_INTERVAL);
+        assert!(plan.sample_gpu);
+    }
+
+    #[test]
+    #[serial]
+    fn only_an_explicit_display_read_turns_on_gpu_demand() {
+        LAST_DISPLAY_READ_MS.store(0, Ordering::Relaxed);
+        assert!(!current_sampler_plan().sample_gpu);
+        note_display_read();
+        assert!(current_sampler_plan().sample_gpu);
+        LAST_DISPLAY_READ_MS.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    #[serial]
+    fn process_counters_only_grow_while_work_is_done() {
+        let before = process_counters();
+        let mut acc = 0u64;
+        for i in 0..40_000_000u64 {
+            acc = acc.wrapping_add(i * i);
+        }
+        std::hint::black_box(acc);
+        let after = process_counters();
+        if cfg!(target_os = "macos") {
+            assert!(after.rss_bytes > 0);
+            assert!(
+                after.cpu_time_ms >= before.cpu_time_ms + 20,
+                "busy work should add at least 20 ms of process CPU: before={before:?} after={after:?}"
+            );
+            assert!(after.idle_wakeups >= before.idle_wakeups);
+            assert!(after.disk_bytes_written >= before.disk_bytes_written);
+        }
+    }
 
     #[test]
     #[serial]

@@ -1,7 +1,8 @@
 //! The calendar on this Mac as a source of meetings for meeting prep
 //! (ADR 029). Read-only. An event title stays on this Mac: it is matched
-//! against Resume threads and may appear in FNDR's own toast, and it is never
-//! stored, logged or sent to a model or any host.
+//! against Resume threads and may appear in FNDR's own toast. Meeting prep
+//! does not store, log or send event text to a model or host. A separate,
+//! explicitly started calendar import may store selected events locally.
 
 use super::meeting_prep::{prep_due, UpcomingMeeting, GRACE_MS};
 use super::signal_allowed;
@@ -38,6 +39,7 @@ impl CalendarStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CalendarInfo {
     pub id: String,
+    pub name: String,
     /// A subscribed or birthday calendar: someone else's events.
     pub subscribed: bool,
 }
@@ -49,6 +51,11 @@ pub struct CalendarEvent {
     pub calendar_id: String,
     pub title: Option<String>,
     pub starts_at: i64,
+    pub ends_at: i64,
+    pub attendees: Vec<String>,
+    pub location: Option<String>,
+    pub notes: Option<String>,
+    pub conference_url: Option<String>,
     pub all_day: bool,
     /// Declined by the person, or cancelled by the organizer.
     pub declined: bool,
@@ -161,6 +168,11 @@ pub(crate) mod tests {
             calendar_id: calendar.into(),
             title: Some(title.into()),
             starts_at: NOW + starts_in_min * MIN,
+            ends_at: NOW + (starts_in_min + 30) * MIN,
+            attendees: Vec::new(),
+            location: None,
+            notes: None,
+            conference_url: None,
             all_day: false,
             declined: false,
         }
@@ -183,14 +195,17 @@ pub(crate) mod tests {
                 calendars: vec![
                     CalendarInfo {
                         id: "work".into(),
+                        name: "Work".into(),
                         subscribed: false,
                     },
                     CalendarInfo {
                         id: "home".into(),
+                        name: "Home".into(),
                         subscribed: false,
                     },
                     CalendarInfo {
                         id: "holidays".into(),
+                        name: "Holidays".into(),
                         subscribed: true,
                     },
                 ],

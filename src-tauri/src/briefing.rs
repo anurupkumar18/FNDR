@@ -38,7 +38,7 @@ pub fn window_start_ms(mode: &str, now: DateTime<Local>) -> i64 {
 }
 
 /// A summary fit to quote: neutral voice, and not a placeholder or narration.
-fn quotable(summary: &str) -> Option<String> {
+pub(crate) fn quotable(summary: &str) -> Option<String> {
     use crate::summariser::narration_filter::{
         is_placeholder_summary, narration_filter_hits, neutral_voice,
     };

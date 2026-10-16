@@ -582,3 +582,28 @@
 .ob-voice-consent small {
     opacity: 0.7;
 }
+
+/* The privacy counts panel was drawn for the dark theme. On the first-run
+   paper card it keeps its content and takes the card's ink instead. */
+.ob-card .pipeline-panel-card {
+    --text-primary: var(--ob-text-primary);
+    --text-secondary: var(--ob-text-secondary);
+    --text-muted: var(--ob-text-muted);
+    --border: var(--ob-border);
+    padding: 14px 0 0;
+    border: 0;
+    border-top: 1px solid var(--ob-border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ob-text-primary);
+}
+.ob-card .pipeline-panel-card h3,
+.ob-card .pipeline-panel-card h4 { color: var(--ob-text-secondary); }
+.ob-card .pipeline-engine-kv span,
+.ob-card .pipeline-engine-kv dt,
+.ob-card .pipeline-skip-reasons li span { color: var(--ob-text-secondary); }
+.ob-card .pipeline-engine-kv strong,
+.ob-card .pipeline-engine-kv dd { color: var(--ob-text-primary); font-variant-numeric: tabular-nums; }
+.ob-card .pipeline-muted,
+.ob-card .pipeline-privacy-note,
+.ob-card .pipeline-egress-hosts { color: var(--ob-text-muted); font-size: 13px; }

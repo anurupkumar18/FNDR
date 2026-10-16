@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export {
+    importCancel,
+    importForget,
+    importFirstAnswerMs,
+    importGetConsent,
+    importListSources,
+    importRecordFirstAnswer,
+    importSetConsent,
+    importStart,
+    importStatus,
+} from "./imports";
+export type { ImportKind, ImportPermission, ImportRunState, ImportSourceInfo, ImportStatus } from "./imports";
+
 export type CaptureTextSource = "ax" | "ocr" | "browser_semantic" | "mixed" | "unknown";
 
 export interface SearchResult {
@@ -544,6 +557,7 @@ export interface CaptureStatus {
     ai_model_available: boolean;
     ai_model_loaded: boolean;
     loaded_model_id: string | null;
+    last_text_backend?: string;
     embedding_backend: string;
     embedding_degraded: boolean;
     embedding_detail: string;
@@ -1195,6 +1209,102 @@ export async function generateDailyBriefing(mode?: "morning" | "evening"): Promi
     return invoke<string>("generate_daily_briefing", { mode });
 }
 
+export type DailyOutputKind = "standup" | "weekly_status" | "timesheet";
+export type DailyOutputFormat = "markdown" | "plain_text" | "html";
+export type DailyOutputTool = "outputs.post_slack" | "outputs.create_linear_issue" | "outputs.open_mail_draft";
+
+export interface DailyOutputCitation {
+    kind: "memory" | "activity_event";
+    id: string;
+    memory_id: string | null;
+}
+
+export interface DailyOutputDoc {
+    id: string;
+    kind: DailyOutputKind;
+    title: string;
+    start_ms: number;
+    end_ms: number;
+    generated_at_ms: number;
+    model_polished: boolean;
+    sections: { heading: string; lines: { text: string; project: string | null; citations: DailyOutputCitation[] }[] }[];
+}
+
+export interface DailyOutputApprovalCard {
+    approval_id: string;
+    tool: DailyOutputTool;
+    action: string;
+    destination: string;
+    title: string;
+    body: string;
+    bytes: number;
+    expires_at_ms: number;
+    trimmed: boolean;
+}
+
+export interface DailyOutputDestinationStatus {
+    slack_webhook: boolean;
+    linear_api_key: boolean;
+    linear_team_id: boolean;
+}
+
+export interface DailyOutputSendReceipt {
+    tool: DailyOutputTool;
+    destination: string;
+    detail: string;
+    trust_id: string | null;
+}
+
+export interface DailyOutputAllowedDestination {
+    key: string;
+    tool: DailyOutputTool;
+    destination: string;
+}
+
+export async function generateDailyOutput(kind: DailyOutputKind, startMs: number, endMs: number, polish: boolean): Promise<DailyOutputDoc> {
+    return invoke<DailyOutputDoc>("generate_daily_output", { kind, startMs, endMs, polish });
+}
+
+export async function renderDailyOutput(id: string, format: DailyOutputFormat): Promise<string> {
+    return invoke<string>("render_daily_output", { id, format });
+}
+
+export async function saveDailyOutput(id: string, format: DailyOutputFormat): Promise<string | null> {
+    return invoke<string | null>("save_daily_output", { id, format });
+}
+
+export async function outputDestinationStatus(): Promise<DailyOutputDestinationStatus> {
+    return invoke<DailyOutputDestinationStatus>("output_destination_status");
+}
+
+export async function setOutputDestination(name: "slack_webhook" | "linear_api_key" | "linear_team_id", value: string): Promise<void> {
+    return invoke<void>("set_output_destination", { name, value });
+}
+
+export async function proposeDailyOutputSend(id: string, tool: DailyOutputTool, recipient?: string): Promise<DailyOutputApprovalCard> {
+    return invoke<DailyOutputApprovalCard>("propose_daily_output_send", { id, tool, recipient });
+}
+
+export async function resolveDailyOutputSend(approvalId: string, approved: boolean): Promise<DailyOutputSendReceipt | null> {
+    return invoke<DailyOutputSendReceipt | null>("resolve_daily_output_send", { approvalId, approved });
+}
+
+export async function sendDailyOutputAllowed(id: string, tool: DailyOutputTool, recipient?: string): Promise<DailyOutputSendReceipt | null> {
+    return invoke<DailyOutputSendReceipt | null>("send_daily_output_allowed", { id, tool, recipient });
+}
+
+export async function trustOutputDestination(trustId: string): Promise<string> {
+    return invoke<string>("trust_output_destination", { trustId });
+}
+
+export async function listOutputAllowedDestinations(): Promise<DailyOutputAllowedDestination[]> {
+    return invoke<DailyOutputAllowedDestination[]>("list_output_allowed_destinations");
+}
+
+export async function forgetOutputAllowedDestination(key: string): Promise<void> {
+    return invoke<void>("forget_output_allowed_destination", { key });
+}
+
 export async function getFunGreeting(name?: string | null): Promise<string> {
     return invoke<string>("get_fun_greeting", { name });
 }
@@ -1211,6 +1321,88 @@ export async function getMcpServerStatus(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("get_mcp_server_status");
 }
 
+export interface McpConnectClient {
+    id: "claude_code" | "claude_desktop" | "cursor";
+    name: string;
+    state: "not_connected" | "connected" | "server_off" | "needs_update" | "conflict" | "unreadable";
+    detected: boolean;
+    configPath: string;
+    detail: string | null;
+    missingTool: string | null;
+}
+
+export interface McpConnectStatus {
+    running: boolean;
+    endpoint: string | null;
+    actionsBlocked: boolean;
+    keepRunning: boolean;
+    hideMore: boolean;
+    clients: McpConnectClient[];
+}
+
+export interface McpConnectOutcome {
+    message: string;
+    configPath: string;
+    backupPath: string | null;
+    changed: boolean;
+}
+
+export interface McpConnectPreview {
+    title: string;
+    path: string;
+    text: string;
+    maskedText: string;
+    command: string | null;
+}
+
+export interface McpConnectTestStep {
+    name: string;
+    ok: boolean;
+    detail: string;
+}
+
+export interface McpConnectTestReport {
+    ok: boolean;
+    steps: McpConnectTestStep[];
+    toolCount: number;
+}
+
+export async function mcpConnectStatus(): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_status");
+}
+
+export async function mcpConnectPreview(clientId: McpConnectClient["id"]): Promise<McpConnectPreview> {
+    return invoke<McpConnectPreview>("mcp_connect_preview", { clientId });
+}
+
+export async function mcpConnectApply(clientId: McpConnectClient["id"]): Promise<McpConnectOutcome> {
+    return invoke<McpConnectOutcome>("mcp_connect_apply", { clientId });
+}
+
+export async function mcpConnectTest(): Promise<McpConnectTestReport> {
+    return invoke<McpConnectTestReport>("mcp_connect_test");
+}
+
+export async function mcpConnectRotateToken(): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_rotate_token");
+}
+
+export async function mcpConnectDisconnect(clientId: McpConnectClient["id"]): Promise<McpConnectOutcome> {
+    return invoke<McpConnectOutcome>("mcp_connect_disconnect", { clientId });
+}
+
+export async function mcpConnectRevoke(): Promise<string> {
+    return invoke<string>("mcp_connect_revoke");
+}
+
+export async function mcpConnectSetKeepRunning(keepRunning: boolean): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_set_keep_running", { keepRunning });
+}
+
+export async function mcpConnectSetHideMore(hideMore: boolean): Promise<void> {
+    return invoke<void>("mcp_connect_set_hide_more", { hideMore });
+}
+
 export async function startMcpServer(port?: number): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("start_mcp_server", { port });
 }
@@ -1221,6 +1413,43 @@ export async function stopMcpServer(): Promise<McpServerStatus> {
 
 export async function resolveMcpApproval(requestId: string, approved: boolean): Promise<boolean> {
     return invoke<boolean>("resolve_mcp_approval", { requestId, approved });
+}
+
+export interface ActionSettings {
+    actions_kill_switch: boolean;
+    confirm_unnamed_apps: boolean;
+}
+
+export interface ActionCard {
+    id: string;
+    caller: string;
+    surface: "notch_plan" | "computer_use" | "mcp" | "agent";
+    tool: string;
+    title: string;
+    target: string | null;
+    args: { name: string; value: string }[];
+    reason: string;
+    undo: { kind: "available"; how: string; inverse: string | null } | { kind: "unavailable"; reason: string };
+    status: "pending" | "approved" | "denied" | "expired" | "refused" | "ran" | "failed";
+    detail: string | null;
+    created_at_ms: number;
+    expires_at_ms: number;
+}
+
+export async function getActionSettings(): Promise<ActionSettings> {
+    return invoke<ActionSettings>("get_action_settings");
+}
+
+export async function setActionSettings(settings: ActionSettings): Promise<ActionSettings> {
+    return invoke<ActionSettings>("set_action_settings", { settings });
+}
+
+export async function listActionApprovals(): Promise<ActionCard[]> {
+    return invoke<ActionCard[]>("list_action_approvals");
+}
+
+export async function resolveActionApproval(id: string, approve: boolean): Promise<ActionCard> {
+    return invoke<ActionCard>("resolve_action_approval", { id, approve });
 }
 
 export async function getContextRuntimeStatus(): Promise<ContextRuntimeStatus> {
@@ -1372,6 +1601,53 @@ export interface ModelRequest {
 
 export async function getPrivacyProof(): Promise<PrivacyProof> {
     return invoke<PrivacyProof>("get_privacy_proof");
+}
+
+export interface EraseRangeReport {
+    matched: number;
+    deleted: number;
+}
+
+export async function deleteMemoriesInRange(
+    startMs: number,
+    endMs: number,
+    dryRun: boolean,
+): Promise<EraseRangeReport> {
+    return invoke<EraseRangeReport>("delete_memories_in_range", { startMs, endMs, dryRun });
+}
+
+export interface MemoryArchiveReport {
+    exported: number;
+    jsonl_path: string;
+    markdown_path: string;
+}
+
+export async function exportMemoriesArchive(): Promise<MemoryArchiveReport> {
+    return invoke<MemoryArchiveReport>("export_memories_archive");
+}
+
+export async function importMemoriesArchive(): Promise<number> {
+    return invoke<number>("import_memories_archive");
+}
+
+export interface EncryptionStatement {
+    filevault: "on" | "off" | "unknown";
+    encrypted: string[];
+    not_encrypted: string[];
+}
+
+export async function getEncryptionStatement(): Promise<EncryptionStatement> {
+    return invoke<EncryptionStatement>("get_encryption_statement");
+}
+
+export interface PrivacyExclusion {
+    id: string;
+    label: string;
+    examples: string;
+}
+
+export async function getPrivacyExclusions(): Promise<PrivacyExclusion[]> {
+    return invoke<PrivacyExclusion[]>("get_privacy_exclusions");
 }
 
 // Stats

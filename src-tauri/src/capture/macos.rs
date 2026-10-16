@@ -136,6 +136,16 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
     let raw_data = data_provider.copy_data();
     let bytes = raw_data.bytes();
 
+    bgra_to_png(width, height, bytes_per_row, bytes)
+}
+
+/// The pixel conversion used by live capture and synthetic footprint runs.
+pub fn bgra_to_png(
+    width: usize,
+    height: usize,
+    bytes_per_row: usize,
+    bytes: &[u8],
+) -> Result<Vec<u8>, String> {
     // The data often has padding at the end of each row.
     // We need to strip this to create a clean RGBA buffer.
     let mut clean_data = Vec::with_capacity(width * height * 4);
@@ -754,6 +764,23 @@ mod core_graphics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bgra_to_png_preserves_pixels_and_ignores_row_padding() {
+        let bgra = [
+            0, 0, 255, 255, 0, 255, 0, 255, 9, 9, 9, 9, 255, 0, 0, 255, 255, 255, 255, 255, 9, 9,
+            9, 9,
+        ];
+        let png = bgra_to_png(2, 2, 12, &bgra).expect("synthetic pixels encode");
+        let image = image::load_from_memory(&png)
+            .expect("PNG decodes")
+            .to_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 255, 0, 255]);
+        assert_eq!(image.get_pixel(0, 1).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 1).0, [255, 255, 255, 255]);
+        assert!(bgra_to_png(2, 2, 12, &bgra[..12]).is_err());
+    }
 
     #[test]
     fn frontmost_bundle_id_matches_get_frontmost_app_info() {

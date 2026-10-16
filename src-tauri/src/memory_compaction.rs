@@ -64,9 +64,9 @@ pub fn compact_memory_record_payload(record: &MemoryRecord) -> MemoryRecord {
     };
     compacted.lexical_shadow = compact_lexical_shadow(&lexical_shadow_source);
     compacted.screenshot_path = None;
-    // An agent note is already capped at 4,000 characters, and a cut note
-    // can say the opposite of what was written (VS-68).
-    if record.is_agent_note() {
+    // Leaf rows preserve their source text. A cut item can say the opposite
+    // of what was written.
+    if record.is_leaf_row() {
         return compacted;
     }
     compacted.text = String::new();

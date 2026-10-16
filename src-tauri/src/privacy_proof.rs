@@ -94,6 +94,7 @@ fn model_requests() -> &'static Mutex<Vec<ModelRequest>> {
 /// Activity stores and labels, so a new caller is added here, not as a string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
+    DailyOutputSend,
     NotchDoPlan,
     NotchDoStep,
     NotchDoScreenText,
@@ -107,6 +108,7 @@ pub enum Feature {
 impl Feature {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::DailyOutputSend => "daily_output_send",
             Self::NotchDoPlan => "notch_do_plan",
             Self::NotchDoStep => "notch_do_step",
             Self::NotchDoScreenText => "notch_do_screen_text",

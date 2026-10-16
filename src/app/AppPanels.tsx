@@ -4,6 +4,7 @@ import { CommandPalette, type PanelKey } from "@/domains/command-palette/Command
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
 import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
 import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
+import { OutputsPanel } from "@/domains/outputs/OutputsPanel";
 import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
@@ -97,6 +98,13 @@ export function AppPanels({
                             onClose={onClosePanel}
                             onOpenMemoryById={onOpenMemoryById}
                         />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "outputs"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Daily outputs" onClose={onClosePanel}>
+                        <OutputsPanel isVisible={present} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>

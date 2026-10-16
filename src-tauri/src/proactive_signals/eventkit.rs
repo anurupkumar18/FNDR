@@ -104,6 +104,40 @@ mod macos {
             calendar_id: text(msg_send![calendar, calendarIdentifier])?,
             title: text(msg_send![event, title]),
             starts_at: (seconds * 1000.0) as i64,
+            ends_at: {
+                let end: *const AnyObject = msg_send![event, endDate];
+                if end.is_null() {
+                    (seconds * 1000.0) as i64
+                } else {
+                    let end_seconds: f64 = msg_send![end, timeIntervalSince1970];
+                    (end_seconds * 1000.0) as i64
+                }
+            },
+            attendees: items(msg_send![event, attendees])
+                .into_iter()
+                .filter_map(|person| {
+                    let name: *const NSString = msg_send![person, name];
+                    text(name).or_else(|| {
+                        let url: *const AnyObject = msg_send![person, URL];
+                        if url.is_null() {
+                            None
+                        } else {
+                            text(msg_send![url, absoluteString])
+                                .map(|value| value.trim_start_matches("mailto:").to_string())
+                        }
+                    })
+                })
+                .collect(),
+            location: text(msg_send![event, location]),
+            notes: text(msg_send![event, notes]),
+            conference_url: {
+                let url: *const AnyObject = msg_send![event, URL];
+                if url.is_null() {
+                    None
+                } else {
+                    text(msg_send![url, absoluteString])
+                }
+            },
             all_day: all_day.as_bool(),
             declined: declined(event),
         })
@@ -165,6 +199,7 @@ mod macos {
                         let kind: isize = msg_send![calendar, type];
                         Some(CalendarInfo {
                             id: text(msg_send![calendar, calendarIdentifier])?,
+                            name: text(msg_send![calendar, title]).unwrap_or_default(),
                             subscribed: subscribed.as_bool() || kind == CALENDAR_TYPE_BIRTHDAY,
                         })
                     })
