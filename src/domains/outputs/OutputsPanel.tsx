@@ -182,7 +182,7 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
         <div className="outputs-page" role="dialog" aria-modal="true" aria-label="Daily outputs" ref={dialogRef}>
             <header className="outputs-header">
                 <div><h2>Daily outputs</h2><p>Work notes from visible memories, with a source on every line.</p></div>
-                <button ref={closeRef} type="button" onClick={onClose} aria-label="Close daily outputs">Close</button>
+                <button ref={closeRef} type="button" className="ui-action-btn" onClick={onClose} aria-label="Close daily outputs">Close</button>
             </header>
             <main className="outputs-body">
                 <div className="outputs-controls">
@@ -195,13 +195,13 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
                     </label>
                     <label>From <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label>
                     <label>Through <input type="date" value={throughDate} onChange={(event) => setThroughDate(event.target.value)} /></label>
-                    <label className="outputs-check"><input type="checkbox" checked={polish} onChange={(event) => setPolish(event.target.checked)} /> Reword with local model</label>
-                    <button type="button" onClick={generate} disabled={busy}>Generate</button>
+                    <label className="outputs-check"><input className="fndr-switch" type="checkbox" checked={polish} onChange={(event) => setPolish(event.target.checked)} /> Reword with local model</label>
+                    <button type="button" className="rcpt-primary" onClick={generate} disabled={busy}>Generate</button>
                 </div>
 
                 {error && <p role="alert" className="outputs-error">{error}</p>}
                 {message && <p role="status">{message}</p>}
-                {lastTrustId && <button type="button" onClick={trust} disabled={busy}>Always allow this destination</button>}
+                {lastTrustId && <button type="button" className="rcpt-quiet" onClick={trust} disabled={busy}>Always allow this destination</button>}
 
                 {doc && <>
                     <div className="outputs-toolbar">
@@ -210,8 +210,8 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
                             <option value="plain_text">Plain text</option>
                             <option value="html">HTML</option>
                         </select></label>
-                        <button type="button" onClick={copy} disabled={busy}>Copy</button>
-                        <button type="button" onClick={save} disabled={busy}>Save file</button>
+                        <button type="button" className="ui-action-btn" onClick={copy} disabled={busy}>Copy</button>
+                        <button type="button" className="ui-action-btn" onClick={save} disabled={busy}>Save file</button>
                     </div>
                     <article className="outputs-doc">
                         <h3>{doc.title}</h3>
@@ -226,13 +226,13 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
                     </article>
                     <div className="outputs-toolbar">
                         <label>Mail recipient (optional) <input type="email" value={recipient} onChange={(event) => setRecipient(event.target.value)} /></label>
-                        <button type="button" onClick={() => propose("outputs.open_mail_draft")} disabled={busy}>Open mail draft</button>
-                        <button type="button" onClick={() => propose("outputs.post_slack")} disabled={busy}>Post to Slack</button>
-                        <button type="button" onClick={() => propose("outputs.create_linear_issue")} disabled={busy}>Create Linear issue</button>
+                        <button type="button" className="ui-action-btn" onClick={() => propose("outputs.open_mail_draft")} disabled={busy}>Open mail draft</button>
+                        <button type="button" className="ui-action-btn outputs-external" onClick={() => propose("outputs.post_slack")} disabled={busy}><i className="outputs-dot" aria-hidden="true" />Post to Slack</button>
+                        <button type="button" className="ui-action-btn outputs-external" onClick={() => propose("outputs.create_linear_issue")} disabled={busy}><i className="outputs-dot" aria-hidden="true" />Create Linear issue</button>
                     </div>
                 </>}
 
-                <button type="button" className="outputs-settings-toggle" onClick={() => setSettings(!settings)}>{settings ? "Hide destinations" : "Set up destinations"}</button>
+                <button type="button" className="rcpt-quiet outputs-settings-toggle" onClick={() => setSettings(!settings)}>{settings ? "Hide destinations" : "Set up destinations"}</button>
                 {settings && <section className="outputs-settings" aria-label="Destinations">
                     <p>Slack and Linear credentials stay in the macOS Keychain. Leave a field empty and save to remove it.</p>
                     {DESTINATIONS.map(({ name, label, type }) => <div key={name} className="outputs-setting">
@@ -252,7 +252,7 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
                 <p>Destination: <strong>{card.destination}</strong></p>
                 <p>{card.bytes} bytes{card.trimmed ? ", trimmed to fit" : ""}</p>
                 <pre>{card.body}</pre>
-                <div className="outputs-toolbar"><button type="button" onClick={() => resolve(false)} disabled={busy}>Cancel send</button><button type="button" onClick={() => resolve(true)} disabled={busy}>Approve send</button></div>
+                <div className="outputs-toolbar"><button type="button" className="rcpt-quiet" onClick={() => resolve(false)} disabled={busy}>Cancel send</button><button type="button" className="rcpt-primary" onClick={() => resolve(true)} disabled={busy}>Approve send</button></div>
             </section></div>}
         </div>
     );

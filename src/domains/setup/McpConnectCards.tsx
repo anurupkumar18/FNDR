@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import "./McpConnectCards.css";
 import {
     mcpConnectApply,
     mcpConnectDisconnect,
@@ -69,13 +70,13 @@ export function McpConnectCards() {
         <section aria-labelledby="mcp-connect-title">
             <h4 id="mcp-connect-title">Connect your AI tools</h4>
             <p className="section-hint">Let a connected assistant search FNDR memory. The assistant may send what it reads to its model.</p>
-            <ul className="setup-center-list">
+            <ul className="setup-center-list mcp-clients">
                 {(status?.clients ?? []).map((client) => (
                     <li className="setup-center-row" aria-label={client.name} key={client.id}>
                         <span>
                             <strong>{client.name}</strong>
-                            <small>{STATE_LABEL[client.state]}</small>
-                            <small className="setup-center-detail">{client.configPath}</small>
+                            <small className="mcp-state" data-state={client.state}>{STATE_LABEL[client.state]}</small>
+                            <small className="setup-center-detail mcp-path">{client.configPath.replace(/\//g, "/\u200b")}</small>
                             {client.detail ? <small className="setup-center-detail">{client.detail}</small> : null}
                             {client.missingTool ? <small className="setup-center-detail">Needs {client.missingTool} for automatic setup.</small> : null}
                         </span>
@@ -94,28 +95,28 @@ export function McpConnectCards() {
                     </li>
                 ))}
             </ul>
-            <label>
-                <input type="checkbox" checked={status?.keepRunning ?? true} disabled={busy !== null} onChange={(event) => {
+            <label className="mcp-toggle">
+                <input className="fndr-switch" type="checkbox" checked={status?.keepRunning ?? true} disabled={busy !== null} onChange={(event) => {
                     const keepRunning = event.currentTarget.checked;
                     void act("keep-running", async () => {
                         await mcpConnectSetKeepRunning(keepRunning);
                         return keepRunning ? "MCP will start when FNDR opens." : "MCP will stay off when FNDR opens.";
                     });
                 }} />
-                Keep the MCP server running
+                <span>Keep the MCP server running</span>
             </label>
-            <label>
-                <input type="checkbox" checked={status?.hideMore ?? false} disabled={busy !== null} onChange={(event) => {
+            <label className="mcp-toggle">
+                <input className="fndr-switch" type="checkbox" checked={status?.hideMore ?? false} disabled={busy !== null} onChange={(event) => {
                     const hideMore = event.currentTarget.checked;
                     void act("hide-more", async () => {
                         await mcpConnectSetHideMore(hideMore);
                         return hideMore ? "Stricter AI-tool privacy is on." : "Stricter AI-tool privacy is off.";
                     });
                 }} />
-                Hide more in AI-tool results
+                <span>Hide more in AI-tool results</span>
             </label>
             {status?.actionsBlocked ? <p>Actions are off. Turn them on in Settings to connect a client.</p> : null}
-            <div className="setup-center-status">
+            <div className="setup-center-status mcp-actions">
                 <button type="button" className="ui-action-btn" disabled={busy !== null} onClick={() => void act("test", async () => {
                     const result = await mcpConnectTest();
                     setTestReport(result);
@@ -134,7 +135,7 @@ export function McpConnectCards() {
                     <button type="button" className="ui-action-btn" onClick={() => void navigator.clipboard.writeText(preview.text).then(() => setFeedback("Setup copied.")).catch((failure) => setError(reason(failure)))}>Copy setup</button>
                 </div>
             ) : null}
-            {testReport ? <ul>{testReport.steps.map((step) => <li key={step.name}>{step.name}: {step.ok ? "Passed" : "Failed"}. {step.detail}</li>)}</ul> : null}
+            {testReport ? <ul className="mcp-report">{testReport.steps.map((step) => <li key={step.name} data-ok={step.ok}>{step.name}: {step.ok ? "Passed" : "Failed"}. {step.detail}</li>)}</ul> : null}
             {feedback ? <p role="status">{feedback}</p> : null}
             {error ? <p className="sg-diagnostics-error" role="alert">{error}</p> : null}
         </section>

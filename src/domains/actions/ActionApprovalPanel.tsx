@@ -74,6 +74,7 @@ export function ActionApprovalPanel({ embedded = false }: ActionApprovalPanelPro
                         <div className="action-approval-settings">
                             <label>
                                 <input
+                                    className="fndr-switch"
                                     type="checkbox"
                                     checked={settings.actions_kill_switch}
                                     onChange={(event) => void changeSettings({
@@ -81,10 +82,11 @@ export function ActionApprovalPanel({ embedded = false }: ActionApprovalPanelPro
                                         actions_kill_switch: event.target.checked,
                                     })}
                                 />
-                                Turn off actions
+                                <span>Turn off actions</span>
                             </label>
                             <label>
                                 <input
+                                    className="fndr-switch"
                                     type="checkbox"
                                     checked={settings.confirm_unnamed_apps}
                                     onChange={(event) => void changeSettings({
@@ -92,7 +94,7 @@ export function ActionApprovalPanel({ embedded = false }: ActionApprovalPanelPro
                                         confirm_unnamed_apps: event.target.checked,
                                     })}
                                 />
-                                Confirm before opening apps I did not name
+                                <span>Confirm before opening apps I did not name</span>
                             </label>
                         </div>
                     )}
@@ -115,12 +117,12 @@ export function ActionApprovalPanel({ embedded = false }: ActionApprovalPanelPro
                             </div>
                         ))}
                     </dl>
-                    <p className="action-approval-undo">
+                    <p className="action-approval-undo" data-undo={card.undo.kind}>
                         {card.undo.kind === "available" ? `Undo: ${card.undo.how}` : `No undo: ${card.undo.reason}`}
                     </p>
                     <div className="action-approval-buttons">
-                        <button type="button" disabled={busyId === card.id} onClick={() => void decide(card.id, false)}>Deny</button>
-                        <button type="button" disabled={busyId === card.id} onClick={() => void decide(card.id, true)}>Approve action</button>
+                        <button type="button" className="rcpt-quiet" disabled={busyId === card.id} onClick={() => void decide(card.id, false)}>Deny</button>
+                        <button type="button" className="rcpt-primary" disabled={busyId === card.id} onClick={() => void decide(card.id, true)}>Approve action</button>
                     </div>
                 </div>
             ))}

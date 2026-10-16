@@ -154,10 +154,21 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
     return (
         <section className="import-sources" aria-label="Bring your past">
             <h2>Bring your past</h2>
-            <p>Choose what FNDR may read on this Mac. Every source starts off. The first scan covers 30 days.</p>
+            <p className="import-lede">Choose what FNDR may read on this Mac. Every source starts off. The first scan covers 30 days.</p>
             {error && <p role="alert">{error}</p>}
             {loading && <p role="status">Loading sources…</p>}
             {error && <button type="button" onClick={() => void load()}>Retry</button>}
+            {mode === "onboarding" && hasImported && <div className="import-guided-search">
+                    <h3>Where did I see that?</h3>
+                    <p>Try a title from the imported items.</p>
+                    <div className="import-pills">{suggestions.map((title) => <button type="button" className="import-pill" key={title} onClick={() => setQuery(title)}>{title}</button>)}</div>
+                    <div className="import-query">
+                        <label><span className="rcpt-sr">Where did I see that?</span><input className="rcpt-field" type="search" placeholder="A title, a name, a phrase" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void search(); }} /></label>
+                        <button type="button" className="rcpt-primary import-search" onClick={() => void search()}>Search</button>
+                    </div>
+                    {searched && results.length === 0 && <p>No imported result yet.</p>}
+                    {results.map((card) => <button type="button" className="import-result" key={card.id} onClick={() => open(card)}>Open {card.title}</button>)}
+                </div>}
             <div className="import-source-grid">
                 {SOURCES.map(({ kind, title, reads, permission }) => {
                     const source = sources.find((entry) => entry.kind === kind);
@@ -165,51 +176,52 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
                     const count = Math.max(source?.row_count ?? 0, status?.stored ?? 0);
                     return <div className="import-source-card" role="group" aria-label={title} key={kind}>
                         <label>
-                            <span><strong>{title}</strong><small>{reads}</small><small>{permission}</small></span>
-                            <input type="checkbox" role="switch" aria-label={title} checked={Boolean(consent[kind])}
+                            <span className="import-source-text">
+                                <span className="import-line">
+                                    <strong>{title}</strong>
+                                    {source && <><i className="rcpt-leader" aria-hidden="true" /><small className="import-count rcpt-figure">{count} {count === 1 ? "item" : "items"} imported{status?.state === "running" ? `, ${status.scanned} scanned` : ""}.</small></>}
+                                </span>
+                                <small>{reads}</small><small className="import-needs">{permission}</small>
+                            </span>
+                            <input className="fndr-switch" type="checkbox" role="switch" aria-label={title} checked={Boolean(consent[kind])}
                                 disabled={!source || busy} onChange={(event) => turn(kind, event.target.checked)} />
                         </label>
                         {!source && !loading && <small>Not available in this build.</small>}
-                        {source && <>
-                            <small>{count} items imported{status?.state === "running" ? `, ${status.scanned} scanned` : ""}.</small>
-                            {status?.state === "running" && <button type="button" onClick={() => void act(async () => { await importCancel(kind); const next = await importStatus(kind); setStatuses((current) => ({ ...current, [kind]: next })); })}>Cancel</button>}
+                        {source && <div className="import-source-extra">
+                            {status?.state === "running" && <i className="import-scanning" aria-hidden="true" />}
+                            {status?.state === "running" && <button type="button" className="rcpt-quiet" onClick={() => void act(async () => { await importCancel(kind); const next = await importStatus(kind); setStatuses((current) => ({ ...current, [kind]: next })); })}>Cancel</button>}
                             {status?.state === "failed" && <small role="alert">{status.error ?? "Import failed."}</small>}
                             {mode === "settings" && <>
-                                <label>Window days <input type="number" min={1} max={90} value={windows[kind] ?? 30}
+                                <label className="import-window">Window days <input type="number" min={1} max={90} value={windows[kind] ?? 30}
                                     onChange={(event) => {
                                         const days = Math.max(1, Math.min(90, Number(event.target.value) || 1));
                                         setWindows((current) => ({ ...current, [kind]: days }));
                                         localStorage.setItem(windowKey(kind), String(days));
                                     }} /></label>
-                                <small>Last import: {status?.finished_at_ms ? new Date(status.finished_at_ms).toLocaleString() : "Never"}</small>
-                                <button type="button" disabled={busy || !consent[kind]} onClick={() => void act(async () => { const next = await importStart(kind, windows[kind] ?? 30); setStatuses((current) => ({ ...current, [kind]: next })); })}>Import again</button>
-                                <button type="button" disabled={busy || status?.state === "running"} onClick={() => void act(async () => {
+                                <small className="import-last">Last import: {status?.finished_at_ms ? new Date(status.finished_at_ms).toLocaleString() : "Never"}</small>
+                                <span className="import-row-actions">
+                                <button type="button" className="rcpt-quiet" disabled={busy || !consent[kind]} onClick={() => void act(async () => { const next = await importStart(kind, windows[kind] ?? 30); setStatuses((current) => ({ ...current, [kind]: next })); })}>Import again</button>
+                                <button type="button" className="rcpt-danger" disabled={busy || status?.state === "running"} onClick={() => void act(async () => {
                                     setSources(await importListSources());
                                     setForgetKind(kind);
                                 })}>Forget</button>
+                                </span>
                             </>}
-                        </>}
+                        </div>}
                     </div>;
                 })}
             </div>
             {mode === "onboarding" && <>
-                <button type="button" disabled={busy || loading || !RECOMMENDED.some((kind) => sources.some((source) => source.kind === kind))} onClick={recommended}>Import everything recommended</button>
-                {hasImported && <div className="import-guided-search">
-                    <h3>Where did I see that?</h3>
-                    <p>Try a title from the imported items.</p>
-                    {suggestions.map((title) => <button type="button" key={title} onClick={() => setQuery(title)}>{title}</button>)}
-                    <label>Where did I see that?<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void search(); }} /></label>
-                    <button type="button" onClick={() => void search()}>Search</button>
-                    {searched && results.length === 0 && <p>No imported result yet.</p>}
-                    {results.map((card) => <button type="button" key={card.id} onClick={() => open(card)}>Open {card.title}</button>)}
-                </div>}
-                <button type="button" onClick={onContinue}>{hasImported ? "Continue to FNDR" : "Skip imports"}</button>
+              <div className="import-actions">
+                <button type="button" className={hasImported ? "rcpt-quiet" : "rcpt-primary"} disabled={busy || loading || !RECOMMENDED.some((kind) => sources.some((source) => source.kind === kind))} onClick={recommended}>Import everything recommended</button>
+                <button type="button" className={hasImported ? "rcpt-primary" : "rcpt-quiet"} onClick={onContinue}>{hasImported ? "Continue to FNDR" : "Skip imports"}</button>
+              </div>
             </>}
             {mode === "settings" && answerMs !== null && <p>First imported answer: {(answerMs / 1000).toFixed(1)} seconds. Stored locally.</p>}
             {forgetKind && <div ref={forgetDialog} role="alertdialog" aria-label="Forget source" aria-modal="true">
                 <p>Forget {SOURCES.find((entry) => entry.kind === forgetKind)?.title} and remove {sources.find((entry) => entry.kind === forgetKind)?.row_count ?? 0} items?</p>
-                <button ref={keepButton} type="button" onClick={() => setForgetKind(null)}>Keep items</button>
-                <button type="button" onClick={() => void act(async () => {
+                <button ref={keepButton} type="button" className="ui-action-btn" onClick={() => setForgetKind(null)}>Keep items</button>
+                <button type="button" className="import-remove" onClick={() => void act(async () => {
                     const kind = forgetKind;
                     await importForget(kind);
                     setForgetKind(null);

@@ -836,8 +836,13 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         }
     };
     const releasedScreenGuideGenerations = new Set<number>();
+    const previewOnboardingStep = (): OnboardingState["step"] => {
+        const requested = new URLSearchParams(window.location.search).get("onboarding");
+        const steps = ["welcome", "privacy_promise", "model_download", "bring_past"] as const;
+        return steps.find((step) => step === requested) ?? "complete";
+    };
     let previewOnboardingState: OnboardingState = {
-        step: new URLSearchParams(window.location.search).get("onboarding") === "bring_past" ? "bring_past" : "complete",
+        step: previewOnboardingStep(),
         biometric_enabled: false,
         screen_permission: true,
         accessibility_permission: true,
@@ -856,6 +861,53 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         finished_at_ms: null, error: null,
     };
     let previewAgentNotesEnabled = false;
+    const previewParam = (name: string) => new URLSearchParams(window.location.search).get(name);
+    const previewApprovalCard = {
+        id: "preview-approval",
+        caller: "Notch Do",
+        surface: "computer_use" as const,
+        tool: "paste_text",
+        title: "Paste a reply into Mail",
+        target: "Mail, Re: Atlas plan",
+        args: [{ name: "text", value: "Thanks, I will review the Atlas plan today and send comments by Wednesday." }],
+        reason: "You asked Notch Do to reply to Dana.",
+        undo: { kind: "unavailable" as const, reason: "The text is typed into another app, so FNDR cannot take it back." },
+        status: "pending" as const,
+        detail: null,
+        created_at_ms: Date.now(),
+        expires_at_ms: Date.now() + 60_000,
+    };
+    const previewOutputDoc = () => ({
+        id: "preview-output",
+        kind: "standup" as const,
+        title: "Standup, Thursday",
+        start_ms: Date.now() - 86_400_000,
+        end_ms: Date.now(),
+        generated_at_ms: Date.now(),
+        model_polished: false,
+        sections: [
+            { heading: "Yesterday", lines: [
+                { text: "Reviewed the Home hierarchy and the accessibility checklist in Figma.", project: "FNDR", citations: [{ kind: "memory" as const, id: "1", memory_id: "preview-1" }] },
+                { text: "Merged the retrieval gate change and checked Recall at 5 stayed at 1.00.", project: "FNDR", citations: [{ kind: "memory" as const, id: "2", memory_id: "preview-2" }, { kind: "memory" as const, id: "3", memory_id: "preview-3" }] },
+            ] },
+            { heading: "Today", lines: [
+                { text: "Run the keyboard-only pass on the new panels.", project: "FNDR", citations: [{ kind: "memory" as const, id: "4", memory_id: "preview-4" }] },
+            ] },
+            { heading: "Blockers", lines: [] },
+        ],
+    });
+    const previewMcpStatus = () => ({
+        running: true,
+        endpoint: "http://127.0.0.1:49152/mcp",
+        actionsBlocked: false,
+        keepRunning: true,
+        hideMore: false,
+        clients: [
+            { id: "claude_code" as const, name: "Claude Code", state: "connected" as const, detected: true, configPath: "~/.claude.json", detail: null, missingTool: null },
+            { id: "claude_desktop" as const, name: "Claude Desktop", state: "not_connected" as const, detected: true, configPath: "~/Library/Application Support/Claude/claude_desktop_config.json", detail: null, missingTool: null },
+            { id: "cursor" as const, name: "Cursor", state: "conflict" as const, detected: true, configPath: "~/.cursor/mcp.json", detail: "An entry named fndr already exists that FNDR did not write.", missingTool: null },
+        ],
+    });
     let previewActionSettings = { actions_kill_switch: false, confirm_unnamed_apps: false };
     let previewNotchDoMuted: boolean | null = null;
     const previewSkills: NotchDoSkill[] = [{
@@ -1038,7 +1090,49 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
             case "list_action_approvals":
+                return previewParam("approval") === "pending" ? [previewApprovalCard] : [];
+            case "get_encryption_statement":
+                return {
+                    filevault: "on",
+                    encrypted: [
+                        "The few screenshots FNDR saves are sealed with a key in your Keychain.",
+                        "Exports you save from FNDR are sealed the same way.",
+                    ],
+                    not_encrypted: [
+                        "The memory database is not encrypted by FNDR. FileVault protects it while your Mac is off.",
+                        "Text you copy out of FNDR is as private as the place you paste it.",
+                    ],
+                };
+            case "generate_daily_output":
+                return previewOutputDoc();
+            case "render_daily_output":
+                return "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy [1]\n";
+            case "output_destination_status":
+                return { slack_webhook: true, linear_api_key: false, linear_team_id: false };
+            case "list_output_allowed_destinations":
                 return [];
+            case "propose_daily_output_send":
+                return {
+                    approval_id: "preview-send",
+                    tool: "outputs.post_slack",
+                    action: "Post to Slack",
+                    destination: "hooks.slack.com/services/T0/B0/...",
+                    title: "Standup, Thursday",
+                    body: "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy and the accessibility checklist in Figma. [1]\n- Merged the retrieval gate change. [2][3]\n\nToday\n- Run the keyboard-only pass on the new panels. [4]",
+                    bytes: 247,
+                    expires_at_ms: Date.now() + 60_000,
+                    trimmed: false,
+                };
+            case "send_daily_output_allowed":
+                return null;
+            case "resolve_daily_output_send":
+                return payloadRecord(payload)?.approved === true
+                    ? { tool: "outputs.post_slack", destination: "hooks.slack.com/services/T0/B0/...", detail: "Posted", trust_id: "preview-trust" }
+                    : null;
+            case "trust_output_destination":
+                return "Always allowed.";
+            case "mcp_connect_status":
+                return previewMcpStatus();
             case "resolve_action_approval":
                 throw new Error("No action is waiting for approval in preview.");
             case "get_action_settings":

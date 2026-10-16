@@ -24,11 +24,17 @@ export function EncryptionStatus() {
             <h2>Privacy proof</h2>
             {statement ? (
                 <>
-                    <p className="encryption-status-filevault">FileVault is {statement.filevault}</p>
-                    <h3>Encrypted by FNDR</h3>
-                    <ul>{statement.encrypted.map((line) => <li key={line}>{line}</li>)}</ul>
-                    <h3>Other local data</h3>
-                    <ul>{statement.not_encrypted.map((line) => <li key={line}>{line}</li>)}</ul>
+                    <p className="encryption-status-filevault" data-state={statement.filevault}>FileVault is {statement.filevault}</p>
+                    <div className="encryption-status-columns">
+                        <div>
+                            <h3>Encrypted by FNDR</h3>
+                            <ul className="is-sealed">{statement.encrypted.map((line) => <li key={line}>{line}</li>)}</ul>
+                        </div>
+                        <div>
+                            <h3>Other local data</h3>
+                            <ul className="is-open">{statement.not_encrypted.map((line) => <li key={line}>{line}</li>)}</ul>
+                        </div>
+                    </div>
                 </>
             ) : (
                 <p role="status">{failed ? "FileVault status could not be checked." : "Checking FileVault status…"}</p>
