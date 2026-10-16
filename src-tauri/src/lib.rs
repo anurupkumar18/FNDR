@@ -18,6 +18,7 @@ pub mod embed;
 pub mod embedding;
 pub mod evals;
 pub mod graph;
+pub mod handoff;
 pub mod http_util;
 pub mod import;
 pub mod inference;

@@ -48,6 +48,8 @@ Also record: does `webSearch` work with shell network off (expected yes, it is m
 
 ## Part 1: `handoff::profile`
 
+**Status 2026-10-16:** built test-first (12 tests) and checked against a real `codex app-server` started from the owner's own Codex setup (5 servers, 20 plugins, 48 skills): `check_effective` returned Ok for the worker, and named every feature, server and plugin for the unchanged setup.
+
 Files: `src-tauri/src/handoff/mod.rs` (new, module doc only), `src-tauri/src/handoff/profile.rs` (new), `src-tauri/src/lib.rs` (mod line).
 
 ```rust
@@ -59,7 +61,7 @@ pub struct ProfileInputs<'a> {
 /// `-c key=value` pairs for `codex app-server`, in a stable order.
 pub fn worker_config_args(inputs: &ProfileInputs) -> Vec<String>;
 /// Compare `config/read` output with what was asked; every mismatch named.
-pub fn check_effective(asked: &ProfileInputs, effective: &serde_json::Value) -> Result<(), Vec<Mismatch>>;
+pub fn check_effective(asked: &ProfileInputs, config_read: &serde_json::Value, skills_list: &serde_json::Value) -> Result<(), Vec<Mismatch>>;
 ```
 
 Config written: `default_permissions="fndr_hand_off"`; filesystem `:minimal=read`, toolchain `read`, job folder `write`; network `enabled=false`; `web_search=<mode>`; features off: `computer_use`, `browser_use`, `browser_use_external`, `in_app_browser`, `apps`, `plugins`, `memories`, `hooks`, `image_generation`, `multi_agent`; `sqlite_home` and `log_dir` set to the job's Codex state folder in app data; `history.persistence="none"`; then, from a first `config/read` and `skills/list` on a throwaway app-server, `mcp_servers.<name>.enabled=false` and `plugins.<name>.enabled=false` for every configured name (bare keys: S1 showed quoted keys are taken literally) and one `skills.config=[...]` disabling every user and system skill. `mcp_servers={}` and `features.plugins=false` do not detach anything (S1).
@@ -75,6 +77,8 @@ Tests: args are stable for the same input; paths with spaces and quotes are esca
 **Gate:** all unit tests; the S1 fixture passes `check_effective`.
 
 ## Part 2: `handoff::folder`
+
+**Status 2026-10-16:** built test-first (8 tests).
 
 File: `src-tauri/src/handoff/folder.rs`.
 
@@ -165,6 +169,8 @@ Real run, once (AGENTS.md: an outside program is not done until run against the 
 
 ## Part 6: `handoff::manifest` and `handoff::verify`
 
+**Status 2026-10-16:** built test-first (12 tests); a real document from the `readout-docx` skill verifies as Ready. The schema lives in `manifest::output_schema` until Part 5 moves the worker prompt into `prompts.rs`.
+
 Files: `src-tauri/src/handoff/manifest.rs`, `src-tauri/src/handoff/verify.rs`; the schema text in `prompts.rs`.
 
 Manifest schema (strict, `additionalProperties: false`):
@@ -174,9 +180,9 @@ Manifest schema (strict, `additionalProperties: false`):
   "summary": "string, at most 600 characters",
   "deliverables": [{ "path": "out/...", "kind": "docx|xlsx|pptx|pdf|md|txt|csv|png", "title": "string" }],
   "claims": [{ "text": "string", "sources": [
-    { "type": "memory", "id": "string" },
-    { "type": "file", "path": "inputs/... or out/...", "locator": "string" },
-    { "type": "web", "url": "string" } ] }],
+    { "type": "memory | file | web",
+      "ref": "a memory id, a path under inputs/ or out/, or a URL",
+      "locator": "rows, page or section; may be empty" } ] }],
   "not_done": ["string"],
   "assumptions": ["string"]
 }
@@ -186,7 +192,7 @@ Manifest schema (strict, `additionalProperties: false`):
 pub struct Verdict { pub deliverables: Vec<CheckedFile>, pub claims: Vec<CheckedClaim>,
                      pub checked: usize, pub unsupported: usize, pub not_checked: usize,
                      pub status: ResultStatus } // Ready | ReadyWithGaps | Failed
-pub fn verify(manifest: &Manifest, folder: &JobFolder, attached: &[String], seen_urls: &[String]) -> Verdict;
+pub fn verify(manifest: &Manifest, folder: &JobFolder, evidence: &Evidence) -> Verdict; // Evidence { attached_memories, searched_urls }
 ```
 
 Checks: path normalization (no `..`, no absolute, no symlink escape, inside `out/`); type by magic bytes and a parse (zip directory for Office files, `%PDF-`, PNG header, UTF-8 for text); memory ids in `attached`; file sources under `inputs/` or `out/`; URL equality after normalization (scheme, host case, trailing slash, fragment removed). Status: Failed when no deliverable passes; ReadyWithGaps when `not_done` is non-empty or any claim is unsupported or not checked; else Ready.
