@@ -124,9 +124,7 @@ impl std::fmt::Display for ImportError {
             ImportError::Io(message) => write!(f, "could not read the source: {message}"),
             ImportError::InvalidData(message) => write!(f, "unreadable data: {message}"),
             ImportError::Command(message) => write!(f, "source command failed: {message}"),
-            ImportError::PermissionDenied(permission) => {
-                write!(f, "permission needed: {permission:?}")
-            }
+            ImportError::PermissionDenied(_) => write!(f, "{}", self.advice()),
         }
     }
 }
@@ -274,5 +272,21 @@ mod contract_tests {
         assert!(ImportError::Command("gh unavailable".into())
             .advice()
             .contains("gh"));
+    }
+}
+
+#[cfg(test)]
+mod error_wording_tests {
+    use super::*;
+
+    #[test]
+    fn a_permission_error_tells_the_person_what_to_do() {
+        let message = ImportError::PermissionDenied(Permission::FullDiskAccess).to_string();
+        assert_eq!(
+            message,
+            "Grant FNDR Full Disk Access in System Settings, then retry."
+        );
+        let calendar = ImportError::PermissionDenied(Permission::Calendar).to_string();
+        assert!(calendar.contains("Calendar") && !calendar.contains("Permission"));
     }
 }

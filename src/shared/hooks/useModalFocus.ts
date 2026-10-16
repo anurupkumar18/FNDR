@@ -40,7 +40,7 @@ export function useModalFocus(
 
             const eventTarget = event.target;
             const owningModal = eventTarget instanceof Element
-                ? eventTarget.closest<HTMLElement>('[role="dialog"][aria-modal="true"]')
+                ? eventTarget.closest<HTMLElement>('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]')
                 : null;
             if (owningModal && owningModal !== dialog) return;
 

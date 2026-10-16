@@ -53,7 +53,7 @@
 .import-line .rcpt-leader { border-bottom-color: color-mix(in srgb, var(--rc-text-2) 38%, transparent); }
 .import-source-text > small { color: var(--rc-text-2); font-size: 13px; line-height: 1.45; max-width: 54ch; }
 .import-source-text > .import-needs {
-    color: color-mix(in srgb, var(--rc-text-2) 75%, transparent);
+    color: color-mix(in srgb, var(--rc-text-2) 90%, transparent);
     font-size: 12px;
 }
 .import-source-card .fndr-switch { margin-top: 1px; }

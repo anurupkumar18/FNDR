@@ -24,6 +24,8 @@ const readWindow = (kind: ImportKind) => {
     return Number.isInteger(stored) && stored >= 1 && stored <= 90 ? stored : 30;
 };
 
+const itemCount = (count: number) => `${count} ${count === 1 ? "item" : "items"}`;
+
 export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "settings"; onContinue?: () => void }) {
     const [sources, setSources] = useState<ImportSourceInfo[]>([]);
     const [consent, setConsent] = useState<Partial<Record<ImportKind, boolean>>>({});
@@ -219,14 +221,14 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
             </>}
             {mode === "settings" && answerMs !== null && <p>First imported answer: {(answerMs / 1000).toFixed(1)} seconds. Stored locally.</p>}
             {forgetKind && <div ref={forgetDialog} role="alertdialog" aria-label="Forget source" aria-modal="true">
-                <p>Forget {SOURCES.find((entry) => entry.kind === forgetKind)?.title} and remove {sources.find((entry) => entry.kind === forgetKind)?.row_count ?? 0} items?</p>
+                <p>Forget {SOURCES.find((entry) => entry.kind === forgetKind)?.title} and remove {itemCount(sources.find((entry) => entry.kind === forgetKind)?.row_count ?? 0)}?</p>
                 <button ref={keepButton} type="button" className="ui-action-btn" onClick={() => setForgetKind(null)}>Keep items</button>
                 <button type="button" className="import-remove" onClick={() => void act(async () => {
                     const kind = forgetKind;
                     await importForget(kind);
                     setForgetKind(null);
                     await load();
-                })}>Remove {sources.find((entry) => entry.kind === forgetKind)?.row_count ?? 0} items</button>
+                })}>Remove {itemCount(sources.find((entry) => entry.kind === forgetKind)?.row_count ?? 0)}</button>
             </div>}
         </section>
     );

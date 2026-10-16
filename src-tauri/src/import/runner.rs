@@ -279,7 +279,7 @@ impl ImportRunner {
             Ok(RunEnd::Done) => slot.status.state = RunState::Done,
             Ok(RunEnd::Cancelled) => slot.status.state = RunState::Cancelled,
             Err(message) => {
-                tracing::warn!(source = source_id, "import:run_failed");
+                tracing::warn!(source = source_id, reason = %message, "import:run_failed");
                 slot.status.state = RunState::Failed;
                 slot.status.error = Some(message);
             }

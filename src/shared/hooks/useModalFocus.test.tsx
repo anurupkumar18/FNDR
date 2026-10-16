@@ -36,4 +36,30 @@ describe("useModalFocus", () => {
         fireEvent.keyDown(parentButton, { key: "Escape" });
         expect(onClose).toHaveBeenCalledTimes(1);
     });
+
+    it("lets a confirmation dialog layered above the panel own Escape", async () => {
+        const onClose = vi.fn();
+
+        function Harness() {
+            const dialogRef = useRef<HTMLDivElement>(null);
+            const closeRef = useRef<HTMLButtonElement>(null);
+            useModalFocus(true, dialogRef, closeRef, onClose);
+            return (
+                <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Parent panel">
+                    <button ref={closeRef} type="button">Close parent</button>
+                    <div role="alertdialog" aria-modal="true" aria-label="Confirm">
+                        <button type="button">Keep it</button>
+                    </div>
+                </div>
+            );
+        }
+
+        render(<Harness />);
+        await waitFor(() => expect(screen.getByRole("button", { name: "Close parent" })).toHaveFocus());
+
+        const confirmButton = screen.getByRole("button", { name: "Keep it" });
+        confirmButton.focus();
+        fireEvent.keyDown(confirmButton, { key: "Escape" });
+        expect(onClose).not.toHaveBeenCalled();
+    });
 });

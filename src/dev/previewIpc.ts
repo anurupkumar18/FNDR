@@ -1133,6 +1133,23 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return "Always allowed.";
             case "mcp_connect_status":
                 return previewMcpStatus();
+            case "mcp_connect_apply":
+            case "mcp_connect_disconnect":
+                return { message: command === "mcp_connect_apply" ? "Connected. A backup of the config was saved." : "Disconnected.", configPath: "~/.claude.json", backupPath: null, changed: true };
+            case "mcp_connect_preview":
+                return { title: "Add this to your Claude Desktop config", path: "~/Library/Application Support/Claude/claude_desktop_config.json", text: "{ \"mcpServers\": { \"fndr\": { \"command\": \"npx\" } } }", maskedText: "{ \"mcpServers\": { \"fndr\": { \"command\": \"npx\" } } }", command: null };
+            case "mcp_connect_test":
+                return { ok: true, steps: [
+                    { name: "Server reachable", ok: true, detail: "Answered in 12 ms." },
+                    { name: "Token accepted", ok: true, detail: "The client token matched." },
+                    { name: "Memory search", ok: true, detail: "Returned 1 result with a source." },
+                ] };
+            case "mcp_connect_rotate_token":
+            case "mcp_connect_set_keep_running":
+            case "mcp_connect_set_hide_more":
+                return previewMcpStatus();
+            case "mcp_connect_revoke":
+                return "All client access was revoked.";
             case "resolve_action_approval":
                 throw new Error("No action is waiting for approval in preview.");
             case "get_action_settings":
