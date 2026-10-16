@@ -254,6 +254,8 @@ Tests: component tests for every state in the PRD's state table, from fixtures; 
 
 ## Part 10: entry points
 
+**Status 2026-10-16:** `plan::asks_for_hand_off` is built with a phrase table (20 requests that are hand-offs, 22 that are not, including a full-screen request, a table reservation and reminders, mail and replies, which stay Notch Do's). It diverts none of the 52 requests in `scripts/operator/notch-do-cases.json`. It is not wired into the router yet: that waits for the draft (Part 3) and the job runner (Part 5).
+
 Files: `src-tauri/src/operator/plan.rs` (`asks_for_hand_off`), the notch request router beside `asks_for_work_set`; `src/domains/workspace/TodoPanel.tsx` ("Hand off" on a suggestion row).
 
 `asks_for_hand_off` is checked before the planner turn and after the skill and named-set matches. Phrase table test: 30 positives ("do the readout Dana asked for", "take it from here", "put together a comparison of the three quotes", "write a one-page brief on the vendor call") and 30 negatives ("open the readout", "pull up everything on the readout" (work set), "run my Monday setup" (skill), "what did Dana ask for" (Ask), "make a reminder", "write an email to Dana" (never-send boundary: refused with the reason, not handed off)).

@@ -570,6 +570,34 @@ pub fn asks_for_work_set(request: &str) -> bool {
     pattern.is_match(request) && !asks_for_something_never_done(request)
 }
 
+/// Whether a request asks for finished work: a document, sheet or deck made
+/// from what FNDR remembers ("do the readout Dana asked for", "put together a
+/// comparison of the three quotes"). Decided on the Mac; such a request
+/// becomes a hand-off draft and never reaches the Notch Do planner (ADR 032).
+pub fn asks_for_hand_off(request: &str) -> bool {
+    static HAND_OFF: std::sync::OnceLock<(regex::Regex, regex::Regex)> = std::sync::OnceLock::new();
+    let (asks, other_job) = HAND_OFF.get_or_init(|| {
+        let deliverable = r"(readout|report|write-?up|summary|brief(ing)?|memo|deck|slides|slide\s+deck|presentation|spreadsheet|sheet|table|comparison|plan|one-?pager|analysis|doc|document|outline|proposal|faq|budget|timeline|agenda|update)s?";
+        let asks = regex::Regex::new(&format!(
+            r"(?ix)
+            \b(hand\s+(this|it|that|these)\s+off|hand\s+off\s+(the|my|this|that)\b|take\s+(it|this)\s+from\s+here|take\s+(this|it)\s+off\s+my\s+plate)
+            | \bdo\s+(the|my|that|this|our)\s+([\w'-]+\s+){{0,4}}?{deliverable}\b
+            | \b(make|write(\s+up)?|draft|prepare|put\s+together|create|build|produce)\s+(me\s+)?(a|an|the|my|that|this|our)\s+([\w'-]+\s+){{0,4}}?{deliverable}
+              (\s+(for|about|on|of|from|with|that|which|comparing|covering|summari[sz]ing|by|to)\b|\s*[.!?]?\s*$)"
+        ))
+        .expect("hand-off pattern compiles");
+        // Reminders, mail and messages are Notch Do's, and sending is never done.
+        let other_job = regex::Regex::new(
+            r"(?i)\b(remind(er)?s?|alarms?|timers?|e-?mails?|messages?|texts?|repl(y|ies)|tweets?|posts?)\b",
+        )
+        .expect("other-job pattern compiles");
+        (asks, other_job)
+    });
+    asks.is_match(request)
+        && !other_job.is_match(request)
+        && !asks_for_something_never_done(request)
+}
+
 /// Lowercase words of a request, without punctuation.
 fn request_words(request: &str) -> Vec<String> {
     request
@@ -1040,6 +1068,64 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hand_off_requests_are_recognised() {
+        for request in [
+            "do the readout Dana asked for",
+            "Do the Q4 onboarding readout for me",
+            "take it from here",
+            "hand this off",
+            "hand off the vendor comparison",
+            "take this off my plate",
+            "put together a comparison of the three quotes",
+            "write a one-page brief on the vendor call",
+            "make a deck for the client meeting",
+            "make me a spreadsheet comparing the three vendors",
+            "draft a memo about the pricing change",
+            "prepare a summary of this week's standups",
+            "create a budget from the receipts I downloaded",
+            "write up a report on the survey results",
+            "make the slides for Monday",
+            "prepare the agenda for tomorrow's sync",
+            "build a timeline of the project from my notes",
+            "write a status update.",
+            "draft an FAQ from the support notes",
+            "make a one-pager on the launch",
+        ] {
+            assert!(asks_for_hand_off(request), "{request}");
+        }
+    }
+
+    #[test]
+    fn other_requests_are_not_hand_offs() {
+        for request in [
+            "open the readout",
+            "pull up everything on the readout",
+            "run my Monday setup",
+            "what did Dana ask for",
+            "make a reminder to send the deck at 9",
+            "write an email to Dana",
+            "reply to Marco",
+            "make the presentation full screen",
+            "open the slides",
+            "play the song from yesterday",
+            "summarize this page",
+            "create a new note",
+            "make the text bigger",
+            "do the dishes",
+            "open github.com in Safari",
+            "paste it here",
+            "show me the report I was reading",
+            "delete the old report",
+            "send the deck to Marco",
+            "plan my day",
+            "the report is late",
+            "make a table reservation for two",
+        ] {
+            assert!(!asks_for_hand_off(request), "{request}");
+        }
+    }
 
     #[test]
     fn an_empty_plan_for_something_notch_do_never_does_says_so() {
