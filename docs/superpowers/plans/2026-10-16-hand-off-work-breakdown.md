@@ -125,6 +125,8 @@ Tests (seeded knowledge-worker store): the Dana survey suggestion yields the mai
 
 ## Part 4: `AppServer` streaming and interrupt
 
+**Status 2026-10-16, smaller than planned:** the client already streams every message (`read_raw`) and declines server requests (`read_message`); Notch Do avoids losing early events by sending `turn/start` without waiting and reading one stream. So no queue was added. `AppServer::send` now does that for every caller with the client's own ids, Notch Do's private counter is gone, and an interrupt is `send("turn/interrupt", ...)`. Test: `sent_and_awaited_requests_never_share_an_id`, against a stand-in app-server. The plan below is kept for the record.
+
 File: `src-tauri/src/ipc/commands/codex_account.rs`.
 
 Today `request` reads lines until its response arrives. Add:

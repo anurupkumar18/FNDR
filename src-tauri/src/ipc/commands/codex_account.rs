@@ -230,11 +230,19 @@ impl AppServer {
             .await
     }
 
-    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    /// Sends a request without waiting for it. Its response arrives through
+    /// `read_raw` with the returned id, among notifications, for callers
+    /// that read one stream (Notch Do, a hand-off worker).
+    pub(crate) async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id += 1;
         self.write(json!({ "method": method, "id": id, "params": params }))
             .await?;
+        Ok(id)
+    }
+
+    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.send(method, params).await?;
 
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
@@ -1196,6 +1204,40 @@ mod tests {
             ensure_screen_guide_not_cancelled(&cancel),
             Err("Screen Guide was cancelled.".to_string())
         );
+    }
+
+    /// A stand-in for `codex app-server` that answers every request with
+    /// its own id, so a test can see which id each call used.
+    fn fake_app_server(dir: &Path) -> PathBuf {
+        let path = dir.join("codex");
+        std::fs::write(
+            &path,
+            "#!/usr/bin/env python3\nimport json, sys\nfor line in sys.stdin:\n    m = json.loads(line)\n    if 'id' in m and 'method' in m:\n        print(json.dumps({'id': m['id'], 'result': {'echo': m['method']}}), flush=True)\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[tokio::test]
+    async fn sent_and_awaited_requests_never_share_an_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = AppServer::spawn_with(&fake_app_server(dir.path()), &[])
+            .await
+            .unwrap();
+        let first = server.send("turn/start", json!({})).await.unwrap();
+        let reply = server.read_raw().await.unwrap();
+        assert_eq!(reply["id"], json!(first));
+        assert_eq!(reply["result"]["echo"], "turn/start");
+        let awaited = server.request("config/read", json!({})).await.unwrap();
+        assert_eq!(awaited["echo"], "config/read");
+        let second = server.send("turn/interrupt", json!({})).await.unwrap();
+        assert!(second > first + 1, "request used the id between them");
+        server.shutdown().await;
     }
 
     #[test]

@@ -495,7 +495,6 @@ struct PendingApproval {
 
 pub(crate) struct Session {
     server: AppServer,
-    next_id: u64,
     planner_thread: String,
     operator_thread: String,
     /// The person said no to an action during the turn in progress.
@@ -560,20 +559,16 @@ impl Session {
             planner_thread: id(planner)?,
             operator_thread: id(operator)?,
             server,
-            next_id: 1_000,
             declined: false,
             last_report: None,
         })
     }
 
     async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, RunError> {
-        self.next_id += 1;
-        let id = self.next_id;
         self.server
-            .write(json!({ "method": method, "id": id, "params": params }))
+            .send(method, params)
             .await
-            .map_err(RunError::Failed)?;
-        Ok(id)
+            .map_err(RunError::Failed)
     }
 
     async fn answer(&mut self, request_id: Value, approve: bool) -> Result<(), RunError> {
