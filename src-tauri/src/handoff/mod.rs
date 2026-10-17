@@ -10,6 +10,7 @@
 //! - `session` runs one turn: `prepare` checks the plan and the profile, `drive` reads the stream.
 //! - `store` keeps each job's record, ids only, in the state store.
 //! - `job` runs one hand-off from a reviewed draft to a checked record.
+//! - `toolchain` installs FNDR's own Python and document libraries for workers.
 //! - `manifest` is the worker's final message; `verify` is FNDR's check of it.
 pub mod draft;
 pub mod events;
@@ -19,4 +20,5 @@ pub mod manifest;
 pub mod profile;
 pub mod session;
 pub mod store;
+pub mod toolchain;
 pub mod verify;

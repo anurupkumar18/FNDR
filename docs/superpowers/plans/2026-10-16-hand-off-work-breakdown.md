@@ -211,6 +211,8 @@ Tests: one per check, both directions; a manifest naming `../../.ssh/id_rsa`; a 
 
 ## Part 7: toolchain and worker skills
 
+**Status 2026-10-16:** built. `handoff::toolchain` installs Python 3.12 (managed by uv inside the folder) and the packages from `src-tauri/sidecars/hand-off/requirements.lock` (21 packages, every file pinned by hash), then deletes the download cache; a live install took 43.6 s and every library imported. The `readout-docx` skill is in `src-tauri/sidecars/hand-off/skills/`, bundled with the app, and copied into each job's `.agents/skills/`; its table has a shaded bold header, right-aligned numbers, banding and fixed widths after S6 showed a cramped, borderless one. `scripts/hand-off/test_render_readout.py` checks the renderer where python-docx is installed and skips elsewhere. Not built: finding or installing `uv` from FNDR (Hermes's `ensure_uv_available` is the candidate), and the Settings screen that calls install and remove.
+
 Files: `src-tauri/src/handoff/toolchain.rs`; `src-tauri/sidecars/hand-off/skills/` (new, added to `bundle.resources` in `tauri.conf.json` beside the other sidecars: `readout-docx/`, `table-xlsx/`, `slides-pptx/`, `brief-md/`, each a `SKILL.md` plus one script); `src-tauri/sidecars/hand-off/requirements.lock`.
 
 Toolchain: reuse the Hermes installer pattern (`hermes_agent.rs:508`): `uv venv --python 3.12 --python-preference only-managed` with `UV_PYTHON_INSTALL_DIR` inside the toolchain folder (no Homebrew needed), install from the hash-pinned lock, mark the version, delete the download cache. Measured in S5: 199 MB, 45 s on the M1. Install only on enabling Hand-off; Uninstall removes the folder. The worker profile makes it read-only.

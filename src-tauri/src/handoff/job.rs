@@ -100,6 +100,11 @@ pub(crate) async fn start_job_with(
 
     let folder = folder::create(base, &request.seed.text, chrono::Local::now().date_naive())
         .map_err(|e| format!("FNDR could not make the job folder: {e}"))?;
+    // FNDR's own skills, so formatting comes from tested code (Part 7).
+    if let Some(skills) = crate::speech::resolve_sidecar("hand-off/skills") {
+        copy_dir(&skills, &folder.root.join(".agents").join("skills"))
+            .map_err(|e| format!("FNDR could not add its skills to the job folder: {e}"))?;
+    }
     for item in draft.ticked(DraftItemKind::File) {
         let path = item
             .path
@@ -179,6 +184,22 @@ pub(crate) async fn start_job_with(
                 .collect();
         }
     })
+}
+
+/// Copies a folder of plain files, without following links.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -514,6 +535,9 @@ for line in sys.stdin:
             let folder = PathBuf::from(&record.folder);
             assert!(folder.starts_with(&base));
             assert!(folder.join("inputs/q4-onboarding-survey.csv").is_file());
+            assert!(folder
+                .join(".agents/skills/readout-docx/SKILL.md")
+                .is_file());
             assert!(
                 !state
                     .app_data_dir
