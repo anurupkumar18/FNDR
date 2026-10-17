@@ -29,7 +29,7 @@ Parts 1, 2 and 6 have no dependencies on each other and can run in parallel sess
 
 ## Part 0: spikes
 
-**Status 2026-10-16:** S1 to S5 done, S6 pending (the plan's window was full). Results and what they changed: [evidence](../../evidence/W05/hand-off-spikes.md). Parts 1, 7 and 8 below already include the changes.
+**Status 2026-10-16:** S1 to S6 done (S6 at 15:51, once the plan's window reset). Results and what they changed: [evidence](../../evidence/W05/hand-off-spikes.md). Parts 1, 7 and 8 below already include the changes.
 
 Evidence file: `docs/evidence/W05/hand-off-spikes.md`. Synthetic inputs only; a throwaway `CODEX_HOME` for config, the real `~/.codex/auth.json` only for S1 and S6 (they make model calls on the owner's plan; ask before the first one).
 
@@ -161,9 +161,11 @@ pub fn map_item(item: &Value) -> Vec<JobEvent>;  // pure: ThreadItem JSON -> eve
 pub async fn run(job: JobSpec, sink: impl EventSink, stop: StopToken) -> JobOutcome;
 ```
 
-`run`: spawn with Part 1 args; `config/read` and `check_effective` (refuse on mismatch); `thread/start` (cwd, ephemeral, developer instructions); `turn/start` (rendered draft, `outputSchema`, `approvalPolicy: never`, workspace-write policy as a second statement of the profile); loop on `next_message` with the idle and wall-clock limits from FR8; deny every server request and emit `EscapeDenied`; count bytes for the egress row; on stop, `turn/interrupt`, wait 5 s for `turn/completed`, then kill. Record the egress row before `turn/start` returns control (a failed write never fails the job, as in `record_model_request_including`).
+`run`: spawn with Part 1 args; `config/read` and `check_effective` (refuse on mismatch); `thread/start` (cwd, ephemeral, developer instructions); `turn/start` (rendered draft, `outputSchema`, `approvalPolicy: never`, and no `sandboxPolicy`: the profile is the sandbox, and Codex warns against combining the two); read the one stream with `read_raw` and the idle and wall-clock limits from FR8; deny every server request and emit `EscapeDenied`; count bytes for the egress row; on stop, `turn/interrupt`, wait 5 s for the thread to go idle, then kill.
 
-`ReadFile` is derived only from `commandExecution` items whose `commandActions` say read, with the name of a file under `inputs/`; otherwise the event is `RanCode`.
+Measured in S6 (Codex 0.151.0): a turn ends with an `agentMessage` whose `phase` is `final_answer`, then `thread/status/changed` to `idle`; `turn/completed` never arrived. The manifest is that final-answer message; earlier `commentary` messages are JSON-shaped too and are not the answer. The worker's environment sets `MPLCONFIGDIR` (and other tool caches) inside `work/`, since S6's worker lost a step to matplotlib's cache in the home folder. Record the egress row before `turn/start` returns control (a failed write never fails the job, as in `record_model_request_including`).
+
+`ReadFile` comes from a `commandExecution` whose command names a file under `inputs/` (S6: Python read the CSV and Codex labelled the command `unknown`, so `commandActions` alone misses it); otherwise the event is `RanCode`. An `imageView` adds its file's bytes to egress.
 
 Tests: `map_item` over a fixture of every item kind from the schema; fake-server scripts for completed, interrupted mid-command, idle timeout, wall timeout, rate limit, malformed manifest, no manifest, escape request denied, process crash; byte counting; Private Mode flip during a run stops it.
 

@@ -13,7 +13,7 @@ Inputs were synthetic: decoy files with fake text (`~/fndr-handoff-canary/canary
 | S3 skills from the job folder | Discovered (scope `repo`) without git. The person's own 38 Codex skills are also offered unless each is disabled; disabling each works | Yes: disable the person's skills per job |
 | S4 Documents folder | Writes under `~/Documents/FNDR Hand-offs/` worked with no blocking prompt with Claude as the parent app. Not yet checked with FNDR as the parent | Moves to Part 13 |
 | S5 toolchain | 199 MB installed (Python 3.12.12 managed by uv, 51 MB; packages 148 MB), 45 s, plus a 162 MB download cache that can be deleted | Yes: size estimate |
-| S6 full job | **Not run.** The plan's 5-hour Codex window was at 100 percent (resets 15:50 MDT) and the account has purchasable credits | Pending; and a new rule: check the plan's limit before a job |
+| S6 full job | Ran at 15:51 with the 5-hour window at 0 percent. A one-page readout with a table and a chart in 148 s; 4 of 4 claims with checked sources; 7 of 7 gold facts; nothing left in `~/.codex` | Yes: how a turn ends, which message is the answer, how reads show up, the matplotlib cache, image egress, table styling |
 
 ## S1: the sandbox
 
@@ -78,7 +78,7 @@ Account default model from `model/list` (`gpt-5.6-sol`; the person's `config.tom
 - No rollout file under `~/.codex/sessions` mentions the thread id.
 - `~/.codex/logs_2.sqlite` (108 MB) holds the thread id 80 times, the prompt text, the decoy file name and the commands. A hand-off prompt holds memory text, so this would keep it outside FNDR's control.
 - `command/exec` writes nothing to that log.
-- With `-c sqlite_home="<folder>"` and `-c log_dir="<folder>"`, Codex created its stores (`logs_2`, `state_5`, `memories_1`, `goals_1`, `queue_1`) in that folder. Whether a full turn's content then stays out of `~/.codex` is confirmed in S6.
+- With `-c sqlite_home="<folder>"` and `-c log_dir="<folder>"`, Codex created its stores (`logs_2`, `state_5`, `memories_1`, `goals_1`, `queue_1`) in that folder. S6 confirmed it on a full turn: the job's marker string is in the job's own Codex state folder and in none of `~/.codex`'s databases, logs, today's sessions or history.
 
 ## S3: skills
 
@@ -97,12 +97,43 @@ With the job folder holding `.agents/skills/readout-docx/SKILL.md` and no git re
 
 No Homebrew is needed. The worker's profile must make the toolchain folder readable.
 
+## S6: one full job (the second approved model call)
+
+Ran by itself at 15:51 MDT once `account/rateLimits/read` showed the 5-hour window at 0 percent (weekly 78 percent); the driver would not have started above 100 percent and would have interrupted the turn if a window reached it. Inputs were synthetic: a 400-row survey CSV with known answers, and two made-up memories (a mail from Dana asking for the readout, notes guessing that pricing is the top driver). The job folder was `~/Documents/FNDR Hand-offs/2026-10-16 Q4 onboarding readout/`, with the worker profile from S1 to S3 plus `allow_login_shell=false`, Codex's state in a per-job folder, and the `readout-docx` skill in `.agents/skills/`.
+
+| Measure | Value |
+| --- | --- |
+| First event after `turn/start` | 1.6 s |
+| Final answer | 148 s |
+| Tokens | 220,840 (214,526 input, 171,008 of them cached; 6,314 output) |
+| Plan usage | 5-hour window 0 to 2 percent |
+| Peak memory, app-server process group | 157 MB |
+| Bytes FNDR wrote to the app-server | 3,983 |
+| Command output the model read back | 10,690 bytes, plus one image of its own chart |
+| Items | 8 commands, 3 file changes, 1 image view, 13 reasoning, 3 agent messages |
+| Deliverables | `out/q4-onboarding-survey-readout.docx` (69 KB), `out/q4-onboarding-survey-readout-chart.png` (35 KB); both pass the verifier's type checks |
+| Claims | 4, each with a source the verifier accepts (the input file with a locator, or an attached memory id) |
+| Gold facts | 7 of 7: 400 respondents, 78 churned, setup 24, Salesforce 21, pricing 18 in that order, SMB 28.2 percent, and the notes' pricing guess called wrong. The checker first scored "setup ranked above pricing" false because the summary says "not pricing" before it names setup; the table is right. Part 12 checks rank from the table, not word order |
+| `not_done` | empty; one assumption: the optional benchmark was skipped because the data answered the question |
+
+What the worker did, in order: read the skill, profiled the CSV with pandas, computed the drivers and segments, read the renderer, wrote `work/readout-spec.json`, rendered the docx, previewed it with Quick Look, viewed its own chart, adjusted the spec twice, re-rendered, and re-derived every number with `assert` statements before answering. It wrote nothing outside the job folder.
+
+What the job runner must handle (Part 5):
+
+- **The end of a turn.** `turn/completed` never arrived (in S1 either). The turn ended with an `agentMessage` whose `phase` is `final_answer`, followed by `thread/status/changed` to `idle`. The driver waited 180 more seconds on its idle limit; the job was done at 148 s.
+- **Commentary looks like an answer.** Two earlier agent messages were JSON-shaped because of `outputSchema`, with `phase: commentary`. The manifest is the `final_answer` message only.
+- **Reads are not labelled.** The CSV was read by Python, so `commandActions` said `unknown`; only `sed` on the renderer came back as `read`. A trace line such as "Read the survey" comes from the command naming `inputs/<file>`.
+- **Images leave too.** `imageView` sent the worker's own chart to the model. Egress counts the bytes of viewed images with command output.
+- **A cache outside the folder.** matplotlib tried its cache under the home folder (denied) and the worker worked around it with `MPLCONFIGDIR=work/matplotlib`. The worker's environment sets `MPLCONFIGDIR` and similar caches inside `work/`.
+- **Login shell off.** Commands ran as `/bin/zsh -c`, confirming the S1 fix.
+
+What the document needs: Quick Look shows the table without borders or a bold header and with cramped columns; the renderer sets explicit borders, header weight and widths (Part 7).
+
 ## Not done
 
-- S6, the full synthetic job (survey CSV to a one-page docx): needs the plan window to reset or the owner's go-ahead to spend credits.
 - S4 with FNDR as the parent app: Part 13.
-- Web search with shell network off: not exercised, since the model run did no search.
-- Whether `turn/interrupt` stops a running command: S6.
+- Web search with shell network off: not exercised; the task made it optional and the worker skipped it.
+- Whether `turn/interrupt` stops a running command: not exercised; the guard never had to interrupt.
 
 ## Side note
 

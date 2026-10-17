@@ -1,6 +1,6 @@
 # PRD: Hand-off
 
-**Status:** Approved by the owner 2026-10-16. Spikes S1 to S5 measured the same day ([evidence](../../evidence/W05/hand-off-spikes.md)); S6 is pending. Decision record: [ADR 032](../../decisions/032-hand-off-sandboxed-worker.md). Work breakdown: [2026-10-16 Hand-off work breakdown](../plans/2026-10-16-hand-off-work-breakdown.md).
+**Status:** Approved by the owner 2026-10-16. Spikes S1 to S6 measured the same day ([evidence](../../evidence/W05/hand-off-spikes.md)); in S6 one synthetic job produced the demo's readout in 148 s. Decision record: [ADR 032](../../decisions/032-hand-off-sandboxed-worker.md). Work breakdown: [2026-10-16 Hand-off work breakdown](../plans/2026-10-16-hand-off-work-breakdown.md).
 
 Read against `origin/main` at `2b39c01` (2026-10-15). The shared checkout is 277 commits behind and was not used as the source of truth.
 

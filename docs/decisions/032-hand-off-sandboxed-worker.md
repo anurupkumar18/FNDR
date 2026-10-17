@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted 2026-10-16, by the owner** (plan approved in conversation). Spikes S1 to S5 measured the same day, [evidence](../evidence/W05/hand-off-spikes.md); they changed items 2 and 3 below. S6 is pending. The decision-log row is added with the first build commit.
+**Accepted 2026-10-16, by the owner** (plan approved in conversation). Spikes S1 to S5 measured the same day, [evidence](../evidence/W05/hand-off-spikes.md); they changed items 2 and 3 below. S6, one full job on synthetic inputs, ran at 15:51 the same day and finished in 148 s with every claim's source checked. The decision-log row is added with the first build commit.
 
 - Requirements: [Hand-off PRD](../superpowers/specs/2026-10-16-hand-off-prd.md)
 - Parts and gates: [work breakdown](../superpowers/plans/2026-10-16-hand-off-work-breakdown.md)
