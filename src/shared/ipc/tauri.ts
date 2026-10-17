@@ -1591,7 +1591,7 @@ export interface OperatorRunSummary {
 
 export interface ModelRequest {
     atMs: number;
-    /** `notch_do_plan`, `notch_do_step`, `notch_do_screen_text` or `hermes_chat`. */
+    /** A `privacy_proof::Feature` name, such as `notch_do_plan`, `hermes_chat` or `hand_off`. */
     feature: string;
     host: string;
     bytesSent: number;

@@ -77,6 +77,20 @@ describe("PrivacyProof", () => {
                             bytesSent: 900,
                             included: ["screen_text", "screenshot"],
                         },
+                        {
+                            atMs: Date.now(),
+                            feature: "hand_off",
+                            host: "chatgpt.com",
+                            bytesSent: 52_000,
+                            included: ["memory_summaries", "files"],
+                        },
+                        {
+                            atMs: Date.now(),
+                            feature: "hand_off_work",
+                            host: "chatgpt.com",
+                            bytesSent: 10_700,
+                            included: ["command_output", "images"],
+                        },
                     ],
                 }}
             />,
@@ -88,6 +102,8 @@ describe("PrivacyProof", () => {
         expect(list).toHaveTextContent("Daily output sent · hooks.slack.com");
         expect(list).toHaveTextContent("420 B");
         expect(list).toHaveTextContent(/Screen Guide asked ChatGPT · chatgpt\.com · .* · with on-screen text and a screenshot/);
+        expect(list).toHaveTextContent(/Hand-off started a job · chatgpt\.com · .* · with memory summaries and attached files/);
+        expect(list).toHaveTextContent(/Hand-off's worker read back its work · chatgpt\.com · .* · with command output and images it made/);
     });
 });
 

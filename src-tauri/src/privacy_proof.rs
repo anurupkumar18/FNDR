@@ -103,6 +103,11 @@ pub enum Feature {
     /// Reply text FNDR already decided to say, sent to the Codex realtime
     /// voice to be spoken (ADR 028). Never memory or screen text.
     VoiceOut,
+    /// A hand-off's first message and attached files (ADR 032).
+    HandOff,
+    /// What a hand-off worker read back while it worked: command output and
+    /// images it viewed (spike S6).
+    HandOffWork,
 }
 
 impl Feature {
@@ -115,6 +120,8 @@ impl Feature {
             Self::HermesChat => "hermes_chat",
             Self::ScreenGuideAnswer => "screen_guide_answer",
             Self::VoiceOut => "voice_out",
+            Self::HandOff => "hand_off",
+            Self::HandOffWork => "hand_off_work",
         }
     }
 }

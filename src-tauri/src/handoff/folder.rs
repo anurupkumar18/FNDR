@@ -52,6 +52,27 @@ pub enum InputRefusal {
     Io(String),
 }
 
+impl std::fmt::Display for InputRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const MB: u64 = 1024 * 1024;
+        match self {
+            Self::NotAFile => write!(f, "it is not a file"),
+            Self::Link => write!(f, "it is a link to another place"),
+            Self::Type(ext) if ext.is_empty() => write!(f, "files without a type are not attached"),
+            Self::Type(ext) => write!(f, ".{ext} files are not attached"),
+            Self::TooLarge { bytes, cap } => {
+                write!(f, "it is {} MB, over the {} MB limit", bytes / MB, cap / MB)
+            }
+            Self::TotalTooLarge { cap, .. } => {
+                write!(f, "the files together would pass {} MB", cap / MB)
+            }
+            Self::TooMany { cap } => write!(f, "at most {cap} files are attached"),
+            Self::ChangedWhileCopying => write!(f, "it changed while FNDR copied it"),
+            Self::Io(error) => write!(f, "it could not be read ({error})"),
+        }
+    }
+}
+
 /// What a job folder holds now, for the limits in PRD FR8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Usage {

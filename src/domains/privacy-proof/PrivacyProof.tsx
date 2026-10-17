@@ -53,6 +53,8 @@ const FEATURE_LABELS: Record<string, string> = {
     notch_do_screen_text: "Notch Do sent what an app showed",
     hermes_chat: "Hermes chat message",
     screen_guide_answer: "Screen Guide asked ChatGPT",
+    hand_off: "Hand-off started a job",
+    hand_off_work: "Hand-off's worker read back its work",
 };
 
 const INCLUDED_LABELS: Record<string, string> = {
@@ -60,6 +62,9 @@ const INCLUDED_LABELS: Record<string, string> = {
     memories: "memories",
     screen_text: "on-screen text",
     screenshot: "a screenshot",
+    files: "attached files",
+    command_output: "command output",
+    images: "images it made",
 };
 
 function includedText(included: string[] | undefined): string {
