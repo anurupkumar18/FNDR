@@ -13,9 +13,15 @@
 
 use std::path::Path;
 
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum JobEvent {
     /// The worker read an input file, by its name in `inputs/`.
     ReadFile {

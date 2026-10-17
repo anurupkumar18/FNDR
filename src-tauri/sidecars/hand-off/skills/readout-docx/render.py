@@ -39,6 +39,43 @@ def pad_cells(table, points=5):
 def is_number(text):
     return text.replace(",", "").replace("%", "").replace(".", "", 1).lstrip("-").isdigit()
 
+def add_table(doc, table):
+    """A ranked table: shaded bold header, right-aligned numbers, banding."""
+    columns = [str(c) for c in table["columns"]]
+    rows = [[str(v) for v in row] for row in table["rows"][:6]]
+    t = doc.add_table(rows=1, cols=len(columns))
+    t.style = "Table Grid"
+    t.alignment = WD_TABLE_ALIGNMENT.LEFT
+    t.autofit = False
+    pad_cells(t)
+    numeric = [bool(rows) and all(is_number(r[i]) for r in rows if i < len(r)) for i in range(len(columns))]
+    # A number column is as wide as its header needs; text columns share the rest.
+    widths = [Inches(max(0.95, 0.11 * len(columns[i]) + 0.4)) if numeric[i] else None for i in range(len(columns))]
+    free = Inches(6.9) - sum(w for w in widths if w)
+    text_columns = sum(1 for w in widths if w is None) or 1
+    widths = [w or int(free / text_columns) for w in widths]
+    for i, (cell, name) in enumerate(zip(t.rows[0].cells, columns)):
+        cell.text = name
+        run = cell.paragraphs[0].runs[0]
+        run.bold = True
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        shade(cell, ACCENT)
+    for row in rows:
+        t.add_row()
+    for i, column in enumerate(t.columns):
+        column.width = widths[i]
+    for r, row in enumerate(t.rows):
+        for i, cell in enumerate(row.cells):
+            cell.width = widths[i]
+            if r > 0 and i < len(rows[r - 1]):
+                cell.text = rows[r - 1][i]
+            if numeric[i]:
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            if r > 0 and r % 2 == 0:
+                shade(cell, "EEF3F8")
+    doc.add_paragraph()
+
+
 def render(spec, out):
     """Write `out` (a .docx inside an `out/` folder) and, with a chart, its .png."""
     out = Path(out)
@@ -74,42 +111,13 @@ def render(spec, out):
             doc.add_paragraph(para)
         for bullet in sec.get("bullets", []):
             doc.add_paragraph(bullet, style="List Bullet")
+        # A table that belongs to this section sits right under it.
+        if sec.get("table"):
+            add_table(doc, sec["table"])
 
     table = spec.get("table")
     if table:
-        columns = [str(c) for c in table["columns"]]
-        rows = [[str(v) for v in row] for row in table["rows"][:6]]
-        t = doc.add_table(rows=1, cols=len(columns))
-        t.style = "Table Grid"
-        t.alignment = WD_TABLE_ALIGNMENT.LEFT
-        t.autofit = False
-        pad_cells(t)
-        numeric = [bool(rows) and all(is_number(r[i]) for r in rows if i < len(r)) for i in range(len(columns))]
-        # A number column is as wide as its header needs; text columns share the rest.
-        widths = [Inches(max(0.6, 0.11 * len(columns[i]) + 0.3)) if numeric[i] else None for i in range(len(columns))]
-        free = Inches(6.9) - sum(w for w in widths if w)
-        text_columns = sum(1 for w in widths if w is None) or 1
-        widths = [w or int(free / text_columns) for w in widths]
-        for i, (cell, name) in enumerate(zip(t.rows[0].cells, columns)):
-            cell.text = name
-            run = cell.paragraphs[0].runs[0]
-            run.bold = True
-            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-            shade(cell, ACCENT)
-        for row in rows:
-            t.add_row()
-        for i, column in enumerate(t.columns):
-            column.width = widths[i]
-        for r, row in enumerate(t.rows):
-            for i, cell in enumerate(row.cells):
-                cell.width = widths[i]
-                if r > 0 and i < len(rows[r - 1]):
-                    cell.text = rows[r - 1][i]
-                if numeric[i]:
-                    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                if r > 0 and r % 2 == 0:
-                    shade(cell, "EEF3F8")
-        doc.add_paragraph()
+        add_table(doc, table)
 
     chart = spec.get("chart")
     if chart:

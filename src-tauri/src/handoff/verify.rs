@@ -98,8 +98,17 @@ pub fn verify(manifest: &Manifest, folder: &JobFolder, evidence: &Evidence) -> V
                 .iter()
                 .map(|s| (s.clone(), check_source(folder, evidence, &searched, s)))
                 .collect();
+            // A claim backed only by what the worker made is its own word
+            // (live run, 2026-10-16: "the readout includes the ranking").
+            let only_its_own = !sources.is_empty()
+                && sources.iter().all(|(s, _)| {
+                    s.kind == SourceKind::File
+                        && s.reference.trim_start_matches("./").starts_with("out/")
+                });
             let status = if sources.is_empty() {
                 ClaimStatus::Unsupported
+            } else if only_its_own {
+                ClaimStatus::NotChecked
             } else if sources.iter().all(|(_, c)| *c == SourceCheck::Ok) {
                 ClaimStatus::Checked
             } else {
@@ -403,6 +412,37 @@ mod tests {
         );
         assert_eq!((v.checked, v.unsupported, v.not_checked), (0, 1, 5));
         assert_eq!(v.claims[5].status, ClaimStatus::Unsupported);
+        assert_eq!(v.status, ResultStatus::ReadyWithGaps);
+    }
+
+    #[test]
+    fn a_claim_backed_only_by_its_own_output_is_not_checked() {
+        let (_b, job) = job();
+        docx(&job.out.join("readout.docx"));
+        fs::write(job.inputs.join("survey.csv"), "a\n").unwrap();
+        let m = manifest(
+            vec![readout()],
+            vec![
+                claim(
+                    "The readout includes the ranking",
+                    vec![source(SourceKind::File, "out/readout.docx")],
+                ),
+                claim(
+                    "Setup ranks first",
+                    vec![
+                        source(SourceKind::File, "inputs/survey.csv"),
+                        source(SourceKind::File, "out/readout.docx"),
+                    ],
+                ),
+            ],
+        );
+        let v = verify(&m, &job, &evidence());
+        assert_eq!(v.claims[0].status, ClaimStatus::NotChecked);
+        assert_eq!(
+            v.claims[1].status,
+            ClaimStatus::Checked,
+            "an input alongside it is a real source"
+        );
         assert_eq!(v.status, ResultStatus::ReadyWithGaps);
     }
 

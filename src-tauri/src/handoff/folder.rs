@@ -130,12 +130,17 @@ pub fn folder_title(title: &str) -> String {
         })
         .collect();
     let words = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title: String = words
-        .trim_start_matches('.')
-        .trim()
-        .chars()
-        .take(60)
-        .collect();
+    let title: String = words.trim_start_matches('.').trim().chars().collect();
+    // At most 60 characters, ending on a whole word when one fits.
+    let title = if title.chars().count() <= 60 {
+        title
+    } else {
+        let cut: String = title.chars().take(60).collect();
+        match cut.rfind(' ') {
+            Some(space) if space >= 20 => cut[..space].to_string(),
+            _ => cut,
+        }
+    };
     let title = title.trim_end().to_string();
     if title.is_empty() {
         "Hand-off".to_string()
@@ -322,6 +327,13 @@ mod tests {
         assert_eq!(folder_title("   "), "Hand-off");
         assert_eq!(folder_title("line\nbreak"), "line break");
         assert_eq!(folder_title(&"é".repeat(80)).chars().count(), 60);
+        // The live run's request was cut mid-word ("...with the top thr").
+        assert_eq!(
+            folder_title(
+                "Own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday"
+            ),
+            "Own a one-page Q4 onboarding survey readout with the top"
+        );
     }
 
     #[test]

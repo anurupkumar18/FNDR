@@ -587,6 +587,89 @@ for line in sys.stdin:
         });
     }
 
+    /// One real hand-off: the made-up survey and memories, the installed
+    /// Codex on the person's ChatGPT plan, FNDR's toolchain installed fresh.
+    /// The job folder is left in `~/Documents/FNDR Hand-offs/` to open.
+    /// `prepare` refuses a full plan and `drive` interrupts a turn whose plan
+    /// fills, so no purchased credits are spent.
+    #[test]
+    #[ignore = "One model call on the ChatGPT plan and a 200 MB install; run: cargo test --lib live_hand_off_runs_end_to_end -- --ignored --nocapture"]
+    fn live_hand_off_runs_end_to_end() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hand-off");
+        let root = dirs::home_dir()
+            .unwrap()
+            .join("Library/Caches/fndr-hand-off-live")
+            .join(chrono::Utc::now().timestamp().to_string());
+        std::fs::create_dir_all(&root).unwrap();
+        let state = state(&root.join("data"));
+        let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|dir| dir.join("uv"))
+            .find(|path| path.is_file())
+            .expect("uv on PATH");
+        let started = std::time::Instant::now();
+        super::super::toolchain::install(&uv, &toolchain_dir(&state)).unwrap();
+        eprintln!("toolchain installed in {:?}", started.elapsed());
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let csv = root.join("Downloads/q4-onboarding-survey.csv");
+            std::fs::create_dir_all(csv.parent().unwrap()).unwrap();
+            std::fs::copy(fixtures.join("q4-onboarding-survey.csv"), &csv).unwrap();
+            let mut file = memory("m_csv", "Finder", "The Q4 onboarding survey export was downloaded.");
+            file.reopen_kind = ReopenKind::FilePath;
+            file.reopen_file_path = Some(csv.display().to_string());
+            state
+                .store
+                .add_batch_preserving_ids(&[
+                    memory(
+                        "m_mail_7f3a",
+                        "Mail",
+                        "Dana Reyes asked Sam to own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday, for the exec sync. The survey export was attached.",
+                    ),
+                    memory(
+                        "m_notes_21c9",
+                        "Notes",
+                        "Churn hypotheses: pricing page confusion is probably the top driver; the Salesforce integration gap keeps coming up; enterprise churn is low. To check against the survey.",
+                    ),
+                    file,
+                ])
+                .await
+                .unwrap();
+            let seed = TaskSeed {
+                text: "Own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday".into(),
+                memory_id: Some("m_mail_7f3a".into()),
+            };
+            let selection = Selection {
+                memory_ids: Some(HashSet::from(["m_mail_7f3a".to_string(), "m_notes_21c9".to_string()])),
+                file_memory_ids: Some(HashSet::from(["m_csv".to_string()])),
+            };
+            let tools = tools_line(&toolchain_dir(&state));
+            let draft = draft::recheck(&state, &seed, OutputGoal::Doc, &selection, &tools).await.unwrap();
+            eprintln!("draft: {} bytes to send\n{}", draft.estimate_bytes, draft.rendered);
+            let request = JobRequest { seed, goal: OutputGoal::Doc, selection, reviewed: draft.rendered };
+
+            let started = std::time::Instant::now();
+            let record = start_job(&state, request, Arc::new(AtomicBool::new(false)), |event| {
+                eprintln!("{:>6.1}s  {event:?}", started.elapsed().as_secs_f32());
+            })
+            .await
+            .unwrap();
+            eprintln!("record: {record:#?}");
+
+            assert_eq!(record.status, JobStatus::Ready, "{:?}", record.reason);
+            assert!(record.checked >= 3 && record.unsupported == 0 && record.not_checked == 0);
+            let docx = record.deliverables.iter().find(|d| d.ends_with(".docx")).expect("a document");
+            let mut archive = zip::ZipArchive::new(std::fs::File::open(Path::new(&record.folder).join(docx)).unwrap()).unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+            let text = xml.split('<').filter_map(|part| part.split_once('>').map(|(_, t)| t)).collect::<Vec<_>>().join(" ");
+            for fact in ["400", "78", "24", "21", "18", "28.2"] {
+                assert!(text.contains(fact), "the document states {fact}");
+            }
+            assert!(!state.app_data_dir.join("hand-off/jobs").join(&record.id).exists());
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn verdict(status: ResultStatus) -> verify::Verdict {
         verify::Verdict {
             deliverables: vec![],

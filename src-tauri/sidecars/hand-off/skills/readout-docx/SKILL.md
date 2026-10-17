@@ -19,7 +19,7 @@ description: Render a one-page readout (.docx, with an optional bar chart) from 
 }
 ```
 
-Every key except `title` and `summary` is optional. Keep it to one page: at most 3 sections, 6 table rows, 6 chart bars.
+Every key except `title` and `summary` is optional. A section may carry its own `"table"` (same shape); it is placed right under that section. A top-level table goes after the sections. Keep it to one page: at most 3 sections, 6 table rows, 6 chart bars.
 
 3. Render with that Python: `<python> .agents/skills/readout-docx/render.py work/readout-spec.json out/<name>.docx`. Set `MPLCONFIGDIR=work/matplotlib` first. A chart also writes `out/<name>-chart.png`.
 4. Check the document by reading it back with python-docx before you answer.

@@ -129,11 +129,33 @@ What the job runner must handle (Part 5):
 
 What the document needs: Quick Look shows the table without borders or a bold header and with cramped columns; the renderer sets explicit borders, header weight and widths (Part 7).
 
+## A real job through FNDR's own code (the third approved model call)
+
+`handoff::job::tests::live_hand_off_runs_end_to_end`, run at 21:58 MDT with the 5-hour window at 67 percent and the weekly at 89 percent. Same synthetic task, memories and survey as S6 (the survey and its gold answers are now `src-tauri/tests/fixtures/hand-off/`), but everything in between is FNDR's code: a seeded store, `draft::recheck`, `start_job` (folder, input copy, skills, person config read, worker arguments, `prepare`, egress rows, `drive`, `verify`, record), FNDR's toolchain installed fresh (39.7 s), and the job folder in `~/Documents/FNDR Hand-offs/`.
+
+| Measure | Value |
+| --- | --- |
+| Result | `Ready`; 3 claims, 3 checked; the document holds 400, 78, 24, 21, 18 and 28.2 |
+| Time from `turn/start` to the final answer | 147 s |
+| Tokens | 282,389 |
+| Plan usage | 5-hour window 67 to 71 percent; weekly unchanged at 89 |
+| Logged to Privacy Activity | `hand_off` 16,127 bytes (the draft and the CSV), then `hand_off_work` for what the worker read back; the record says 62,156 bytes in all |
+| Codex state for the job | deleted |
+| Trace events | 7 code runs, 4 reads of the survey, 3 writes in `work/`, no image views or web searches, 1 final answer, then idle |
+
+The readout went further than S6: churn by onboarding step (every respondent who stopped at data import or team invite churned), by segment, and median days to first report, with three recommendations. The worker spent about 30 seconds writing `work/place_table.py` to move the table under its heading, because the renderer placed every table after the sections.
+
+What it changed:
+
+- **A claim citing only its own output is not checked.** One of the three claims cited only `out/q4-onboarding-survey-readout.docx` ("the readout includes the ranking"). The verifier now counts a claim whose every source is a file in `out/` as not checked; an input or memory beside it still counts.
+- **Folder names end on a word.** The folder was cut at 60 characters mid-word ("...with the top thr"); titles now end at the last whole word.
+- **Tables can sit in their section.** The renderer takes a `table` inside a section and places it there, and number columns are at least 0.95 inch wide (they ran together at "24 30.8%").
+
 ## Not done
 
 - S4 with FNDR as the parent app: Part 13.
 - Web search with shell network off: not exercised; the task made it optional and the worker skipped it.
-- Whether `turn/interrupt` stops a running command: not exercised; the guard never had to interrupt.
+- Whether `turn/interrupt` stops a running command against the real Codex: not exercised; neither guard had to interrupt. Stand-in app-servers cover Stop, timeouts and a plan filling mid-turn.
 
 ## Side note
 

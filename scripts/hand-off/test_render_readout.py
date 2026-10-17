@@ -52,6 +52,29 @@ class RenderReadoutTests(unittest.TestCase):
             self.assertEqual(len(document.inline_shapes), 1)
             self.assertTrue((out.parent / "readout-chart.png").read_bytes().startswith(b"\x89PNG"))
 
+    def test_a_sections_table_sits_under_that_section(self):
+        import docx
+
+        spec = {
+            "title": "T",
+            "summary": "S",
+            "sections": [
+                {"heading": "Drivers", "paragraphs": ["Ranked."], "table": SPEC["table"]},
+                {"heading": "Next", "bullets": ["Fix setup"]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out" / "readout.docx"
+            out.parent.mkdir()
+            load().render(spec, out)
+            body = docx.Document(out).element.body
+            order = [child.tag.split("}")[1] for child in body]
+            texts = ["".join(child.itertext()) for child in body]
+            at = lambda text: next(i for i, t in enumerate(texts) if text in t)
+            table_at = order.index("tbl")
+            self.assertLess(at("Ranked."), table_at)
+            self.assertGreater(at("Next"), table_at)
+
     def test_only_a_docx_inside_out_is_written(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
