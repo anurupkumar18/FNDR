@@ -22,6 +22,17 @@ const producers = Object.entries(sources).filter(([path, text]) =>
 
 /** Interpolations inside a template-literal `label:` or `detail:`. */
 const ALLOWED_INTERPOLATIONS: Record<string, string[]> = {
+    // Counts of observed worker events and of claims FNDR checked (ADR 032).
+    "/src/domains/handoff/handOffTrace.ts": [
+        'checked',
+        'claims',
+        'claims === 1 ? "claim" : "claims"',
+        'n',
+        'n === 1 ? "file" : "files"',
+        'n === 1 ? "read" : "reads"',
+        'n === 1 ? "run" : "runs"',
+        'n === 1 ? "search" : "searches"',
+    ],
     "/src/domains/memory-vault/MemoryCardsPanel.tsx": [
         'hits.length',
         'hits.length === 1 ? "match" : "matches"',

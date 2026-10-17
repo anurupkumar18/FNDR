@@ -471,7 +471,7 @@ fn configure_uv_command(command: &mut Command, state: &AppState) -> Result<(), S
     Ok(())
 }
 
-fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
+pub(crate) fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
     if let Some(path) = detect_uv_executable(state) {
         return Ok(path);
     }

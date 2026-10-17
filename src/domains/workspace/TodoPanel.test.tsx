@@ -13,6 +13,16 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/shared/ipc/tauri", () => ipc);
 
+// The hand-off panel has its own tests; here only what it is opened with.
+vi.mock("@/domains/handoff/HandOffPanel", () => ({
+    HandOffPanel: ({ source, onClose }: { source: { kind: string; value: string }; onClose: () => void }) => (
+        <div role="dialog" aria-label="Hand off">
+            {source.kind}:{source.value}
+            <button type="button" onClick={onClose}>Close hand-off</button>
+        </div>
+    ),
+}));
+
 const suggestions = vi.hoisted(() => ({ acceptSuggestion: vi.fn() }));
 vi.mock("./todoSuggestions", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./todoSuggestions")>()),
@@ -139,6 +149,19 @@ describe("TodoPanel", () => {
         await waitFor(() => expect(ipc.dismissTodo).toHaveBeenCalledWith(suggestion.id));
         expect(ipc.completeTodo).not.toHaveBeenCalled();
         expect(screen.queryByText(suggestion.title)).toBeNull();
+    });
+
+    it("hands a suggestion off by its id and keeps it until the person decides", async () => {
+        ipc.getTodos.mockResolvedValueOnce([suggestion]);
+        render(<TodoPanel isVisible onClose={vi.fn()} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: `Hand off ${suggestion.title}` }));
+
+        expect(screen.getByRole("dialog", { name: "Hand off" })).toHaveTextContent(`task:${suggestion.id}`);
+        expect(ipc.dismissTodo).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Close hand-off" }));
+        expect(screen.queryByRole("dialog", { name: "Hand off" })).toBeNull();
+        expect(screen.getByText(suggestion.title)).toBeInTheDocument();
     });
 
     it("shows a task's type and age in one short line", async () => {

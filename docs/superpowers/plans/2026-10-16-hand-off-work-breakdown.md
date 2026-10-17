@@ -227,6 +227,8 @@ Tests: each script renders its fixture spec under the real toolchain (`make test
 
 ## Part 8: store, IPC and events
 
+**Status 2026-10-16, commands:** `ipc/commands/hand_off.rs` serves `hand_off_status`, `hand_off_install_toolchain`, `hand_off_draft`, `hand_off_update_draft`, `hand_off_start`, `hand_off_stop`, `hand_off_open` (verified deliverables only) and `hand_off_rate`; progress goes out as `hand_off://progress` and the end as `hand_off://finished`. The launch sweep runs in `main.rs`. A job list command waits for a screen that shows past jobs; there is none yet.
+
 Files: `src-tauri/src/handoff/store.rs`; `src-tauri/src/ipc/commands/hand_off.rs`; `src-tauri/src/privacy_proof.rs` (`Feature::HandOff`); `src/shared/ipc/` wrappers.
 
 Store: the state store under `hand_off_jobs_v1`, the same way `agent::peer_runs` keeps peer runs; newest 50 kept, at most one running. At launch any running job becomes `Stopped`.
@@ -244,6 +246,8 @@ Tests: store bounds and restart; each command refuses under the kill switch and 
 **Gate:** `npm test`, `cargo test` for the module, `ipcDrift`.
 
 ## Part 9: UI
+
+**Status 2026-10-16:** the panel (`src/domains/handoff/HandOffPanel.tsx`) shows the draft card, the job while it works (an `ActivityTrace` composed by `handOffTrace.ts`, counts only) and the checked result with Open and a rating, layered over To-dos with its own focus and Escape. Checked in the browser preview end to end (draft, install, output choice, run, result), which found and fixed a reload on every parent render. Not built: the notch pill and result, and the Settings section.
 
 Files: `src/domains/handoff/` (new): `HandOffDraftCard.tsx`, `HandOffPill.tsx`, `HandOffTrace.tsx`, `HandOffResult.tsx`, `HandOffList.tsx`, `handOffTrace.ts` (pure event-to-line composer), CSS beside each; mounts in the Agent page (Labs) as a "Hand-offs" tab, in the notch for draft, pill and result, and in Settings > AI as a Hand-off section.
 
@@ -263,6 +267,8 @@ Tests: component tests for every state in the PRD's state table, from fixtures; 
 **Gate:** `npm test`, `npm run typecheck`, preview screenshots of every state in the evidence file.
 
 ## Part 10: entry points
+
+**Status 2026-10-16, To-dos:** every suggestion row has Hand off, which opens the panel with that task. The notch detector is still not wired.
 
 **Status 2026-10-16:** `plan::asks_for_hand_off` is built with a phrase table (20 requests that are hand-offs, 22 that are not, including a full-screen request, a table reservation and reminders, mail and replies, which stay Notch Do's). It diverts none of the 52 requests in `scripts/operator/notch-do-cases.json`. It is not wired into the router yet: that waits for the draft (Part 3) and the job runner (Part 5).
 

@@ -3096,6 +3096,134 @@ export interface WorkSetArrangement {
     detail: string;
 }
 
+// ---- Hand-off (ADR 032) ----
+
+export type HandOffGoal = "doc" | "spreadsheet" | "slides" | "brief";
+
+/** Where a draft comes from: the person's words, or a to-do suggestion's id. */
+export type HandOffSource = { kind: "request"; value: string } | { kind: "task"; value: string };
+
+export interface HandOffDraftItem {
+    kind: "memory" | "file";
+    memoryId: string;
+    label: string;
+    appName: string;
+    capturedAt: number;
+    ticked: boolean;
+    bytes?: number;
+}
+
+/** What a hand-off would send, resolved on this Mac. `rendered` is exactly
+ *  the first message; the start compares it again before anything leaves. */
+export interface HandOffDraft {
+    taskText: string;
+    taskMemoryId: string | null;
+    goal: HandOffGoal;
+    items: HandOffDraftItem[];
+    rendered: string;
+    estimateBytes: number;
+}
+
+export type HandOffJobStatus =
+    | "starting"
+    | "working"
+    | "stopping"
+    | "checking"
+    | "ready"
+    | "ready_with_gaps"
+    | "stopped"
+    | "failed";
+
+export interface HandOffRecord {
+    id: string;
+    createdAtMs: number;
+    request: string;
+    goal: HandOffGoal;
+    memoryIds: string[];
+    fileMemoryIds: string[];
+    folder: string;
+    status: HandOffJobStatus;
+    reason: string | null;
+    finishedAtMs: number | null;
+    bytesSent: number;
+    checked: number;
+    unsupported: number;
+    notChecked: number;
+    /** Verified deliverables, relative to `folder`. */
+    deliverables: string[];
+    rating: "worked" | "did_not_work" | null;
+}
+
+export interface HandOffStatus {
+    toolchain: "missing" | "outdated" | "installed";
+    running: HandOffRecord | null;
+}
+
+/** What the worker did, as FNDR read it from Codex's stream. */
+export type HandOffEvent =
+    | { kind: "readFile"; name: string }
+    | { kind: "ranCode"; ok: boolean; ms: number }
+    | { kind: "wroteFile"; path: string }
+    | { kind: "viewedImage"; path: string }
+    | { kind: "webSearched"; query: string; urls: string[] }
+    | { kind: "answered"; text: string }
+    | { kind: "idle" }
+    | { kind: "tokens"; total: number }
+    | { kind: "rateLimits"; primary: number; secondary: number };
+
+export interface HandOffFinished {
+    record: HandOffRecord | null;
+    error: string | null;
+}
+
+export const HAND_OFF_PROGRESS_EVENT = "hand_off://progress";
+export const HAND_OFF_FINISHED_EVENT = "hand_off://finished";
+
+export async function handOffStatus(): Promise<HandOffStatus> {
+    return invoke<HandOffStatus>("hand_off_status");
+}
+
+/** Installs FNDR's Python and document libraries for workers (about 200 MB). */
+export async function handOffInstallToolchain(): Promise<HandOffStatus> {
+    return invoke<HandOffStatus>("hand_off_install_toolchain");
+}
+
+/** What a hand-off would send. Nothing leaves the Mac. */
+export async function handOffDraft(source: HandOffSource): Promise<HandOffDraft> {
+    return invoke<HandOffDraft>("hand_off_draft", { source });
+}
+
+interface HandOffChoice {
+    taskText: string;
+    taskMemoryId: string | null;
+    goal: HandOffGoal;
+    memoryIds: string[];
+    fileMemoryIds: string[];
+}
+
+/** The draft again with the person's ticks and output. */
+export async function handOffUpdateDraft(choice: HandOffChoice): Promise<HandOffDraft> {
+    return invoke<HandOffDraft>("hand_off_update_draft", { ...choice });
+}
+
+/** Starts the reviewed job; progress and the end arrive as events. */
+export async function handOffStart(choice: HandOffChoice & { reviewed: string }): Promise<void> {
+    return invoke<void>("hand_off_start", { ...choice });
+}
+
+export async function handOffStop(): Promise<void> {
+    return invoke<void>("hand_off_stop");
+}
+
+/** Opens one deliverable FNDR checked, in its default app. */
+export async function handOffOpen(jobId: string, path: string): Promise<void> {
+    return invoke<void>("hand_off_open", { jobId, path });
+}
+
+export async function handOffRate(jobId: string, worked: boolean): Promise<HandOffRecord> {
+    return invoke<HandOffRecord>("hand_off_rate", { jobId, worked });
+}
+
 /** Which thread of work a request means. Reads only; nothing leaves the Mac. */
 export async function resolveWorkSet(query: string): Promise<WorkSetResolution> {
     return invoke<WorkSetResolution>("resolve_work_set", { query });

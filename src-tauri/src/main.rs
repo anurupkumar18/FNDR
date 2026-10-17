@@ -187,6 +187,13 @@ fn main() {
             fndr_lib::privacy_proof::init_model_request_log(&data_dir);
             ipc::commands::sweep_screen_guide_scratch();
             ipc::commands::reap_stale_hermes_gateway(&data_dir);
+            // A hand-off that was working when FNDR quit has no worker now.
+            if let Err(error) = fndr_lib::handoff::store::sweep_after_restart(
+                &state.state_store,
+                chrono::Utc::now().timestamp_millis(),
+            ) {
+                tracing::warn!(%error, "hand_off:sweep_after_restart_failed");
+            }
 
             // Restore last-session model: if onboarding is complete and the
             // preferred GGUF is on disk, load it eagerly. This means the
@@ -993,6 +1000,14 @@ fn main() {
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
             ipc::commands::resolve_work_set,
+            ipc::commands::hand_off_status,
+            ipc::commands::hand_off_install_toolchain,
+            ipc::commands::hand_off_draft,
+            ipc::commands::hand_off_update_draft,
+            ipc::commands::hand_off_start,
+            ipc::commands::hand_off_stop,
+            ipc::commands::hand_off_open,
+            ipc::commands::hand_off_rate,
             ipc::commands::open_work_set,
             ipc::commands::list_named_sets,
             ipc::commands::save_named_set,

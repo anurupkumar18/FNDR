@@ -336,6 +336,20 @@ const previewModels: ModelInfo[] = [
 
 const previewTasks: Task[] = [
     {
+        id: "task-q4-readout",
+        title: "Own the Q4 onboarding survey readout",
+        description: "can you own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday",
+        source_app: "Memory:Mail",
+        source_memory_id: "memory-q4-mail",
+        created_at: previewNow - 75 * 60 * 1000,
+        due_date: null,
+        is_completed: false,
+        is_dismissed: false,
+        task_type: "Followup",
+        linked_urls: [],
+        linked_memory_ids: ["memory-q4-mail"],
+    },
+    {
         id: "task-share-audit",
         title: "Share the UI audit with the capstone team",
         description: "Confirm the browser walkthrough findings and assign the native-only checks.",
@@ -800,6 +814,44 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     };
     let previewCards = clonePreview(previewMemoryCards);
     let tasks = clonePreview(previewTasks);
+    // Hand-off (ADR 032): starts without the document tools so the install
+    // step is visible; a started job plays a short scripted run.
+    let handOffToolchain: "missing" | "installed" = "missing";
+    let handOffRunning = false;
+    const handOffItems = [
+        { kind: "memory", memoryId: "memory-q4-mail", label: "Mail: Q4 onboarding readout", appName: "Mail", capturedAt: previewNow - 75 * 60 * 1000 },
+        { kind: "memory", memoryId: "memory-churn-notes", label: "Notes: churn hypotheses", appName: "Notes", capturedAt: previewNow - 50 * 60 * 1000 },
+        { kind: "file", memoryId: "memory-q4-csv", label: "q4-onboarding-survey.csv", appName: "Finder", capturedAt: previewNow - 70 * 60 * 1000, bytes: 15_184 },
+    ] as const;
+    const handOffDraftFor = (taskText: string, taskMemoryId: string | null, goal: string, memoryIds?: string[], fileMemoryIds?: string[]) => {
+        const items = handOffItems.map((item) => ({
+            ...item,
+            ticked: item.kind === "memory"
+                ? (memoryIds ?? [item.memoryId]).includes(item.memoryId)
+                : (fileMemoryIds ?? [item.memoryId]).includes(item.memoryId),
+        }));
+        const rendered = `TASK\n"${taskText}"\n\nOUTPUT\n${goal}\n\nEVIDENCE\n${items.filter((i) => i.ticked).map((i) => i.memoryId).join("\n")}`;
+        const fileBytes = items.filter((i) => i.ticked && i.kind === "file").reduce((sum, i) => sum + ("bytes" in i ? i.bytes : 0), 0);
+        return { taskText, taskMemoryId, goal, items, rendered, estimateBytes: rendered.length + fileBytes };
+    };
+    const handOffRecord = (status: string, reason: string | null) => ({
+        id: "preview-hand-off",
+        createdAtMs: Date.now() - 140_000,
+        request: "Own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday",
+        goal: "doc",
+        memoryIds: ["memory-q4-mail", "memory-churn-notes"],
+        fileMemoryIds: ["memory-q4-csv"],
+        folder: "~/Documents/FNDR Hand-offs/2026-10-16 Own a one-page Q4 onboarding survey readout with the top",
+        status,
+        reason,
+        finishedAtMs: Date.now(),
+        bytesSent: 62_156,
+        checked: status === "ready" ? 3 : 0,
+        unsupported: 0,
+        notChecked: 0,
+        deliverables: status === "ready" ? ["out/q4-onboarding-survey-readout.docx"] : [],
+        rating: null,
+    });
     let nextTaskId = 1;
     let screenGuideSettings: ScreenGuideSettings = {
         enabled: true,
@@ -1443,8 +1495,11 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return `FNDR previewed 126 local captures on ${displayPreviewDate(dateStr)}. Visual Studio Code was the leading app. You have ${openFollowups} open follow-up${openFollowups === 1 ? "" : "s"}.`;
             }
             case "get_daily_summary_followups":
+                // Like the backend (stats.rs): a suggestion nobody accepted is
+                // not work the person is carrying.
                 return clonePreview(tasks.filter((task) => (
                     task.task_type === "Followup" && !task.is_completed && !task.is_dismissed
+                    && !task.source_app.startsWith("Memory:") && task.source_app.toLowerCase() !== "auto"
                 )));
             case "generate_daily_briefing":
                 return "Your preview briefing: finish the keyboard walkthrough, share the UI audit, and run native permission checks in the Tauri app.";
@@ -2019,6 +2074,65 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);
+            case "hand_off_status":
+                return { toolchain: handOffToolchain, running: null };
+            case "hand_off_install_toolchain":
+                await new Promise((resolve) => window.setTimeout(resolve, 1200));
+                handOffToolchain = "installed";
+                return { toolchain: handOffToolchain, running: null };
+            case "hand_off_draft": {
+                const source = (payloadRecord(payload)?.source ?? {}) as { kind?: string; value?: string };
+                const task = tasks.find((candidate) => candidate.id === source.value);
+                const text = task?.description.trim() || task?.title || source.value || "Hand this off";
+                return handOffDraftFor(text, task?.source_memory_id ?? null, "doc");
+            }
+            case "hand_off_update_draft": {
+                const choice = payloadRecord(payload) ?? {};
+                return handOffDraftFor(
+                    String(choice.taskText ?? ""),
+                    (choice.taskMemoryId as string | null) ?? null,
+                    String(choice.goal ?? "doc"),
+                    (choice.memoryIds as string[]) ?? [],
+                    (choice.fileMemoryIds as string[]) ?? [],
+                );
+            }
+            case "hand_off_start": {
+                if (handOffToolchain !== "installed") throw new Error("Install the document tools first (about 200 MB).");
+                handOffRunning = true;
+                const script: [number, unknown][] = [
+                    [700, { kind: "readFile", name: "q4-onboarding-survey.csv" }],
+                    [1400, { kind: "ranCode", ok: true, ms: 1200 }],
+                    [2100, { kind: "ranCode", ok: true, ms: 900 }],
+                    [2800, { kind: "wroteFile", path: "work/readout-spec.json" }],
+                    [3500, { kind: "wroteFile", path: "out/q4-onboarding-survey-readout.docx" }],
+                    [4200, { kind: "answered", text: "{}" }],
+                ];
+                for (const [delay, event] of script) {
+                    window.setTimeout(() => {
+                        if (handOffRunning) void emitPreviewEventIfAvailable("hand_off://progress", event);
+                    }, delay);
+                }
+                window.setTimeout(() => {
+                    if (!handOffRunning) return;
+                    handOffRunning = false;
+                    void emitPreviewEventIfAvailable("hand_off://finished", { record: handOffRecord("ready", null), error: null });
+                }, 4800);
+                return null;
+            }
+            case "hand_off_stop":
+                if (!handOffRunning) throw new Error("No hand-off is working.");
+                handOffRunning = false;
+                window.setTimeout(() => {
+                    void emitPreviewEventIfAvailable("hand_off://finished", {
+                        record: handOffRecord("stopped", "Stopped. What it wrote is kept in the folder."),
+                        error: null,
+                    });
+                }, 300);
+                return null;
+            case "hand_off_open":
+                return null;
+            case "hand_off_rate":
+                return { ...handOffRecord("ready", null), rating: payloadRecord(payload)?.worked ? "worked" : "did_not_work" };
             default:
                 throw new Error(`Unhandled UI preview command: ${command}`);
         }
