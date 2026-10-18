@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export {
+    importCancel,
+    importForget,
+    importFirstAnswerMs,
+    importGetConsent,
+    importListSources,
+    importRecordFirstAnswer,
+    importSetConsent,
+    importStart,
+    importStatus,
+} from "./imports";
+export type { ImportKind, ImportPermission, ImportRunState, ImportSourceInfo, ImportStatus } from "./imports";
+
 export type CaptureTextSource = "ax" | "ocr" | "browser_semantic" | "mixed" | "unknown";
 
 export interface SearchResult {
@@ -81,6 +94,11 @@ export interface MemoryCard {
     files_touched?: string[];
     /** Approximate session duration in minutes (0 if single capture) */
     session_duration_mins?: number;
+    /** How many decisions, errors and next steps the memory records. Set by
+     *  the Vault list only. */
+    decision_count?: number;
+    error_count?: number;
+    next_step_count?: number;
     /** Short id of the prior card this one continues from, derived from
      *  the durable memory_context "Continues from <short_id>" marker. */
     continuation_of?: string;
@@ -272,13 +290,6 @@ export async function fndrGetMemorySourceStatements(memoryId: string): Promise<S
     return invoke("fndr_get_memory_source_statements", { memoryId });
 }
 
-export async function fndrGetMemorySubgraph(
-    seedIds: string[],
-    maxHops = 2,
-): Promise<{ seed_ids: string[]; node_count: number; edge_count: number }> {
-    return invoke("fndr_get_memory_subgraph", { seedIds, maxHops });
-}
-
 export async function fndrTimeline(args?: {
     limit?: number;
     project?: string;
@@ -287,7 +298,11 @@ export async function fndrTimeline(args?: {
 }
 
 export interface ResumeThread {
+    /** Grouping key for `whatChangedSince` and `markThreadSeen`; never shown. Always sent by the backend. */
+    key?: string;
     title: string;
+    /** The words shared across windows that made this one thread, as written in a window title. Empty or absent when nothing was inferred. */
+    grouped_by?: string[];
     app_name?: string;
     last_state: string;
     age_minutes: number;
@@ -304,6 +319,54 @@ export interface ResumeThread {
 /** Recent observed work, with source citations; does not execute actions. */
 export async function resumeWork(): Promise<ResumeThread[]> {
     return invoke("resume_work", { hours: 24, budgetTokens: 800 });
+}
+
+/** What is new in a Resume Work thread since it was last marked seen. */
+export interface ThreadDigest {
+    thread_key: string;
+    title: string;
+    since_ms: number;
+    /** True when the thread was never marked seen; the digest then covers a day. */
+    first_view: boolean;
+    new_memories: number;
+    page_count: number;
+    pages: string[];
+    file_count: number;
+    files: string[];
+    task_count: number;
+    tasks: string[];
+    commit_count: number;
+    newest_memory_id: string | null;
+}
+
+export async function whatChangedSince(threadKey: string): Promise<ThreadDigest> {
+    return invoke<ThreadDigest>("what_changed_since", { threadKey });
+}
+
+export async function markThreadSeen(threadKey: string): Promise<void> {
+    return invoke("mark_thread_seen", { threadKey });
+}
+
+/** macOS calendar access for meeting prep (ADR 029). */
+export type CalendarStatus = "not_determined" | "restricted" | "denied" | "granted";
+
+export interface CalendarPrepState {
+    /** "Meeting prep from your calendar" is on. */
+    enabled: boolean;
+    status: CalendarStatus;
+}
+
+export async function calendarMeetingPrepState(): Promise<CalendarPrepState> {
+    return invoke<CalendarPrepState>("calendar_meeting_prep_state");
+}
+
+/** Turning it on asks macOS for calendar access; it stays on only when granted. */
+export async function setCalendarMeetingPrep(enabled: boolean): Promise<CalendarPrepState> {
+    return invoke<CalendarPrepState>("set_calendar_meeting_prep", { enabled });
+}
+
+export async function openCalendarPrivacySettings(): Promise<void> {
+    return invoke("open_calendar_privacy_settings");
 }
 
 export async function fndrQualityStatus(): Promise<{
@@ -494,6 +557,7 @@ export interface CaptureStatus {
     ai_model_available: boolean;
     ai_model_loaded: boolean;
     loaded_model_id: string | null;
+    last_text_backend?: string;
     embedding_backend: string;
     embedding_degraded: boolean;
     embedding_detail: string;
@@ -675,203 +739,6 @@ export interface ContextRuntimeStatus {
     latest_pack_tokens_used: number;
 }
 
-export type AgentMode = "ask" | "plan" | "act" | "learn";
-export type AgentRiskLevel = "low" | "medium" | "high" | "blocked";
-
-export interface AgentContextRequest {
-    user_goal: string;
-    mode?: AgentMode;
-    project?: string | null;
-    app?: string | null;
-    domain?: string | null;
-    window_minutes?: number | null;
-    selected_memory_ids?: string[];
-    include_raw_evidence?: boolean;
-    budget_tokens?: number;
-}
-
-export interface ToolPolicy {
-    tool: string;
-    scope: string;
-    risk: AgentRiskLevel;
-    allowed: boolean;
-    requires_approval: boolean;
-    reason: string;
-}
-
-export interface AgentMemoryCard {
-    memory_id: string;
-    title: string;
-    summary: string;
-    timestamp: number;
-    app_name: string;
-    window_title: string;
-    url?: string | null;
-    confidence: number;
-    match_reason: string;
-    evidence: EvidenceRef[];
-}
-
-export interface AgentContextPack {
-    task_id: string;
-    user_goal: string;
-    mode: AgentMode;
-    relevant_memories: AgentMemoryCard[];
-    current_project?: unknown | null;
-    recent_workflow_trace: Array<{
-        timestamp: number;
-        title: string;
-        app_name: string;
-        summary: string;
-        source_memory_id: string;
-    }>;
-    entities: EntityRef[];
-    files: Array<{ path: string; reason: string }>;
-    urls: Array<{ url: string; source_memory_id: string; reason: string }>;
-    commands: Array<{ command: string; source_memory_id: string; timestamp: number }>;
-    errors: Array<{ summary: string; error: string; related_files: string[]; source_memory_ids: string[] }>;
-    decisions: Array<{ title: string; summary: string; source_memory_ids: string[] }>;
-    todos: Array<{ title: string; status: string; source: string }>;
-    privacy_scope: {
-        local_only: boolean;
-        read_only: boolean;
-        include_raw_evidence: boolean;
-        include_sensitive_context: boolean;
-        exclude_private_apps: boolean;
-        excluded_apps_or_domains: string[];
-        project?: string | null;
-        window_minutes?: number | null;
-        incognito_active: boolean;
-    };
-    allowed_tools: ToolPolicy[];
-    disallowed_context: Array<{ id: string; reason: string }>;
-    token_budget: { requested: number; max: number; used: number; dropped_items: number };
-    confidence: number;
-    evidence_summary: string;
-    source_context_pack_id: string;
-}
-
-export interface AgentRunResponse {
-    run_id: string;
-    mode: AgentMode;
-    answer: string;
-    context_pack: AgentContextPack;
-    proposed_actions: Array<{
-        label: string;
-        scope: string;
-        risk: AgentRiskLevel;
-        requires_approval: boolean;
-    }>;
-    blocked_actions: ToolPolicy[];
-    audit_warning?: string | null;
-}
-
-export type AgentRunStatus = "success" | "partial" | "blocked" | "failed";
-export type RetrievalFeedbackRating = "useful" | "irrelevant" | "wrong" | "stale" | "missing_context";
-
-export interface RedactionNote {
-    id: string;
-    reason: string;
-}
-
-export interface MemoryRetrievalExplanation {
-    memory_id: string;
-    title: string;
-    matched_reason: string;
-    app_name: string;
-    url?: string | null;
-    timestamp: number;
-    confidence: number;
-    semantic_relevance: string;
-    keyword_match: string;
-    recency: string;
-    project_match: string;
-    app_domain_match: string;
-    workflow_continuity: string;
-}
-
-export interface AgentRetrievalFeedback {
-    feedback_id: string;
-    run_id: string;
-    memory_id?: string | null;
-    rating: RetrievalFeedbackRating;
-    note?: string | null;
-    created_at: number;
-}
-
-export interface AgentAuditRecord {
-    run_id: string;
-    created_at: number;
-    user_goal: string;
-    mode: AgentMode;
-    context_pack_id?: string | null;
-    memories_used: string[];
-    tools_requested: string[];
-    tools_allowed: ToolPolicy[];
-    tools_blocked: ToolPolicy[];
-    approvals_required: ToolPolicy[];
-    redactions_applied: RedactionNote[];
-    dropped_context: RedactionNote[];
-    confidence: number;
-    output_summary: string;
-    result_status: AgentRunStatus;
-    error_message?: string | null;
-    selected_memories: MemoryRetrievalExplanation[];
-    feedback: AgentRetrievalFeedback[];
-}
-
-export interface RetrievalExplanation {
-    run_id?: string | null;
-    context_pack_id?: string | null;
-    selected_memories: MemoryRetrievalExplanation[];
-    dropped_context: RedactionNote[];
-    redacted_context: RedactionNote[];
-    privacy_policy_reasons: string[];
-    limitations: string[];
-}
-
-export interface RateResultRequest {
-    run_id: string;
-    memory_id?: string | null;
-    rating: RetrievalFeedbackRating;
-    note?: string | null;
-}
-
-export interface AgentSkillCandidate {
-    draft_id: string;
-    name: string;
-    category: string;
-    source: string;
-    created_from_memories: string[];
-    risk_level: AgentRiskLevel;
-    requires_approval: boolean;
-    last_verified?: number | null;
-    when_to_use: string;
-    required_context: string[];
-    procedure: string[];
-    verification: string[];
-    failure_cases: string[];
-    privacy_notes: string[];
-}
-
-export interface AgentEvalCase {
-    eval_id: string;
-    workflow_name: string;
-    input_context_pack_id: string;
-    expected_outcome: string;
-    forbidden_actions: string[];
-    required_evidence: string[];
-    grading_rules: string[];
-    privacy_scope: AgentContextPack["privacy_scope"];
-}
-
-export interface AgentPrompt {
-    name: string;
-    title: string;
-    description: string;
-    template: string;
-}
-
 export interface AppMergeCount {
     app_name: string;
     merged: number;
@@ -995,7 +862,6 @@ export interface MeetingTranscript {
     full_text: string;
 }
 
-
 export interface Stats {
     total_records: number;
     total_days: number;
@@ -1103,8 +969,6 @@ export interface Task {
     linked_memory_ids: string[];
 }
 
-
-
 export interface VoiceTranscriptionResult {
     text: string;
     backend: string;
@@ -1183,7 +1047,8 @@ export type ReopenOutcome =
     | { kind: "app_missing"; bundle_id: string; app_name?: string | null }
     | { kind: "app_only"; app_name?: string | null }
     | { kind: "blocked"; target: string }
-    | { kind: "no_target" };
+    | { kind: "no_target" }
+    | { kind: "unavailable" };
 
 export async function reopenMemory(memoryId: string): Promise<ReopenOutcome> {
     return invoke<ReopenOutcome>("reopen_memory", {
@@ -1251,10 +1116,6 @@ export async function getFullGraph(): Promise<InsightGraphSubgraph> {
 
 export async function getGraphForProject(projectLabel: string): Promise<InsightGraphSubgraph> {
     return invoke<InsightGraphSubgraph>("get_graph_for_project", { projectLabel });
-}
-
-export async function searchGraph(queryEmbedding: number[], k = 8): Promise<InsightGraphNode[]> {
-    return invoke<InsightGraphNode[]>("search_graph", { queryEmbedding, k });
 }
 
 export async function getNodeDetail(id: string): Promise<InsightGraphNode | null> {
@@ -1348,11 +1209,105 @@ export async function generateDailyBriefing(mode?: "morning" | "evening"): Promi
     return invoke<string>("generate_daily_briefing", { mode });
 }
 
+export type DailyOutputKind = "standup" | "weekly_status" | "timesheet";
+export type DailyOutputFormat = "markdown" | "plain_text" | "html";
+export type DailyOutputTool = "outputs.post_slack" | "outputs.create_linear_issue" | "outputs.open_mail_draft";
+
+export interface DailyOutputCitation {
+    kind: "memory" | "activity_event";
+    id: string;
+    memory_id: string | null;
+}
+
+export interface DailyOutputDoc {
+    id: string;
+    kind: DailyOutputKind;
+    title: string;
+    start_ms: number;
+    end_ms: number;
+    generated_at_ms: number;
+    model_polished: boolean;
+    sections: { heading: string; lines: { text: string; project: string | null; citations: DailyOutputCitation[] }[] }[];
+}
+
+export interface DailyOutputApprovalCard {
+    approval_id: string;
+    tool: DailyOutputTool;
+    action: string;
+    destination: string;
+    title: string;
+    body: string;
+    bytes: number;
+    expires_at_ms: number;
+    trimmed: boolean;
+}
+
+export interface DailyOutputDestinationStatus {
+    slack_webhook: boolean;
+    linear_api_key: boolean;
+    linear_team_id: boolean;
+}
+
+export interface DailyOutputSendReceipt {
+    tool: DailyOutputTool;
+    destination: string;
+    detail: string;
+    trust_id: string | null;
+}
+
+export interface DailyOutputAllowedDestination {
+    key: string;
+    tool: DailyOutputTool;
+    destination: string;
+}
+
+export async function generateDailyOutput(kind: DailyOutputKind, startMs: number, endMs: number, polish: boolean): Promise<DailyOutputDoc> {
+    return invoke<DailyOutputDoc>("generate_daily_output", { kind, startMs, endMs, polish });
+}
+
+export async function renderDailyOutput(id: string, format: DailyOutputFormat): Promise<string> {
+    return invoke<string>("render_daily_output", { id, format });
+}
+
+export async function saveDailyOutput(id: string, format: DailyOutputFormat): Promise<string | null> {
+    return invoke<string | null>("save_daily_output", { id, format });
+}
+
+export async function outputDestinationStatus(): Promise<DailyOutputDestinationStatus> {
+    return invoke<DailyOutputDestinationStatus>("output_destination_status");
+}
+
+export async function setOutputDestination(name: "slack_webhook" | "linear_api_key" | "linear_team_id", value: string): Promise<void> {
+    return invoke<void>("set_output_destination", { name, value });
+}
+
+export async function proposeDailyOutputSend(id: string, tool: DailyOutputTool, recipient?: string): Promise<DailyOutputApprovalCard> {
+    return invoke<DailyOutputApprovalCard>("propose_daily_output_send", { id, tool, recipient });
+}
+
+export async function resolveDailyOutputSend(approvalId: string, approved: boolean): Promise<DailyOutputSendReceipt | null> {
+    return invoke<DailyOutputSendReceipt | null>("resolve_daily_output_send", { approvalId, approved });
+}
+
+export async function sendDailyOutputAllowed(id: string, tool: DailyOutputTool, recipient?: string): Promise<DailyOutputSendReceipt | null> {
+    return invoke<DailyOutputSendReceipt | null>("send_daily_output_allowed", { id, tool, recipient });
+}
+
+export async function trustOutputDestination(trustId: string): Promise<string> {
+    return invoke<string>("trust_output_destination", { trustId });
+}
+
+export async function listOutputAllowedDestinations(): Promise<DailyOutputAllowedDestination[]> {
+    return invoke<DailyOutputAllowedDestination[]>("list_output_allowed_destinations");
+}
+
+export async function forgetOutputAllowedDestination(key: string): Promise<void> {
+    return invoke<void>("forget_output_allowed_destination", { key });
+}
+
 export async function getFunGreeting(name?: string | null): Promise<string> {
     return invoke<string>("get_fun_greeting", { name });
 }
-
-
 
 // Capture control
 export const CAPTURE_STATUS_EVENT = "capture://status";
@@ -1364,6 +1319,88 @@ export async function getStatus(): Promise<CaptureStatus> {
 
 export async function getMcpServerStatus(): Promise<McpServerStatus> {
     return invoke<McpServerStatus>("get_mcp_server_status");
+}
+
+export interface McpConnectClient {
+    id: "claude_code" | "claude_desktop" | "cursor";
+    name: string;
+    state: "not_connected" | "connected" | "server_off" | "needs_update" | "conflict" | "unreadable";
+    detected: boolean;
+    configPath: string;
+    detail: string | null;
+    missingTool: string | null;
+}
+
+export interface McpConnectStatus {
+    running: boolean;
+    endpoint: string | null;
+    actionsBlocked: boolean;
+    keepRunning: boolean;
+    hideMore: boolean;
+    clients: McpConnectClient[];
+}
+
+export interface McpConnectOutcome {
+    message: string;
+    configPath: string;
+    backupPath: string | null;
+    changed: boolean;
+}
+
+export interface McpConnectPreview {
+    title: string;
+    path: string;
+    text: string;
+    maskedText: string;
+    command: string | null;
+}
+
+export interface McpConnectTestStep {
+    name: string;
+    ok: boolean;
+    detail: string;
+}
+
+export interface McpConnectTestReport {
+    ok: boolean;
+    steps: McpConnectTestStep[];
+    toolCount: number;
+}
+
+export async function mcpConnectStatus(): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_status");
+}
+
+export async function mcpConnectPreview(clientId: McpConnectClient["id"]): Promise<McpConnectPreview> {
+    return invoke<McpConnectPreview>("mcp_connect_preview", { clientId });
+}
+
+export async function mcpConnectApply(clientId: McpConnectClient["id"]): Promise<McpConnectOutcome> {
+    return invoke<McpConnectOutcome>("mcp_connect_apply", { clientId });
+}
+
+export async function mcpConnectTest(): Promise<McpConnectTestReport> {
+    return invoke<McpConnectTestReport>("mcp_connect_test");
+}
+
+export async function mcpConnectRotateToken(): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_rotate_token");
+}
+
+export async function mcpConnectDisconnect(clientId: McpConnectClient["id"]): Promise<McpConnectOutcome> {
+    return invoke<McpConnectOutcome>("mcp_connect_disconnect", { clientId });
+}
+
+export async function mcpConnectRevoke(): Promise<string> {
+    return invoke<string>("mcp_connect_revoke");
+}
+
+export async function mcpConnectSetKeepRunning(keepRunning: boolean): Promise<McpConnectStatus> {
+    return invoke<McpConnectStatus>("mcp_connect_set_keep_running", { keepRunning });
+}
+
+export async function mcpConnectSetHideMore(hideMore: boolean): Promise<void> {
+    return invoke<void>("mcp_connect_set_hide_more", { hideMore });
 }
 
 export async function startMcpServer(port?: number): Promise<McpServerStatus> {
@@ -1378,102 +1415,49 @@ export async function resolveMcpApproval(requestId: string, approved: boolean): 
     return invoke<boolean>("resolve_mcp_approval", { requestId, approved });
 }
 
+export interface ActionSettings {
+    actions_kill_switch: boolean;
+    confirm_unnamed_apps: boolean;
+}
+
+export interface ActionCard {
+    id: string;
+    caller: string;
+    surface: "notch_plan" | "computer_use" | "mcp" | "agent";
+    tool: string;
+    title: string;
+    target: string | null;
+    args: { name: string; value: string }[];
+    reason: string;
+    undo: { kind: "available"; how: string; inverse: string | null } | { kind: "unavailable"; reason: string };
+    status: "pending" | "approved" | "denied" | "expired" | "refused" | "ran" | "failed";
+    detail: string | null;
+    created_at_ms: number;
+    expires_at_ms: number;
+}
+
+export async function getActionSettings(): Promise<ActionSettings> {
+    return invoke<ActionSettings>("get_action_settings");
+}
+
+export async function setActionSettings(settings: ActionSettings): Promise<ActionSettings> {
+    return invoke<ActionSettings>("set_action_settings", { settings });
+}
+
+export async function listActionApprovals(): Promise<ActionCard[]> {
+    return invoke<ActionCard[]>("list_action_approvals");
+}
+
+export async function resolveActionApproval(id: string, approve: boolean): Promise<ActionCard> {
+    return invoke<ActionCard>("resolve_action_approval", { id, approve });
+}
+
 export async function getContextRuntimeStatus(): Promise<ContextRuntimeStatus> {
     return invoke<ContextRuntimeStatus>("get_context_runtime_status");
 }
 
 export async function listRecentContextPacks(limit = 8): Promise<ContextPack[]> {
     return invoke<ContextPack[]>("list_recent_context_packs", { limit });
-}
-
-export async function buildAgentContextPack(
-    request: AgentContextRequest
-): Promise<AgentContextPack> {
-    return invoke<AgentContextPack>("build_agent_context_pack", { request });
-}
-
-export async function runAgentRequest(
-    request: AgentContextRequest
-): Promise<AgentRunResponse> {
-    return invoke<AgentRunResponse>("run_agent_request", { request });
-}
-
-export interface AgentAction {
-    id: string;
-    run_id: string;
-    title: string;
-    description: string;
-    kind: string;
-    input: Record<string, unknown>;
-    status: "proposed" | "needs_approval" | "approved" | "running" | "succeeded" | "failed" | "blocked" | "cancelled";
-    result: { success: boolean; output: string; error: string | null; duration_ms: number } | null;
-}
-
-export async function proposeAgentAction(
-    runId: string,
-    kind: string,
-    riskLevel: AgentRiskLevel,
-    description: string,
-    input: Record<string, unknown>,
-): Promise<AgentAction> {
-    return invoke<AgentAction>("propose_agent_action", { runId, kind, riskLevel, description, input });
-}
-
-export async function approveAgentAction(actionId: string): Promise<AgentAction> {
-    return invoke<AgentAction>("approve_agent_action", { actionId });
-}
-
-export async function executeAgentAction(actionId: string): Promise<AgentAction> {
-    return invoke<AgentAction>("execute_agent_action", { actionId });
-}
-
-export async function listAgentAuditRuns(
-    limit = 20,
-    mode?: AgentMode | null,
-    status?: AgentRunStatus | null
-): Promise<AgentAuditRecord[]> {
-    return invoke<AgentAuditRecord[]>("list_agent_audit_runs", { limit, mode: mode ?? null, status: status ?? null });
-}
-
-export async function getAgentAuditRun(runId: string): Promise<AgentAuditRecord | null> {
-    return invoke<AgentAuditRecord | null>("get_agent_audit_run", { runId });
-}
-
-export async function explainAgentRetrieval(request: {
-    run_id?: string | null;
-    context_pack_id?: string | null;
-    query?: string | null;
-    project?: string | null;
-}): Promise<RetrievalExplanation> {
-    return invoke<RetrievalExplanation>("explain_agent_retrieval", { request });
-}
-
-export async function rateAgentResult(request: RateResultRequest): Promise<AgentRetrievalFeedback> {
-    return invoke<AgentRetrievalFeedback>("rate_agent_result", { request });
-}
-
-export async function proposeSkillFromRun(runId: string): Promise<AgentSkillCandidate> {
-    return invoke<AgentSkillCandidate>("propose_skill_from_run", { runId });
-}
-
-export async function listAgentSkillDrafts(limit = 20): Promise<AgentSkillCandidate[]> {
-    return invoke<AgentSkillCandidate[]>("list_agent_skill_drafts", { limit });
-}
-
-export async function proposeEvalFromRun(runId: string): Promise<AgentEvalCase> {
-    return invoke<AgentEvalCase>("propose_eval_from_run", { runId });
-}
-
-export async function listAgentEvalDrafts(limit = 20): Promise<AgentEvalCase[]> {
-    return invoke<AgentEvalCase[]>("list_agent_eval_drafts", { limit });
-}
-
-export async function listAgentPrompts(): Promise<AgentPrompt[]> {
-    return invoke<AgentPrompt[]>("list_agent_prompts");
-}
-
-export async function getAgentPrompt(name: string): Promise<AgentPrompt | null> {
-    return invoke<AgentPrompt | null>("get_agent_prompt", { name });
 }
 
 export async function fndrSubscribe(sessionId: string): Promise<boolean> {
@@ -1528,7 +1512,6 @@ export async function getMeetingTranscript(meetingId: string): Promise<MeetingTr
 export async function retranscribeMeeting(meetingId: string): Promise<void> {
     return invoke<void>("retranscribe_meeting", { meetingId });
 }
-
 
 export async function transcribeVoiceInput(
     audioBytes: number[],
@@ -1608,7 +1591,7 @@ export interface OperatorRunSummary {
 
 export interface ModelRequest {
     atMs: number;
-    /** `notch_do_plan`, `notch_do_step`, `notch_do_screen_text` or `hermes_chat`. */
+    /** A `privacy_proof::Feature` name, such as `notch_do_plan`, `hermes_chat` or `hand_off`. */
     feature: string;
     host: string;
     bytesSent: number;
@@ -1618,6 +1601,53 @@ export interface ModelRequest {
 
 export async function getPrivacyProof(): Promise<PrivacyProof> {
     return invoke<PrivacyProof>("get_privacy_proof");
+}
+
+export interface EraseRangeReport {
+    matched: number;
+    deleted: number;
+}
+
+export async function deleteMemoriesInRange(
+    startMs: number,
+    endMs: number,
+    dryRun: boolean,
+): Promise<EraseRangeReport> {
+    return invoke<EraseRangeReport>("delete_memories_in_range", { startMs, endMs, dryRun });
+}
+
+export interface MemoryArchiveReport {
+    exported: number;
+    jsonl_path: string;
+    markdown_path: string;
+}
+
+export async function exportMemoriesArchive(): Promise<MemoryArchiveReport> {
+    return invoke<MemoryArchiveReport>("export_memories_archive");
+}
+
+export async function importMemoriesArchive(): Promise<number> {
+    return invoke<number>("import_memories_archive");
+}
+
+export interface EncryptionStatement {
+    filevault: "on" | "off" | "unknown";
+    encrypted: string[];
+    not_encrypted: string[];
+}
+
+export async function getEncryptionStatement(): Promise<EncryptionStatement> {
+    return invoke<EncryptionStatement>("get_encryption_statement");
+}
+
+export interface PrivacyExclusion {
+    id: string;
+    label: string;
+    examples: string;
+}
+
+export async function getPrivacyExclusions(): Promise<PrivacyExclusion[]> {
+    return invoke<PrivacyExclusion[]>("get_privacy_exclusions");
 }
 
 // Stats
@@ -1860,25 +1890,86 @@ export async function updateTodo(
     return invoke<Task>("update_todo", { taskId, title, taskType });
 }
 
-// ========== Agent SDK Functions ==========
+// ========== Hermes Agent Functions ==========
 
-export interface AgentStatus {
-    is_running: boolean;
-    task_title: string | null;
-    last_message: string | null;
-    status: "idle" | "running" | "completed" | "error";
+export interface ConfiguredPeer {
+    id: string;
+    card_url: string;
+    name: string;
+    endpoint: string;
+    requires_bearer: boolean;
+    verified_at_ms: number;
 }
 
-export interface HermesAppContext {
-    app_name: string;
-    memory_count: number;
+export async function listConfiguredPeers(): Promise<ConfiguredPeer[]> {
+    return invoke<ConfiguredPeer[]>("list_configured_peers");
 }
 
-export interface HermesMemoryDigest {
-    title: string;
-    app_name: string;
-    summary: string;
-    timestamp: number;
+/** Verifies the person-entered Agent Card before saving its URL and display details. */
+export async function addConfiguredPeer(cardUrl: string): Promise<ConfiguredPeer> {
+    return invoke<ConfiguredPeer>("add_configured_peer", { cardUrl });
+}
+
+export async function removeConfiguredPeer(id: string): Promise<boolean> {
+    return invoke<boolean>("remove_configured_peer", { id });
+}
+
+export interface DelegationPreview {
+    peer_id: string;
+    destination: string;
+    message_text: string;
+    attachments: Array<{ memory_id: string; summary: string }>;
+}
+
+export async function previewPeerDelegation(peerId: string, task: string, outputGoal: string, memoryIds: string[]): Promise<DelegationPreview> {
+    return invoke<DelegationPreview>("preview_peer_delegation", { peerId, task, outputGoal, memoryIds });
+}
+
+export interface PeerRun {
+    local_id: string;
+    message_id: string;
+    peer_id: string;
+    host: string;
+    attachment_ids: string[];
+    payload_bytes: number;
+    created_at_ms: number;
+    status: string;
+    remote_task_id: string | null;
+    remote_state: string | null;
+}
+
+export type PeerRunView = Pick<PeerRun,
+    "local_id" | "peer_id" | "host" | "created_at_ms" | "payload_bytes" | "status" | "remote_task_id" | "remote_state">;
+
+export interface DelegationSendResult {
+    run: PeerRun;
+    output_text: string | null;
+}
+
+export interface DelegationTaskResult {
+    run: PeerRunView;
+    output_text: string | null;
+}
+
+export async function sendPeerDelegation(
+    peerId: string, task: string, outputGoal: string, memoryIds: string[],
+    reviewedDestination: string, reviewedText: string,
+): Promise<DelegationSendResult> {
+    return invoke<DelegationSendResult>("send_peer_delegation", {
+        peerId, task, outputGoal, memoryIds, reviewedDestination, reviewedText,
+    });
+}
+
+export async function listPeerRuns(): Promise<PeerRunView[]> {
+    return invoke<PeerRunView[]>("list_peer_runs");
+}
+
+export async function refreshPeerTask(localId: string): Promise<DelegationTaskResult> {
+    return invoke<DelegationTaskResult>("refresh_peer_task", { localId });
+}
+
+export async function cancelPeerTask(localId: string): Promise<DelegationTaskResult> {
+    return invoke<DelegationTaskResult>("cancel_peer_task", { localId });
 }
 
 export interface HermesBridgeStatus {
@@ -1913,12 +2004,9 @@ export interface HermesBridgeStatus {
     codex_auth_path: string;
     profile_name: string | null;
     focus_task: string | null;
-    recent_memory_count: number;
     open_task_count: number;
     /** True when Ollama is configured and reachable: chat works without the Hermes CLI. */
     direct_ollama_ready: boolean;
-    top_apps: HermesAppContext[];
-    recent_memories: HermesMemoryDigest[];
     last_error: string | null;
     install_command: string;
     /** `stopped`, `starting`, `running`, `restarting` or `crashed`. */
@@ -1947,22 +2035,6 @@ export interface HermesChatReply {
     tools_used?: string[];
 }
 
-export async function startAgentTask(
-    taskTitle: string,
-    contextUrls?: string[],
-    contextNotes?: string[]
-): Promise<AgentStatus> {
-    return invoke<AgentStatus>("start_agent_task", { taskTitle, contextUrls, contextNotes });
-}
-
-export async function getAgentStatus(): Promise<AgentStatus> {
-    return invoke<AgentStatus>("get_agent_status");
-}
-
-export async function stopAgent(): Promise<AgentStatus> {
-    return invoke<AgentStatus>("stop_agent");
-}
-
 export async function getHermesBridgeStatus(): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("get_hermes_bridge_status");
 }
@@ -1973,18 +2045,6 @@ export async function installHermesBridge(): Promise<HermesBridgeStatus> {
 
 export async function saveHermesSetup(payload: HermesSetupPayload): Promise<HermesBridgeStatus> {
     return invoke<HermesBridgeStatus>("save_hermes_setup", { payload });
-}
-
-export async function syncHermesBridgeContext(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("sync_hermes_bridge_context");
-}
-
-export async function startHermesGateway(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("start_hermes_gateway");
-}
-
-export async function stopHermesGateway(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("stop_hermes_gateway");
 }
 
 /** Sends a message to Hermes. `memoryIds` attach FNDR memories as reference
@@ -2116,19 +2176,136 @@ export async function codexLogout(): Promise<CodexAccountStatus> {
     return invoke<CodexAccountStatus>("codex_logout");
 }
 
-export async function quickSetupOllama(): Promise<HermesBridgeStatus> {
-    return invoke<HermesBridgeStatus>("quick_setup_ollama");
+/** Why the ChatGPT plan's voice can or cannot speak now (ADR 028). */
+export type VoiceOutState =
+    | "ready"
+    | "not_installed"
+    | "broken"
+    | "signed_out"
+    | "unsupported"
+    | "near_limit"
+    | "over_limit"
+    | "private_mode";
+
+export interface VoiceOutStatus {
+    state: VoiceOutState;
+    detail: string | null;
+    /** The higher used share of the plan's two usage windows, 0 to 100. */
+    usedPercent: number | null;
+    /** Above this, FNDR speaks on the Mac instead. */
+    fallbackAbovePercent: number;
+    connected: boolean;
 }
 
-/**
- * Send a message directly to Ollama: no Hermes CLI required.
- * messages is the prior conversation in OpenAI format: [{role, content}].
- */
-export async function sendDirectChat(
-    messages: Array<{ role: string; content: string }>,
-    input: string
-): Promise<string> {
-    return invoke<string>("send_direct_chat", { messages, input });
+export interface VoiceOutVoices {
+    voices: string[];
+}
+
+export async function voiceOutStatus(): Promise<VoiceOutStatus> {
+    return invoke<VoiceOutStatus>("voice_out_status");
+}
+
+export async function voiceOutVoices(): Promise<VoiceOutVoices> {
+    return invoke<VoiceOutVoices>("voice_out_voices");
+}
+
+/** Sends the peer connection's SDP offer; resolves to Codex's SDP answer. */
+export async function voiceOutStart(sdpOffer: string, voice?: string): Promise<string> {
+    return invoke<string>("voice_out_start", { sdpOffer, voice: voice ?? null });
+}
+
+/** Hands FNDR-authored reply text to the connected voice. Never memory or screen text. */
+export async function voiceOutSpeak(text: string): Promise<void> {
+    return invoke<void>("voice_out_speak", { text });
+}
+
+export async function voiceOutCancel(): Promise<void> {
+    return invoke<void>("voice_out_cancel");
+}
+
+export async function voiceOutStop(): Promise<void> {
+    return invoke<void>("voice_out_stop");
+}
+
+// The on-device neural voice, Kokoro-82M (ADR 030).
+
+export type TtsState = "not_installed" | "downloading" | "ready" | "error";
+
+export interface TtsStatus {
+    state: TtsState;
+    detail: string | null;
+    downloadedBytes: number;
+    totalBytes: number;
+    /** The model is in memory now. */
+    loaded: boolean;
+}
+
+export interface TtsVoice {
+    id: string;
+    name: string;
+    accent: "us" | "gb";
+    gender: "female" | "male";
+    /** The model card's grade for the voice's training data. */
+    grade: string;
+}
+
+export interface TtsVoices {
+    voices: TtsVoice[];
+    defaultVoice: string;
+}
+
+export interface TtsClip {
+    /** A 24 kHz mono 16-bit WAV. */
+    wav: ArrayBuffer;
+    durationMs: number;
+}
+
+export async function ttsStatus(): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_status");
+}
+
+export async function ttsVoices(): Promise<TtsVoices> {
+    return invoke<TtsVoices>("tts_voices");
+}
+
+/** Starts the one-time download; `consent` is the person's answer to the prompt. */
+export async function ttsInstall(consent: boolean): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_install", { consent });
+}
+
+export async function ttsRemove(): Promise<TtsStatus> {
+    return invoke<TtsStatus>("tts_remove");
+}
+
+export async function ttsCancel(): Promise<void> {
+    return invoke<void>("tts_cancel");
+}
+
+/** Speech for `text`, synthesized on this Mac. */
+export async function ttsSynthesize(text: string, voice?: string, speed?: number): Promise<TtsClip> {
+    const raw = await invoke<ArrayBuffer | number[]>("tts_synthesize", { text, voice: voice ?? null, speed: speed ?? null });
+    const wav = raw instanceof ArrayBuffer ? raw : new Uint8Array(raw).buffer;
+    const samples = Math.max(0, wav.byteLength - 44) / 2;
+    return { wav, durationMs: Math.round((samples / 24_000) * 1000) };
+}
+
+// Notch Do's voice (ADR 020 amendment, 2026-10-09).
+
+/** Esc pressed in another app while a Notch Do run works or waits on an approval. */
+export const NOTCH_DO_ESCAPE_EVENT = "notch-do://escape";
+
+/** The persisted mute, or null while it has never been set in `config.toml`. */
+export async function getNotchDoMuted(): Promise<boolean | null> {
+    return invoke<boolean | null>("get_notch_do_muted");
+}
+
+export async function setNotchDoMuted(muted: boolean): Promise<boolean> {
+    return invoke<boolean>("set_notch_do_muted", { muted });
+}
+
+/** Watches for Esc outside the notch while a run works; FNDR's own key presses are ignored. */
+export async function setNotchEscapeMonitor(active: boolean): Promise<void> {
+    return invoke<void>("set_notch_escape_monitor", { active });
 }
 
 export async function summarizeSearch(query: string, snippets: string[]): Promise<string> {
@@ -2241,6 +2418,10 @@ export interface FndrNotificationPayload {
     title: string;
     body: string;
     kind: string;
+    /** The memory a "stuck" toast opens. */
+    memory_id?: string;
+    /** The Resume Work thread a "thread_update" or "meeting_prep" toast opens. */
+    thread_key?: string;
 }
 
 export function onProactiveSuggestion(
@@ -2595,6 +2776,25 @@ export async function setAutofillSettings(settings: AutofillSettings): Promise<A
     return invoke<AutofillSettings>("set_autofill_settings", { settings });
 }
 
+/** How FNDR speaks: `config.toml` [voice_output]. */
+export interface VoiceOutputSettings {
+    /** "auto" or a speech provider id (`src/shared/voice/speechProvider.ts`). */
+    provider: string;
+    /** A macOS voice identifier; empty means the best one installed. */
+    system_voice: string;
+    rate: number;
+    /** A Kokoro voice id for the on-device neural voice; empty means its default. */
+    neural_voice?: string;
+}
+
+export async function getVoiceOutputSettings(): Promise<VoiceOutputSettings> {
+    return invoke<VoiceOutputSettings>("get_voice_output_settings");
+}
+
+export async function setVoiceOutputSettings(settings: VoiceOutputSettings): Promise<VoiceOutputSettings> {
+    return invoke<VoiceOutputSettings>("set_voice_output_settings", { settings });
+}
+
 export async function resolveAutofill(
     context: FieldContext,
     queryOverride?: string | null,
@@ -2787,6 +2987,8 @@ export const NOTCH_HUD_HOVER_EVENT = "notch-hud://hover";
 export const NOTCH_HUD_GEOMETRY_EVENT = "notch-hud://geometry";
 /** Alt+N: `true` opens the panel, `false` closes it. */
 export const NOTCH_HUD_SUMMON_EVENT = "notch-hud://summon";
+/** A request typed in the command bar, for Notch Do to plan. */
+export const NOTCH_HUD_DO_EVENT = "notch-hud://do";
 
 /** Logical points, as measured from the display the HUD is parked on. */
 export interface NotchHudGeometry {
@@ -2834,12 +3036,248 @@ export async function notchHudOpenMemory(memoryId: string): Promise<void> {
     return invoke("notch_hud_open_memory", { memoryId });
 }
 
-
 // Notch Do: a spoken request is planned, shown, then run step by step.
 
 export const COMPUTER_USE_EVENT = "computer-use://event";
 
-export type ComputerUseStepAction = "open_app" | "open_url" | "operate";
+export type ComputerUseStepAction = "open_app" | "open_url" | "operate" | "reopen_memory" | "paste";
+
+// Work sets (ADR 027): the places of one thread of work, resolved on the Mac.
+
+export type WorkItemKind = "url" | "file" | "pdf_page" | "app" | "folder";
+
+export interface WorkItem {
+    memoryId: string;
+    /** What the card shows: a page title, a file name, an app. */
+    label: string;
+    kind: WorkItemKind;
+    reopenRank: number;
+    appName: string;
+    /** The site of a link, without `www.`. */
+    host?: string;
+    page?: number;
+    capturedAt: number;
+}
+
+export interface WorkSet {
+    id: string;
+    title: string;
+    /** Why this set was chosen, composed from the evidence. */
+    reason: string;
+    score: number;
+    items: WorkItem[];
+}
+
+export type WorkSetResolution =
+    | { kind: "best"; value: WorkSet }
+    | { kind: "ambiguous"; value: WorkSet[] }
+    | { kind: "none"; value: { why: string } };
+
+export interface WorkItemOutcome {
+    memoryId: string;
+    label: string;
+    kind?: WorkItemKind;
+    /** FNDR opened it, judged from the typed outcome. */
+    ok: boolean;
+    detail: string;
+    outcome?: ReopenOutcome;
+    /** Set on an opened item when a layout was asked for. */
+    arrangement?: WorkSetArrangement;
+}
+
+export type ItemOutcome = WorkItemOutcome;
+
+export type WorkSetLayout = "left_right_split" | "top_bottom_split" | "thirds" | "grid2x2" | "maximize";
+
+/** Whether the opened windows were arranged; `detail` says why not in plain words. */
+export interface WorkSetArrangement {
+    arranged: boolean;
+    layout: WorkSetLayout;
+    detail: string;
+}
+
+// ---- Hand-off (ADR 032) ----
+
+export type HandOffGoal = "doc" | "spreadsheet" | "slides" | "brief";
+
+/** Where a draft comes from: the person's words, or a to-do suggestion's id. */
+export type HandOffSource = { kind: "request"; value: string } | { kind: "task"; value: string };
+
+export interface HandOffDraftItem {
+    kind: "memory" | "file";
+    memoryId: string;
+    label: string;
+    appName: string;
+    capturedAt: number;
+    ticked: boolean;
+    bytes?: number;
+}
+
+/** What a hand-off would send, resolved on this Mac. `rendered` is exactly
+ *  the first message; the start compares it again before anything leaves. */
+export interface HandOffDraft {
+    taskText: string;
+    taskMemoryId: string | null;
+    goal: HandOffGoal;
+    items: HandOffDraftItem[];
+    rendered: string;
+    estimateBytes: number;
+}
+
+export type HandOffJobStatus =
+    | "starting"
+    | "working"
+    | "stopping"
+    | "checking"
+    | "ready"
+    | "ready_with_gaps"
+    | "stopped"
+    | "failed";
+
+export interface HandOffRecord {
+    id: string;
+    createdAtMs: number;
+    request: string;
+    goal: HandOffGoal;
+    memoryIds: string[];
+    fileMemoryIds: string[];
+    folder: string;
+    status: HandOffJobStatus;
+    reason: string | null;
+    finishedAtMs: number | null;
+    bytesSent: number;
+    checked: number;
+    unsupported: number;
+    notChecked: number;
+    /** Verified deliverables, relative to `folder`. */
+    deliverables: string[];
+    rating: "worked" | "did_not_work" | null;
+}
+
+export interface HandOffStatus {
+    toolchain: "missing" | "outdated" | "installed";
+    running: HandOffRecord | null;
+}
+
+/** What the worker did, as FNDR read it from Codex's stream. */
+export type HandOffEvent =
+    | { kind: "readFile"; name: string }
+    | { kind: "ranCode"; ok: boolean; ms: number }
+    | { kind: "wroteFile"; path: string }
+    | { kind: "viewedImage"; path: string }
+    | { kind: "webSearched"; query: string; urls: string[] }
+    | { kind: "answered"; text: string }
+    | { kind: "idle" }
+    | { kind: "tokens"; total: number }
+    | { kind: "rateLimits"; primary: number; secondary: number };
+
+export interface HandOffFinished {
+    record: HandOffRecord | null;
+    error: string | null;
+}
+
+export const HAND_OFF_PROGRESS_EVENT = "hand_off://progress";
+export const HAND_OFF_FINISHED_EVENT = "hand_off://finished";
+
+export async function handOffStatus(): Promise<HandOffStatus> {
+    return invoke<HandOffStatus>("hand_off_status");
+}
+
+/** Installs FNDR's Python and document libraries for workers (about 200 MB). */
+export async function handOffInstallToolchain(): Promise<HandOffStatus> {
+    return invoke<HandOffStatus>("hand_off_install_toolchain");
+}
+
+/** What a hand-off would send. Nothing leaves the Mac. */
+export async function handOffDraft(source: HandOffSource): Promise<HandOffDraft> {
+    return invoke<HandOffDraft>("hand_off_draft", { source });
+}
+
+interface HandOffChoice {
+    taskText: string;
+    taskMemoryId: string | null;
+    goal: HandOffGoal;
+    memoryIds: string[];
+    fileMemoryIds: string[];
+}
+
+/** The draft again with the person's ticks and output. */
+export async function handOffUpdateDraft(choice: HandOffChoice): Promise<HandOffDraft> {
+    return invoke<HandOffDraft>("hand_off_update_draft", { ...choice });
+}
+
+/** Starts the reviewed job; progress and the end arrive as events. */
+export async function handOffStart(choice: HandOffChoice & { reviewed: string }): Promise<void> {
+    return invoke<void>("hand_off_start", { ...choice });
+}
+
+export async function handOffStop(): Promise<void> {
+    return invoke<void>("hand_off_stop");
+}
+
+/** Opens one deliverable FNDR checked, in its default app. */
+export async function handOffOpen(jobId: string, path: string): Promise<void> {
+    return invoke<void>("hand_off_open", { jobId, path });
+}
+
+export async function handOffRate(jobId: string, worked: boolean): Promise<HandOffRecord> {
+    return invoke<HandOffRecord>("hand_off_rate", { jobId, worked });
+}
+
+/** Which thread of work a request means. Reads only; nothing leaves the Mac. */
+export async function resolveWorkSet(query: string): Promise<WorkSetResolution> {
+    return invoke<WorkSetResolution>("resolve_work_set", { query });
+}
+
+/** Opens the places of a set the person picked, at most six, then arranges
+ *  their windows when `layout` is given (best effort, never an error). */
+export async function openWorkSet(memoryIds: string[], layout?: WorkSetLayout): Promise<ItemOutcome[]> {
+    return invoke<ItemOutcome[]>("open_work_set", { memoryIds, layout: layout ?? null });
+}
+
+/** A work set saved under a name. `items` are re-resolved on every read: a
+ *  memory deleted or now private or blocklisted is left out. */
+export interface NamedWorkSet {
+    id: string;
+    name: string;
+    memoryIds: string[];
+    items: WorkItem[];
+    savedAt: number;
+    lastOpenedAt?: number;
+}
+
+export async function listNamedSets(): Promise<NamedWorkSet[]> {
+    return invoke<NamedWorkSet[]>("list_named_sets");
+}
+
+/** Names must be unique ignoring case; at most 30 sets. */
+export async function saveNamedSet(name: string, memoryIds: string[]): Promise<NamedWorkSet> {
+    return invoke<NamedWorkSet>("save_named_set", { name, memoryIds });
+}
+
+export async function deleteNamedSet(id: string): Promise<void> {
+    return invoke<void>("delete_named_set", { id });
+}
+
+/** A set the person opens around this time on days like today. Only data for
+ *  a card: FNDR never opens it by itself. */
+export interface RoutineOffer {
+    id: string;
+    label: string;
+    setId?: string;
+    memoryIds: string[];
+    reason: string;
+    dueNow: boolean;
+}
+
+export async function routineOffers(): Promise<RoutineOffer[]> {
+    return invoke<RoutineOffer[]>("routine_offers");
+}
+
+/** Hides an offer for the rest of today. */
+export async function dismissRoutineOffer(id: string): Promise<void> {
+    return invoke<void>("dismiss_routine_offer", { id });
+}
 export type ComputerUseRisk = "runs" | "confirm" | "never";
 
 export type ComputerUseEvent =
@@ -2847,7 +3285,7 @@ export type ComputerUseEvent =
     | {
           kind: "planned";
           runId: string;
-          steps: { label: string; action: ComputerUseStepAction; app: string }[];
+          steps: { label: string; action: ComputerUseStepAction; app: string; item?: WorkItem }[];
           /** No step can need a yes, so the plan may start by itself. */
           autoStart?: boolean;
       }
@@ -2860,6 +3298,8 @@ export type ComputerUseEvent =
     | { kind: "stepDone"; runId: string; index: number; ok: boolean; detail: string; checked?: boolean }
     | { kind: "finished"; runId: string; ok: boolean; summary: string }
     | { kind: "stopped"; runId: string }
+    /** A work-set request matched more than one thread about equally; the person picks. */
+    | { kind: "choose"; runId: string; options: WorkSet[] }
     | { kind: "failed"; runId: string; error: string; reconnect: boolean };
 
 export interface ComputerUseStatus {
@@ -2889,6 +3329,62 @@ export async function computerUsePlan(text: string): Promise<string> {
 /** Starts a planned run (the plan card's countdown, "go", or a tap). */
 export async function computerUseStart(runId: string): Promise<void> {
     return invoke("computer_use_start", { runId });
+}
+
+/** Hands a request to Notch Do, which opens and plans it: from the command bar, or a skill run from Settings. Refused while "Operate my Mac" is off. */
+export async function notchDoRequest(text: string): Promise<void> {
+    return invoke("notch_do_request", { text });
+}
+
+/** A Notch Do run as Settings lists it. */
+export interface NotchDoRun {
+    runId: string;
+    /** RFC 3339. */
+    at: string;
+    request: string;
+    /** `local` (on this Mac), `planner` (the cloud planner) or `skill`. */
+    plannedBy: string;
+    /** Step labels, in order. */
+    steps: string[];
+    /** null while the run has not ended. */
+    ok: boolean | null;
+    summary: string;
+    rating: "worked" | "did_not_work" | null;
+    /** Whether a skill could repeat it: it worked and reopened no memories. */
+    repeatable: boolean;
+}
+
+export interface NotchDoSkill {
+    id: string;
+    name: string;
+    /** The request it was saved from. */
+    request: string;
+    steps: string[];
+    savedAt: string;
+}
+
+/** The newest Notch Do runs, newest first. */
+export async function notchDoRuns(): Promise<NotchDoRun[]> {
+    return invoke<NotchDoRun[]>("notch_do_runs");
+}
+
+/** Rates a Notch Do run that ended; a run that did not work becomes a draft case for the evaluation suite. */
+export async function notchDoRateRun(runId: string, worked: boolean): Promise<void> {
+    return invoke("notch_do_rate_run", { runId, worked });
+}
+
+/** Saves a Notch Do run that worked as a skill, run again by saying its name. Returns the saved name. */
+export async function notchDoSaveSkill(runId: string, name: string): Promise<string> {
+    return invoke<string>("notch_do_save_skill", { runId, name });
+}
+
+export async function notchDoSkills(): Promise<NotchDoSkill[]> {
+    return invoke<NotchDoSkill[]>("notch_do_skills");
+}
+
+/** Deletes a skill; false when it was already gone. */
+export async function notchDoDeleteSkill(id: string): Promise<boolean> {
+    return invoke<boolean>("notch_do_delete_skill", { id });
 }
 
 export async function computerUseRespond(requestKey: string, approve: boolean): Promise<void> {

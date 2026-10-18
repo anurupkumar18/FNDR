@@ -61,3 +61,28 @@ Real queries marked weak stayed at 6 of 98. So the rule holds up on new queries 
 
 - `tests/search_relevance_eval.rs` measured the older `HybridSearcher`. It now runs the live retrieval function (average MRR 0.984 on its 31 real cases, gate raised from 0.72 to 0.90). Its five no-match cases are reported, not gated, because the mock embedder gives no real vectors.
 - In that test the "Display Settings" memory was captured in System Settings, which is on the default list of excluded apps, so the live path never returned it. The fixture is now a support page in Safari and both of its queries find it first, which confirms the cause.
+
+## A time phrase is not topic evidence, 2026-10-08
+
+The rule let a hit stay strong when the time route had found it. The time route finds every memory in the named time, so an unrelated query with "yesterday" or "last week" on the end was marked a confident match for whatever was on screen then. The time route no longer counts.
+
+Measured by adding a time phrase (" from yesterday", " last week", " from two days ago", " this week") to the 24 no-match queries of the three persona sets, on freshly seeded profiles:
+
+| | Before | After |
+|---|---|---|
+| Knowledge worker, no-match with a time phrase marked strong | 2 of 8 | 0 of 8 |
+| Office PM | 4 of 8 | 1 of 8 |
+| Software engineer | 3 of 8 | 0 of 8 |
+| Real queries marked weak, all three sets | 6 of 98 | 7 of 98 |
+
+The one real query that became weak is "the product requirements doc I drafted last week": a paraphrase whose top result holds one of its words and is not close in meaning. The other six weak real queries are paraphrases with no time phrase, and were weak before.
+
+The gate passes on all three sets. `retrieval_qa` now names each real query it marks weak, with the routes and the words found.
+
+Note for anyone running the gate: `QA_SKIP_SEED=1` reuses a profile whose dates were written when it was seeded. On a later day every "yesterday" query misses and the gate reports FAIL. Reseed first.
+
+## Generic query word, 2026-10-09
+
+On a fresh Office PM synthetic profile using the installed MiniLM assets, "notes from the podcast about sourdough baking" was marked strong for a hiring scorecard. The top hit matched only "notes" and "about"; its vector signal was 0.245 and fused score was 0.369. `QueryContext` omitted many common words but kept "about", so two of five single-word anchors counted as enough keyword support to bypass the low-vector check. Removing "about" from anchor terms made that query weak. The Office PM product flag changed from 2 of 8 no-match queries marked strong to 1 of 8; real queries marked weak stayed 4 of 33. The Office PM retrieval gate passed, with Recall@5 0.950 on Search, Ask, and Retrieve.
+
+The remaining false strong query asks for sales director candidates. Its top hit is a Senior Product Designer hiring pipeline with vector signal 0.470 and fused score 0.537. The rule treats that as semantic support; a generic threshold change would also risk real paraphrases. This role mismatch needs a separate discriminating signal and fresh labeled checks.

@@ -18,5 +18,7 @@ export function reopenOutcomeMessage(outcome: ReopenOutcome): string {
             return "FNDR does not open this kind of link.";
         case "no_target":
             return "Nothing to reopen for this memory.";
+        case "unavailable":
+            return "This source is unavailable to reopen right now.";
     }
 }

@@ -24,6 +24,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 pub mod extraction_evidence;
+pub mod foundation;
 mod image_semantics;
 pub mod model_config;
 pub(crate) mod prompts;
@@ -487,6 +488,15 @@ fn extract_json_object(raw: &str) -> Option<String> {
     None
 }
 
+fn extraction_output_parses(raw: &str) -> bool {
+    extract_json_object(raw).is_some_and(|candidate| {
+        serde_json::from_str::<StructuredMemoryExtraction>(&normalize_structured_memory_json(
+            &candidate,
+        ))
+        .is_ok()
+    })
+}
+
 fn valid_query_plan_refinement(value: &serde_json::Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
@@ -688,6 +698,46 @@ pub const CANONICAL_ACTIVITY_TYPES: &[&str] = &[
     "unknown",
 ];
 
+/// Names that show an AI assistant or agent is on screen.
+const AGENT_NAMES: &[&str] = &[
+    "claude",
+    "chatgpt",
+    "codex",
+    "copilot",
+    "gemini",
+    "perplexity",
+    "cursor",
+    "agent",
+    "assistant",
+];
+
+/// The activity label a capture may carry, given what was on screen. The
+/// model picks `reviewing_agent_output` for file lists, music players and
+/// settings panes. The label stays only when the app or page is an AI
+/// assistant, or the title or text names one. Otherwise the activity is
+/// unknown.
+pub fn activity_for_evidence(
+    label: &str,
+    app_name: &str,
+    url: Option<&str>,
+    window_title: &str,
+    text: &str,
+) -> String {
+    let label = normalize_activity_type(label);
+    if label != "reviewing_agent_output" || crate::tasks::suggest::is_ai_surface(app_name, url) {
+        return label;
+    }
+    let seen = format!("{window_title} {text}").to_lowercase();
+    let names_an_agent = seen
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| AGENT_NAMES.contains(&word));
+    if names_an_agent {
+        label
+    } else {
+        "unknown".to_string()
+    }
+}
+
 pub fn normalize_activity_type(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     if normalized.is_empty() {
@@ -802,14 +852,22 @@ pub fn parse_expansion_terms(raw: &str) -> Vec<String> {
 /// serialized by its shared mutex, and each handle retains the shared backend.
 #[derive(Clone)]
 pub struct InferenceEngine {
-    model: &'static LlamaModel,
-    context: Arc<Mutex<LlamaContext<'static>>>,
-    _backend: Arc<LlamaBackend>,
-    chat_template: LlamaChatTemplate,
+    model: Option<&'static LlamaModel>,
+    context: Option<Arc<Mutex<LlamaContext<'static>>>>,
+    _backend: Option<Arc<LlamaBackend>>,
+    chat_template: Option<LlamaChatTemplate>,
+    apple: Option<Arc<Mutex<foundation::Client>>>,
+    last_backend: Arc<Mutex<Option<foundation::Backend>>>,
     model_id: String,
     model_path: PathBuf,
     /// `<app data dir>/llm_traces.jsonl`; `None` when the engine has no app data dir (tests, evals).
     trace_path: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PromptParts {
+    system: String,
+    user: String,
 }
 
 /// Token counts for one completion, filled in by `complete_blocking` and recorded in the LLM trace.
@@ -905,25 +963,49 @@ impl InferenceEngine {
         app_data_dir: Option<PathBuf>,
         preferred_model_id: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        tracing::info!("Initializing local LLM via llama-cpp...");
-
-        let backend = get_or_init_backend()?;
-
+        let apple = foundation::helper_path().and_then(|path| {
+            let mut client = foundation::Client::new(path);
+            let availability = client.probe();
+            let setting = app_data_dir.as_deref().and_then(foundation::read_setting);
+            foundation::apple_enabled(setting, availability).then(|| Arc::new(Mutex::new(client)))
+        });
         let resolved_model =
-            crate::models::resolve_model(preferred_model_id.as_deref(), app_data_dir.as_deref())
-                .ok_or_else(|| {
-                    let searched_dirs =
-                        crate::models::candidate_model_dirs(app_data_dir.as_deref())
-                            .into_iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                    tracing::error!(
-                        "Model file not found in any known location. Searched: {}",
-                        searched_dirs
-                    );
-                    format!("Model file missing. Searched: {}", searched_dirs)
-                })?;
+            crate::models::resolve_model(preferred_model_id.as_deref(), app_data_dir.as_deref());
+        if resolved_model.is_none() && apple.is_none() {
+            return Err({
+                let searched_dirs = crate::models::candidate_model_dirs(app_data_dir.as_deref())
+                    .into_iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                tracing::error!(
+                    "Model file not found in any known location. Searched: {}",
+                    searched_dirs
+                );
+                format!("Model file missing. Searched: {}", searched_dirs)
+            }
+            .into());
+        }
+
+        let trace_path = app_data_dir
+            .as_ref()
+            .map(|dir| dir.join("llm_traces.jsonl"));
+        let Some(resolved_model) = resolved_model else {
+            return Ok(Self {
+                model: None,
+                context: None,
+                _backend: None,
+                chat_template: None,
+                apple,
+                last_backend: Arc::new(Mutex::new(None)),
+                model_id: "apple-foundation".to_string(),
+                model_path: PathBuf::new(),
+                trace_path,
+            });
+        };
+
+        tracing::info!("Initializing local LLM via llama-cpp...");
+        let backend = get_or_init_backend()?;
 
         let model_id = resolved_model.definition.id.to_string();
         let model_path = resolved_model.path;
@@ -991,15 +1073,13 @@ impl InferenceEngine {
             }
         };
 
-        let trace_path = app_data_dir
-            .as_ref()
-            .map(|dir| dir.join("llm_traces.jsonl"));
-
         Ok(Self {
-            model: model_ref,
-            context: Arc::new(Mutex::new(context)),
-            _backend: backend,
-            chat_template,
+            model: Some(model_ref),
+            context: Some(Arc::new(Mutex::new(context))),
+            _backend: Some(backend),
+            chat_template: Some(chat_template),
+            apple,
+            last_backend: Arc::new(Mutex::new(None)),
             model_id,
             model_path,
             trace_path,
@@ -1008,6 +1088,19 @@ impl InferenceEngine {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    pub fn apple_available(&self) -> bool {
+        self.apple.is_some()
+    }
+
+    pub fn last_text_backend(&self) -> &'static str {
+        match *self.last_backend.lock() {
+            Some(foundation::Backend::AppleFoundation) => "apple_foundation",
+            Some(foundation::Backend::LocalGguf) if self.model.is_some() => "local_gguf",
+            Some(foundation::Backend::LocalGguf) => "unavailable",
+            None => "not_run",
+        }
     }
 
     pub fn model_path(&self) -> &Path {
@@ -1059,7 +1152,18 @@ impl InferenceEngine {
             "Summarizing OCR text for memory node ({} chars)...",
             ocr_text.len()
         );
-        let raw_summary = self.complete_task("memory_snippet", &prompt, 90).await;
+        let (mut raw_summary, backend) = self
+            .complete_task_with_backend("memory_snippet", &prompt, 90)
+            .await;
+        if backend == foundation::Backend::AppleFoundation
+            && self.model.is_some()
+            && (echoes_source_lines(&raw_summary, ocr_text)
+                || !is_usable_summary(&clean_summary_output(&raw_summary)))
+        {
+            raw_summary = self
+                .complete_task_local("memory_snippet", &prompt, 90)
+                .await;
+        }
         // Copying screen lines back is not a summary; the caller's
         // deterministic snippet is better than an echo of UI text.
         if echoes_source_lines(&raw_summary, ocr_text) {
@@ -1099,8 +1203,18 @@ impl InferenceEngine {
             }
         };
 
-        let raw = self.complete_task("answer", &prompt, 150).await;
-        crate::summariser::sentences::complete_sentences(raw.trim(), 3)
+        let (raw, backend) = self
+            .complete_task_with_backend("answer", &prompt, 150)
+            .await;
+        let mut answer = crate::summariser::sentences::complete_sentences(raw.trim(), 3);
+        if answer.is_empty()
+            && backend == foundation::Backend::AppleFoundation
+            && self.model.is_some()
+        {
+            let raw = self.complete_task_local("answer", &prompt, 150).await;
+            answer = crate::summariser::sentences::complete_sentences(raw.trim(), 3);
+        }
+        answer
     }
 
     /// Score an output against a caller-supplied rubric. Evals only; kept apart
@@ -1364,6 +1478,25 @@ impl InferenceEngine {
         self.complete_task("task_suggestion", &prompt, 160).await
     }
 
+    /// Reword one finished status-report line (daily outputs). The caller
+    /// keeps the original unless `outputs::polish` accepts the result.
+    pub async fn rephrase_output_line(&self, line: &str) -> String {
+        if line.trim().is_empty() {
+            return String::new();
+        }
+        let prompt = match self.build_prompt(
+            prompts::OUTPUT_LINE_SYSTEM,
+            &format!("LINE:\n{}", line.chars().take(400).collect::<String>()),
+        ) {
+            Ok(prompt) => prompt,
+            Err(err) => {
+                tracing::error!("Prompt build failed: {}", err);
+                return String::new();
+            }
+        };
+        self.complete_task("output_line", &prompt, 80).await
+    }
+
     /// Extract structured memory fields natively via Qwen3-VL style JSON prompt.
     pub async fn extract_structured_memory(
         &self,
@@ -1385,13 +1518,26 @@ impl InferenceEngine {
         );
 
         let prompt = self.build_prompt(&system_msg, &user_msg).ok()?;
-        let raw = self
-            .complete_task(
+        let (mut raw, backend) = self
+            .complete_task_with_backend(
                 "memory_extraction",
                 &prompt,
                 model_config::EXTRACTION_MAX_OUTPUT_TOKENS,
             )
             .await;
+
+        if backend == foundation::Backend::AppleFoundation
+            && self.model.is_some()
+            && !extraction_output_parses(&raw)
+        {
+            raw = self
+                .complete_task_local(
+                    "memory_extraction",
+                    &prompt,
+                    model_config::EXTRACTION_MAX_OUTPUT_TOKENS,
+                )
+                .await;
+        }
 
         let candidate = extract_json_object(&raw)?;
         let normalized = normalize_structured_memory_json(&candidate);
@@ -1621,14 +1767,33 @@ impl InferenceEngine {
             user_message.to_string()
         };
 
-        let messages = vec![
-            LlamaChatMessage::new("system".to_string(), sys).map_err(|err| err.to_string())?,
-            LlamaChatMessage::new("user".to_string(), usr).map_err(|err| err.to_string())?,
-        ];
+        if self.apple.is_some() {
+            serde_json::to_string(&PromptParts {
+                system: sys,
+                user: usr,
+            })
+            .map_err(|error| error.to_string())
+        } else {
+            self.local_prompt(&sys, &usr)
+        }
+    }
 
-        self.model
-            .apply_chat_template(&self.chat_template, &messages, true)
-            .map_err(|err| err.to_string())
+    fn local_prompt(&self, system: &str, user: &str) -> Result<String, String> {
+        if let (Some(model), Some(template)) = (self.model, self.chat_template.as_ref()) {
+            let messages = vec![
+                LlamaChatMessage::new("system".to_string(), system.to_string())
+                    .map_err(|error| error.to_string())?,
+                LlamaChatMessage::new("user".to_string(), user.to_string())
+                    .map_err(|error| error.to_string())?,
+            ];
+            model
+                .apply_chat_template(template, &messages, true)
+                .map_err(|error| error.to_string())
+        } else {
+            Ok(format!(
+                "SYSTEM INSTRUCTIONS:\n{system}\n\nUSER REQUEST:\n{user}"
+            ))
+        }
     }
 
     /// Run generation. Offloads the full blocking section (mutex + decode loop)
@@ -1638,19 +1803,55 @@ impl InferenceEngine {
     /// NOTE: Only one generation runs at a time across the whole engine because
     /// `LlamaContext` is protected by a single `Mutex`. This is intentional —
     /// the underlying KV cache is shared state.
+    #[cfg(test)]
     async fn complete(&self, prompt: &str, max_tokens: i32) -> String {
         self.complete_with_control(prompt, max_tokens, None).await
     }
 
     /// `complete` with a task label, so the LLM trace records which job made the call.
     async fn complete_task(&self, task: &'static str, prompt: &str, max_tokens: i32) -> String {
+        self.complete_task_with_backend(task, prompt, max_tokens)
+            .await
+            .0
+    }
+
+    async fn complete_task_with_backend(
+        &self,
+        task: &'static str,
+        prompt: &str,
+        max_tokens: i32,
+    ) -> (String, foundation::Backend) {
         let version = if matches!(task, "memory_extraction" | "memory_extraction_repair") {
             prompts::EXTRACTION_PROMPT_VERSION
         } else {
             prompts::LLM_PROMPT_VERSION
         };
-        crate::telemetry::llm_trace::with_task(task, version, self.complete(prompt, max_tokens))
-            .await
+        crate::telemetry::llm_trace::with_task(
+            task,
+            version,
+            self.complete_with_control_backend(prompt, max_tokens, None, false),
+        )
+        .await
+    }
+
+    async fn complete_task_local(
+        &self,
+        task: &'static str,
+        prompt: &str,
+        max_tokens: i32,
+    ) -> String {
+        let version = if matches!(task, "memory_extraction" | "memory_extraction_repair") {
+            prompts::EXTRACTION_PROMPT_VERSION
+        } else {
+            prompts::LLM_PROMPT_VERSION
+        };
+        crate::telemetry::llm_trace::with_task(
+            task,
+            version,
+            self.complete_with_control_backend(prompt, max_tokens, None, true),
+        )
+        .await
+        .0
     }
 
     async fn complete_with_control(
@@ -1659,6 +1860,18 @@ impl InferenceEngine {
         max_tokens: i32,
         control: Option<InferenceRunControl>,
     ) -> String {
+        self.complete_with_control_backend(prompt, max_tokens, control, false)
+            .await
+            .0
+    }
+
+    async fn complete_with_control_backend(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        control: Option<InferenceRunControl>,
+        force_local: bool,
+    ) -> (String, foundation::Backend) {
         // A cancelled waiter does not stop spawn_blocking. Move an owned
         // handle into the job so its shared context and trace metadata remain
         // valid even when the caller releases or replaces the engine.
@@ -1673,13 +1886,53 @@ impl InferenceEngine {
 
         tokio::task::spawn_blocking(move || {
             let mut usage = TokenUsage::default();
-            let output = worker_engine.complete_blocking(
-                &prompt_owned,
-                max_tokens,
-                control.as_ref(),
-                &mut usage,
-                task,
-            );
+            let mut backend = foundation::Backend::LocalGguf;
+            let parts = worker_engine
+                .apple
+                .as_ref()
+                .and_then(|_| serde_json::from_str::<PromptParts>(&prompt_owned).ok());
+            let apple_output = if !force_local
+                && foundation::route(
+                    task,
+                    worker_engine.apple.is_some(),
+                    worker_engine.apple.is_some(),
+                    worker_engine.model.is_some(),
+                ) == foundation::Backend::AppleFoundation
+            {
+                worker_engine.apple.as_ref().and_then(|client| {
+                    let parts = parts.as_ref()?;
+                    match client
+                        .lock()
+                        .generate(task, &parts.system, &parts.user, max_tokens)
+                    {
+                        Ok(output) if !output.trim().is_empty() => Some(output),
+                        Ok(_) => None,
+                        Err(error) => {
+                            tracing::warn!(task, error, "Apple model generation failed");
+                            None
+                        }
+                    }
+                })
+            } else {
+                None
+            };
+            let output = if let Some(output) = apple_output {
+                backend = foundation::Backend::AppleFoundation;
+                output
+            } else {
+                let local_prompt = parts
+                    .as_ref()
+                    .map(|parts| worker_engine.local_prompt(&parts.system, &parts.user))
+                    .unwrap_or_else(|| Ok(prompt_owned.clone()))
+                    .unwrap_or_default();
+                worker_engine.complete_blocking(
+                    &local_prompt,
+                    max_tokens,
+                    control.as_ref(),
+                    &mut usage,
+                    task,
+                )
+            };
             worker_engine.record_trace(
                 task,
                 prompt_version,
@@ -1688,15 +1941,16 @@ impl InferenceEngine {
                 usage,
                 max_tokens,
                 started,
+                backend,
                 #[cfg(debug_assertions)]
                 memory_journey,
             );
-            output
+            (output, backend)
         })
         .await
         .unwrap_or_else(|e| {
             tracing::error!("complete: spawn_blocking join failed: {}", e);
-            String::new()
+            (String::new(), foundation::Backend::LocalGguf)
         })
     }
 
@@ -1710,17 +1964,30 @@ impl InferenceEngine {
         usage: TokenUsage,
         max_tokens: i32,
         started: Instant,
+        backend: foundation::Backend,
         #[cfg(debug_assertions)] memory_journey: Option<(
             std::sync::Arc<crate::memory_journey::MemoryJourneyRecorder>,
             String,
         )>,
     ) {
+        *self.last_backend.lock() = Some(backend);
         let trace = crate::telemetry::llm_trace::build_trace(
             &crate::telemetry::llm_trace::TraceInput {
                 ts_ms: chrono::Utc::now().timestamp_millis(),
                 task,
                 prompt_version,
-                model_id: &self.model_id,
+                model_id: if backend == foundation::Backend::AppleFoundation {
+                    "apple-foundation"
+                } else if self.model.is_none() {
+                    "none"
+                } else {
+                    &self.model_id
+                },
+                backend: match backend {
+                    foundation::Backend::AppleFoundation => "apple_foundation",
+                    foundation::Backend::LocalGguf if self.model.is_some() => "local_gguf",
+                    foundation::Backend::LocalGguf => "unavailable",
+                },
                 prompt_tokens: usage.prompt_tokens,
                 output_tokens: usage.output_tokens,
                 max_tokens: max_tokens.max(0) as u32,
@@ -1744,6 +2011,7 @@ impl InferenceEngine {
                     task: &trace.task,
                     prompt_version: &trace.prompt_version,
                     model_id: &trace.model_id,
+                    backend: &trace.backend,
                     prompt_tokens: trace.prompt_tokens,
                     output_tokens: trace.output_tokens,
                     max_tokens: trace.max_tokens,
@@ -1769,16 +2037,19 @@ impl InferenceEngine {
         usage: &mut TokenUsage,
         task: &str,
     ) -> String {
+        let (Some(context), Some(model)) = (self.context.as_ref(), self.model) else {
+            return String::new();
+        };
         let t0 = std::time::Instant::now();
         let ctx = loop {
             if inference_should_stop(control) {
                 return String::new();
             }
             if control.is_none() {
-                break self.context.lock();
+                break context.lock();
             }
-            if let Some(context) = self.context.try_lock_for(Duration::from_millis(50)) {
-                break context;
+            if let Some(locked) = context.try_lock_for(Duration::from_millis(50)) {
+                break locked;
             }
         };
         // Clear both before and after every request. The exit guard covers
@@ -1789,7 +2060,7 @@ impl InferenceEngine {
         let n_batch = ctx.n_batch().max(1) as usize;
         let n_ctx = ctx.n_ctx() as usize;
 
-        let mut tokens_list = match self.model.str_to_token(prompt, AddBos::Never) {
+        let mut tokens_list = match model.str_to_token(prompt, AddBos::Never) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("Tokenization failed: {}", e);
@@ -1858,13 +2129,12 @@ impl InferenceEngine {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 
-            if self.model.is_eog_token(token) {
+            if model.is_eog_token(token) {
                 break;
             }
 
             #[allow(deprecated)]
-            let piece = self
-                .model
+            let piece = model
                 .token_to_str(token, Special::Plaintext)
                 .unwrap_or_default();
             result.push_str(&piece);
@@ -1896,6 +2166,51 @@ impl InferenceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn apple_only_answer_uses_separate_instructions_and_records_backend() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let helper = dir.path().join("helper.py");
+        std::fs::write(
+            &helper,
+            "#!/usr/bin/env python3\nimport json, sys\nfor line in sys.stdin:\n    request = json.loads(line)\n    valid = request['instructions'].startswith('You answer a question') and 'MEMORY SNIPPETS:' in request['prompt'] and '<|im_start|>' not in request['prompt'] and request['root_description'] == 'Result grounded in supplied evidence'\n    reply = {'id': request['id'], 'ok': True, 'output': json.dumps({'text': 'Synthetic answer.' if valid else 'Wrong prompt.'})}\n    if 'REFUSE' in request['prompt']:\n        reply = {'id': request['id'], 'ok': False, 'error': 'guardrail_refusal'}\n    print(json.dumps(reply), flush=True)\n",
+        )
+        .expect("write fake helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        let trace_path = dir.path().join("traces.jsonl");
+        let engine = InferenceEngine {
+            model: None,
+            context: None,
+            _backend: None,
+            chat_template: None,
+            apple: Some(Arc::new(Mutex::new(foundation::Client::new(helper)))),
+            last_backend: Arc::new(Mutex::new(None)),
+            model_id: "apple-foundation".to_string(),
+            model_path: PathBuf::new(),
+            trace_path: Some(trace_path.clone()),
+        };
+
+        assert_eq!(
+            engine
+                .answer("Which fruit?", "The fruit was an apple.")
+                .await,
+            "Synthetic answer."
+        );
+        assert_eq!(engine.last_text_backend(), "apple_foundation");
+        let line = std::fs::read_to_string(trace_path).expect("trace");
+        let trace: crate::telemetry::llm_trace::LlmTrace =
+            serde_json::from_str(line.trim()).expect("valid trace");
+        assert_eq!(trace.backend, "apple_foundation");
+        assert_eq!(trace.model_id, "apple-foundation");
+        assert!(trace.prompt.is_none());
+
+        assert_eq!(engine.answer("REFUSE", "Synthetic context.").await, "");
+        assert_eq!(engine.last_text_backend(), "unavailable");
+    }
 
     #[test]
     fn extraction_prompt_budget_preserves_exact_fit_and_rejects_overflow_without_truncation() {
@@ -1943,7 +2258,7 @@ mod tests {
             .expect("installed text model");
         let traces = tempfile::tempdir().expect("isolated traces");
         engine.trace_path = Some(traces.path().join("llm_traces.jsonl"));
-        let context = Arc::clone(&engine.context);
+        let context = Arc::clone(engine.context.as_ref().expect("GGUF context"));
         let weak_context = Arc::downgrade(&context);
         let guard = context.lock();
         let baseline_owners = Arc::strong_count(&context);
@@ -2215,6 +2530,50 @@ mod tests {
         let out = normalize_structured_memory_json(raw);
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid json");
         assert_eq!(parsed["entities"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn agent_review_needs_an_agent_on_screen() {
+        let label = "reviewing_agent_output";
+        // An assistant's own app or page.
+        assert_eq!(activity_for_evidence(label, "ChatGPT", None, "", ""), label);
+        assert_eq!(
+            activity_for_evidence(
+                label,
+                "Google Chrome",
+                Some("https://claude.ai/chat/1"),
+                "New chat",
+                ""
+            ),
+            label
+        );
+        // An agent named in the title or the text.
+        assert_eq!(
+            activity_for_evidence(label, "Terminal", None, "claude - zsh", ""),
+            label
+        );
+        assert_eq!(
+            activity_for_evidence(label, "Cursor", None, "main.rs", "Agent finished 3 edits"),
+            label
+        );
+        // Nothing of the kind on screen.
+        for (app, title, text) in [
+            ("Finder", "Downloads", "report.pdf notes.txt"),
+            ("Spotify", "Liked Songs", "Shuffle Play"),
+            ("System Settings", "Privacy & Security", "Screen Recording"),
+            ("Google Chrome", "Agentic workflows weekly", "subscribe"),
+        ] {
+            assert_eq!(
+                activity_for_evidence(label, app, None, title, text),
+                "unknown",
+                "{app}"
+            );
+        }
+        // Other labels pass through, aliases included.
+        assert_eq!(
+            activity_for_evidence("Research", "Finder", None, "", ""),
+            "researching"
+        );
     }
 
     #[test]

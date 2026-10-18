@@ -1,75 +1,19 @@
 # Handoff
 
-Portable agent skill. Works in Cursor, Codex, ChatGPT, Gemini, Antigravity, Claude, or any coding assistant because it is plain Markdown instructions, not a tool-specific slash command.
-
 ## Trigger
-Use this skill when the user says: `handoff, compact this session, summarize for another agent, continue later, create handoff doc`.
+Use when work stops, changes hands, or a long session needs a checkpoint.
 
 ## Goal
-Create a compact but complete transfer document so another agent or future session can continue without re-discovery.
-
-## Non-negotiable engineering rules
-- Inspect the existing code, tests, docs, and naming before proposing or editing anything.
-- Prefer using, moving, simplifying, or deleting existing code over adding new code.
-- Do not stack abstractions on top of abstractions. If a direct change solves the problem cleanly, use the direct change.
-- Keep changes small enough to review. One vertical slice beats a broad rewrite.
-- Preserve working behavior unless the requested change explicitly replaces it.
-- Add or update tests at the boundary where behavior is observable.
-- Run the cheapest relevant feedback loop after each meaningful change: typecheck, lint, unit test, focused integration test, browser check, or targeted script.
-- If the codebase lacks a feedback loop, create the smallest useful one before changing behavior.
-- Surface uncertainty instead of guessing. If a dependency, convention, or requirement is unclear, inspect more or ask targeted questions.
-
-## Inputs to look for
-- Current task or bug report.
-- Existing tests, failing output, logs, stack traces, screenshots, or repro steps.
-- Repository docs: `README`, `CONTEXT.md`, `docs/adr/*`, design docs, issue tracker notes, PRDs.
-- Module boundaries, public interfaces, API routes, database schema, typed models, and domain terminology.
-
+Give the next agent one accurate current state and the shortest path to resume.
 
 ## Workflow
-
-1. Identify the goal of the session.
-2. Summarize decisions made and why.
-3. List files changed, files inspected, and commands run.
-4. Capture current state: passing/failing tests, known bugs, unfinished work.
-5. Preserve exact next steps.
-6. Include risk areas and things not to touch.
-7. Include user preferences or constraints relevant to the work.
-8. Avoid long narrative. Make it actionable.
+1. Verify branch, HEAD, remote and dirty paths. Attribute shared-checkout edits; never claim or stage another session's work.
+2. Read prior handoffs and commit history. Resolve dated contradictions in favor of verified current code and evidence.
+3. State shipped work with commits, checks and their limits. Separate implemented, measured, native-verified and unverified claims.
+4. List in-flight edits with owner and exact blocker. Preserve secrets and private captures outside the handoff.
+5. Order remaining work by dependency, acceptance evidence and safe verification. Link existing tickets and deeper reports instead of repeating them.
+6. Doctor the process: name what worked, what failed, why, and one concrete correction. Remove or mark stale handoff text rather than appending a conflicting status section.
+7. Run `git diff --check`; stage only owned paths. Stop after the requested handoff and board updates.
 
 ## Required output
-
-```md
-# Handoff: <Project / Task>
-
-## Goal
-
-## Current state
-
-## Decisions made
-| Decision | Reason | Files/Docs |
-|---|---|---|
-
-## Files changed
-| File | Change | Notes |
-|---|---|---|
-
-## Files inspected but not changed
-
-## Commands run
-| Command | Result |
-|---|---|
-
-## Tests / verification
-
-## Known issues
-
-## Next steps
-1. ...
-2. ...
-3. ...
-
-## Risks / do not do
-
-## Useful context for next agent
-```
+A concise `docs/handoffs/<date>-<topic>.md` with current state, verification scope, ordered next steps, ownership/risks, and process corrections. Include exact commands only where a successor needs them. Link evidence instead of copying long logs.

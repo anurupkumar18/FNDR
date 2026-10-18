@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Publishes the commits on local main when this shared checkout cannot merge
+# the remote, because another session has uncommitted work in files the
+# incoming commits touch. Nothing in the checkout moves: no merge, no stash,
+# no branch switch. It
+#
+#   1. test-merges HEAD with origin/main in memory and stops on a conflict,
+#   2. exports the merged tree to a scratch folder and runs the checks there,
+#   3. writes the merge as a commit object and pushes it to origin (GitLab and
+#      GitHub), then confirms both heads.
+#
+# The remote side is origin/main, or gh/main when GitHub is ahead of GitLab
+# (a push to GitHub alone); diverged remotes stop it before any check runs.
+#
+# The checkout fast-forwards later, once it is clean.
+#
+#   scripts/dev/publish-merged.sh [--frontend] [--rust] [--scripts] "what this publishes"
+#
+# With no check named it runs all three. Name only the ones your commits can
+# break, and say so in the summary line.
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$REPO"
+
+checks=()
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --frontend|--rust|--scripts) checks+=("${1#--}") ;;
+    *) echo "Unknown option $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+[[ ${#checks[@]} -gt 0 ]] || checks=(frontend scripts rust)
+summary="${1:-}"
+[[ -n "$summary" ]] || { echo "Give a one-line summary of what this publishes." >&2; exit 2; }
+[[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "Not on main." >&2; exit 1; }
+
+# The newest main both remotes can take: origin/main, or gh/main when GitHub
+# holds everything GitLab does and more (someone pushed to GitHub alone).
+# Stops when the two have diverged, because a push would be refused by one.
+remote_main() {
+  git fetch -q origin
+  local gitlab github
+  gitlab="$(git rev-parse origin/main)"
+  if ! git remote get-url gh >/dev/null 2>&1; then
+    echo "$gitlab"
+    return 0
+  fi
+  git fetch -q gh
+  github="$(git rev-parse gh/main)"
+  if git merge-base --is-ancestor "$github" "$gitlab"; then
+    echo "$gitlab"
+  elif git merge-base --is-ancestor "$gitlab" "$github"; then
+    echo "$github"
+  else
+    echo "GitLab and GitHub main have diverged; merge gh/main and origin/main first." >&2
+    return 1
+  fi
+}
+
+publish_once() {
+  head="$(git rev-parse HEAD)"
+  remote="$(remote_main)" || return 1
+  if git merge-base --is-ancestor "$head" "$remote"; then
+    echo "Nothing to publish: the remote main already has every local commit."
+    return 0
+  fi
+
+  if ! tree="$(git merge-tree --write-tree "$head" "$remote")"; then
+    echo "The remote does not merge cleanly with local main. Conflicts:" >&2
+    echo "$tree" >&2
+    return 1
+  fi
+
+  scratch="${TMPDIR:-/tmp}/fndr-publish"
+  rm -rf "$scratch"
+  mkdir -p "$scratch/dist"
+  git archive "$tree" | tar -x -C "$scratch"
+  ln -s "$REPO/node_modules" "$scratch/node_modules"
+
+  ran=()
+  for check in "${checks[@]}"; do
+    case "$check" in
+      frontend) (cd "$scratch" && npm run -s typecheck && npx vitest run >/dev/null) && ran+=("typecheck and frontend tests") ;;
+      scripts) (cd "$scratch" && make -s scripts-test >/dev/null 2>&1) && ran+=("script tests") ;;
+      rust) (cd "$scratch/src-tauri" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo test --lib >/dev/null 2>&1) && ran+=("library tests") ;;
+    esac || { echo "The $check check failed on the merged tree. Nothing was pushed." >&2; return 1; }
+  done
+  verified="$(IFS=,; echo "${ran[*]}" | sed 's/,/, /g')"
+
+  if git merge-base --is-ancestor "$remote" "$head"; then
+    commit="$head"
+  else
+    commit="$(git commit-tree "$tree" -p "$head" -p "$remote" -m "Merge remote main: $summary
+
+Built without moving the shared checkout. Verified on an export of this tree: $verified.")"
+  fi
+  # The checks take minutes. If someone pushed meanwhile, start over on the new head.
+  [[ "$(remote_main)" == "$remote" ]] || return 75
+  git push origin "${commit}:refs/heads/main"
+}
+
+trap 'rm -rf "${TMPDIR:-/tmp}/fndr-publish"' EXIT
+for attempt in 1 2 3; do
+  status=0
+  publish_once || status=$?
+  [[ $status -eq 75 ]] || break
+  echo "origin/main moved while the checks ran; trying again ($attempt of 3)." >&2
+done
+[[ $status -eq 0 ]] || exit "$status"
+[[ -n "${commit:-}" ]] || exit 0
+echo "Published $(git rev-parse --short "$commit") (verified: $verified)."
+for name in origin gh; do
+  git remote get-url "$name" >/dev/null 2>&1 && echo "$name main: $(git ls-remote "$name" main | cut -c1-7)"
+done

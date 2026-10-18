@@ -20,6 +20,8 @@ How decisions work: the ticket's assignee drafts, posts the draft link in the te
 
 **Done when.** ADR accepted and the decision log updated by Mon Sep 28.
 
+**Decided 2026-10-08.** Accepted: a cloud model only on a turn the person starts, on a surface where they chose the provider. Background tasks stay local. PD-08's table was not needed; see the ADR's last section.
+
 **Evidence.** The ADR.
 
 ## PD-02 One positioning page and a competitor teardown

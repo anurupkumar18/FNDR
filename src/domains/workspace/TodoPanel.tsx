@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Task, addTodo, completeTodo, dismissTodo, generateDailyBriefing, getTodos, updateTodo } from "@/shared/ipc/tauri";
 import { acceptSuggestion, isSuggestion, relativeTime, sourceLabel } from "./todoSuggestions";
+import { HandOffPanel } from "@/domains/handoff/HandOffPanel";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./TodoPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
@@ -51,6 +52,8 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
     const [dailyBriefingError, setDailyBriefingError] = useState(false);
     const [briefingActivity, setBriefingActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+    // The suggestion being handed off (ADR 032), if any.
+    const [handOffTaskId, setHandOffTaskId] = useState<string | null>(null);
     const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -388,6 +391,10 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 {!loading && !loadError && tasks.length === 0 && (
                     <div className="todo-page-state">
                         <p>Nothing on your list. Add a task above when something needs to carry forward.</p>
+                        <p>
+                            When a mail, chat or note on screen asks something of you, FNDR suggests it here with
+                            the words it read.
+                        </p>
                     </div>
                 )}
 
@@ -493,6 +500,15 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                     <button
                                         className="ui-action-btn todo-row-btn"
                                         type="button"
+                                        aria-label={`Hand off ${task.title}`}
+                                        disabled={pendingTaskId === task.id}
+                                        onClick={() => setHandOffTaskId(task.id)}
+                                    >
+                                        Hand off
+                                    </button>
+                                    <button
+                                        className="ui-action-btn todo-row-btn"
+                                        type="button"
                                         aria-label={`${task.title} is not a task`}
                                         disabled={pendingTaskId === task.id}
                                         onClick={() => void handleNotATask(task)}
@@ -515,6 +531,9 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     </section>
                 )}
             </div>
+            {handOffTaskId && (
+                <HandOffPanel source={{ kind: "task", value: handOffTaskId }} onClose={() => setHandOffTaskId(null)} />
+            )}
         </div>
     );
 }

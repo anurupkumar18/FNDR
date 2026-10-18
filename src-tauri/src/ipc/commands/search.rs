@@ -283,8 +283,30 @@ async fn enrich_insight_kg_node_counts(
     }
 }
 
+/// Counts of what each memory records, for the Vault's session rows. The
+/// lists live on the stored record, not on a search result.
+async fn enrich_fact_counts(store: &crate::storage::Store, cards: &mut [MemoryCard]) {
+    let ids = cards.iter().map(|card| card.id.clone()).collect::<Vec<_>>();
+    let Ok(records) = store.get_memories_by_ids(&ids).await else {
+        return;
+    };
+    for card in cards {
+        if let Some(record) = records.get(&card.id) {
+            set_fact_counts(card, record);
+        }
+    }
+}
+
+pub(super) fn set_fact_counts(card: &mut MemoryCard, record: &crate::storage::MemoryRecord) {
+    let count =
+        |items: &[String]| items.iter().filter(|item| !item.trim().is_empty()).count() as u32;
+    card.decision_count = count(&record.decisions);
+    card.error_count = count(&record.errors);
+    card.next_step_count = count(&record.next_steps);
+}
+
 pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
-    if result.is_agent_note() {
+    if result.is_leaf_row() {
         return crate::search::memory_cards::build_fallback_card("", &result);
     }
     let memory_id = result.id.clone();
@@ -364,13 +386,24 @@ pub(super) fn memory_card_from_result(result: SearchResult) -> MemoryCard {
         activity_type: result.activity_type.clone(),
         files_touched: result.files_touched.clone(),
         session_duration_mins: result.session_duration_mins,
+        decision_count: 0,
+        error_count: 0,
+        next_step_count: 0,
         continuation_of,
         reopen_target,
         reopen_page: result.reopen_page,
-        insight_what_happened: result.insight_what_happened.clone(),
-        insight_why_mattered: result.insight_why_mattered.clone(),
-        insight_what_changed: result.insight_what_changed.clone(),
-        insight_context_thread: result.insight_context_thread.clone(),
+        insight_what_happened: crate::search::memory_cards::safe_insight(
+            &result.insight_what_happened,
+        ),
+        insight_why_mattered: crate::search::memory_cards::safe_insight(
+            &result.insight_why_mattered,
+        ),
+        insight_what_changed: crate::search::memory_cards::safe_insight(
+            &result.insight_what_changed,
+        ),
+        insight_context_thread: crate::search::memory_cards::safe_thread(
+            &result.insight_context_thread,
+        ),
         insight_spans_json: result.insight_spans_json.clone(),
         insight_card_confidence: result.insight_card_confidence,
         timeline_action_class: crate::timeline::classify_action_class(&result)
@@ -694,6 +727,7 @@ async fn list_memory_cards_for_state(
     let mut cards: Vec<MemoryCard> = results.into_iter().map(memory_card_from_result).collect();
     refine_memory_card_titles(&mut cards);
     enrich_insight_kg_node_counts(state.store.clone(), &mut cards).await;
+    enrich_fact_counts(&state.store, &mut cards).await;
     Ok(cards)
 }
 
@@ -1270,6 +1304,29 @@ mod tests {
             crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
         let card = memory_card_from_result(result);
         assert_eq!(serde_json::to_value(card).unwrap()["text_source"], "ocr");
+    }
+
+    #[test]
+    fn direct_vault_card_hides_a_stored_goal_identifier() {
+        let record = MemoryRecord {
+            id: "checklist".into(),
+            window_title: "Launch checklist".into(),
+            insight_what_happened: "You were listening to a live performance.".into(),
+            insight_why_mattered: "Goal: organizing_information.".into(),
+            insight_context_thread: "session …bb3a".into(),
+            ..Default::default()
+        };
+        let result =
+            crate::context_runtime::retrieval_routes::memory_record_to_search_result(&record, 1.0);
+        let card = memory_card_from_result(result);
+        assert!(card.insight_why_mattered.is_empty());
+        assert!(card.insight_context_thread.is_empty());
+        assert_eq!(card.window_title, "Launch checklist");
+        assert_eq!(card.evidence_ids, vec!["checklist"]);
+        assert_eq!(
+            card.insight_what_happened,
+            "Listened to a live performance."
+        );
     }
 
     #[test]

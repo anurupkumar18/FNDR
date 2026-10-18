@@ -15,7 +15,7 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 | [`product/memory-journey.md`](product/memory-journey.md) | Debug-only capture-to-answer evidence and quality-baseline contract |
 | [`product/quality-lab.md`](product/quality-lab.md) | Same-build native QA profile, synthetic corpus workflow, scorecards, and fixture-replay roadmap |
 | [`mcp.md`](mcp.md) | MCP tools, modes, privacy model, and agent-facing additions |
-| [`agent.md`](agent.md) | FNDR Agent architecture, modes, provider strategy, and safety |
+| [`agent.md`](agent.md) | The Agent page (Hermes chat): providers, what is sent, commands; and the MCP `agent.*` tools |
 | [`agent-context-pack.md`](agent-context-pack.md) | Typed context pack schema, ranking, redaction, and provenance |
 | [`skills-and-evals.md`](skills-and-evals.md) | Skill lifecycle, eval case shape, and approval requirements |
 
@@ -27,7 +27,8 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 | [`architecture/`](architecture/) | Long-form architecture + insight graph schema (`graph-schema.md`) |
 | [`setup/engineering/`](setup/engineering/) | Implementation guides (timeline rules, repo layout, refactoring notes, agent tooling) |
 | [`product/`](product/) | Product-level technical notes, incl. the intelligence engine (`intelligence-engine.md`) |
-| [`agents/`](agents/) | Reserved for agent/MCP-oriented runbooks (add as needed) |
+| [`handoffs/`](handoffs/) | Where a session leaves its state for the next one |
+| [`evidence/`](evidence/) | Measurements and live-check results, by week |
 | Frontend source layout | [`../src/domains/README.md`](../src/domains/README.md) |
 
 ## Root files (not under `docs/`)

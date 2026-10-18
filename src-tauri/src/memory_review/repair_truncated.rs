@@ -17,7 +17,8 @@ use crate::embedding::Embedder;
 use crate::memory_embedding_document::refresh_text_vectors;
 use crate::storage::{MemoryRecord, Store};
 use crate::summariser::narration_filter::{
-    clean_or_fallback_display_summary, is_placeholder_summary, narration_filter_hits, neutral_voice,
+    clean_or_fallback_display_summary, is_placeholder_summary, narration_filter_hits,
+    neutral_voice, restate_label,
 };
 use crate::summariser::sentences::first_sentence;
 use serde::Serialize;
@@ -106,7 +107,7 @@ fn uncut_sentence(stored: &str, record: &MemoryRecord) -> Option<String> {
 /// Repairs `record` in place. Returns the before and after of its summary
 /// when anything changed.
 pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     // The insight rows are derived separately and can be cut even when the
@@ -135,6 +136,7 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
     };
     let (repaired, fell_back) = clean_or_fallback_display_summary(
         &sentence,
+        &record.app_name,
         &record.window_title,
         record.url.as_deref(),
         record.timestamp,
@@ -164,7 +166,14 @@ pub fn repair_record(record: &mut MemoryRecord) -> Option<RepairExample> {
 /// a label was retired keep it until something rewrites them. Returns whether
 /// the label changed.
 pub fn relabel_activity(record: &mut MemoryRecord) -> bool {
-    let mut current = crate::inference::normalize_activity_type(&record.activity_type);
+    // A label the screen does not support goes to unknown as well.
+    let mut current = crate::inference::activity_for_evidence(
+        &record.activity_type,
+        &record.app_name,
+        record.url.as_deref(),
+        &record.window_title,
+        &record.clean_text,
+    );
     // Until 2026-10-07 the model-free summary called every capture
     // "reviewing", which normalizes to this label. It never knew the activity.
     let written_without_a_model = record.synthesis_branch.eq_ignore_ascii_case("fallback")
@@ -193,13 +202,17 @@ pub fn reword_narration(record: &mut MemoryRecord) -> Option<RepairExample> {
     // so the text and its vector say the same thing. That includes a
     // narrator ("The user is ...") and an activity left in progress
     // ("Reviewing ...").
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     let before = record.display_summary.clone();
     let after = neutral_voice(&before).trim().to_string();
+    // A summary that is only the title or the app's name becomes a statement.
+    let relabelled = restate_label(&after, &record.app_name, &record.window_title);
+    let is_label = relabelled.is_some();
+    let after = relabelled.unwrap_or(after);
     if after == before.trim()
-        || after.split_whitespace().count() < MIN_REWORDED_WORDS
+        || (!is_label && after.split_whitespace().count() < MIN_REWORDED_WORDS)
         || narrates(&after)
         || is_placeholder_summary(&after)
     {
@@ -343,6 +356,20 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_summary_that_is_only_the_title_or_app_becomes_a_statement() {
+        let mut row = narrated_row("Q3 forecast - Numbers.");
+        reword_narration(&mut row).expect("restated");
+        assert_eq!(row.display_summary, "Viewed Q3 forecast - Numbers.");
+        assert_eq!(row.insight_what_happened, row.display_summary);
+        // A second pass finds nothing to change.
+        assert!(reword_narration(&mut row).is_none());
+
+        let mut short = narrated_row("Numbers.");
+        reword_narration(&mut short).expect("restated");
+        assert_eq!(short.display_summary, "Viewed Numbers.");
+    }
+
+    #[test]
     fn rewording_leaves_neutral_rows_and_assistant_notes_alone() {
         let mut neutral = narrated_row("Reviewed the Q3 forecast with margins by region.");
         assert!(reword_narration(&mut neutral).is_none());
@@ -474,10 +501,17 @@ mod tests {
         row.summary_source = "fallback".into();
         assert!(relabel_activity(&mut row));
         assert_eq!(row.activity_type, "unknown");
-        // The model chose the label: it stays.
+        // The model chose the label on an assistant's screen: it stays.
         row.activity_type = "reviewing_agent_output".into();
         row.summary_source = "llm".into();
+        row.app_name = "ChatGPT".into();
         assert!(!relabel_activity(&mut row));
+        // The model chose it for a screen with no assistant on it.
+        row.app_name = "Finder".into();
+        row.window_title = "Downloads".into();
+        row.clean_text = "report.pdf notes.txt".into();
+        assert!(relabel_activity(&mut row));
+        assert_eq!(row.activity_type, "unknown");
     }
 
     #[tokio::test]

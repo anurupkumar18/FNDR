@@ -616,6 +616,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .map(|result| vec![result.id])
             .collect::<Vec<_>>();
+        // FNDR_QA_SHOW_MISSES=1 names what Search put above the first
+        // relevant memory, with its score, for a query whose first result is
+        // not relevant. Ids only; the corpora are synthetic.
+        if std::env::var("FNDR_QA_SHOW_MISSES").is_ok() && case.kind != NEGATIVE_KIND {
+            let first_relevant = search_ranked
+                .iter()
+                .position(|ids| ids.iter().any(|id| relevant.contains(id)));
+            if first_relevant != Some(0) {
+                let above = first_relevant.unwrap_or(search_ranked.len().min(3));
+                eprintln!(
+                    "MISS {:?} [{}] relevant at {:?}; above it: {:?}",
+                    case.query,
+                    case.kind,
+                    first_relevant.map(|at| at + 1),
+                    search_ranked[..above]
+                        .iter()
+                        .map(|ids| ids[0].clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
 
         let started = Instant::now();
         let answer = runtime.block_on(run_query(
@@ -664,6 +685,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             product_strength.2 += 1;
             product_strength.3 += usize::from(!retrieved.strong_match);
+            if !retrieved.strong_match {
+                let why = retrieved.hits.first().map(|hit| {
+                    format!(
+                        "{}; words found: {}",
+                        hit.why.routes.join("+"),
+                        hit.why.matched_terms.join(" ")
+                    )
+                });
+                eprintln!(
+                    "real query marked weak: {:?} (routes of the top result: {})",
+                    case.query,
+                    why.unwrap_or_default()
+                );
+            }
         }
         let retrieve_ranked = retrieved
             .hits

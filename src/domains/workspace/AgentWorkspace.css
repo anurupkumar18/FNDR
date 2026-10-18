@@ -41,6 +41,15 @@
     background: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 
+.aw-peer-nav {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 7px 11px;
+    background: var(--bg-2);
+    color: var(--fg);
+    cursor: pointer;
+}
+
 .aw-new-chat svg,
 .aw-chat-delete svg,
 .aw-send svg {

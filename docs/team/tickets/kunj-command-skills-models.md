@@ -487,6 +487,8 @@ Usefulness is part of done: every tool and skill ticket ends with a real-task ch
 
 **Evidence.** The row and decision.
 
+**Note for Kunj (2026-10-16).** `main` stopped building after 575d099: `helpers/fndr-foundation/main.swift` used `LanguageModelError`, which the macOS 26 SDK (Swift 6.3, CI's macos-26 image and Anurup's Xcode 26.5) does not have. That branch now sits behind `#if compiler(>=6.4)`; the `GenerationError` mapping below it covers macOS 26 unchanged. When you build with the macOS 27 SDK, check that the guard lets the branch in, and adjust the condition if 27 ships a different compiler version.
+
 ## LM-09 Tune when the model stays loaded
 - assignee: rathodkunj
 - labels: area::local-models, type::chore, prio::p2

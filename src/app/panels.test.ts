@@ -7,6 +7,7 @@ describe("Alpha foreground panel registry", () => {
             "memoryCards",
             "ask",
             "dailySummary",
+            "outputs",
             "stats",
             "todo",
             "wrapped",
@@ -16,6 +17,7 @@ describe("Alpha foreground panel registry", () => {
             "agent",
         ]);
         expect(isMountedPanelKey("memoryCards")).toBe(true);
+        expect(isMountedPanelKey("outputs")).toBe(true);
         expect(isMountedPanelKey("meeting")).toBe(false);
         expect(isMountedPanelKey("knowledgeGraph")).toBe(false);
         expect(isMountedPanelKey("focusMode")).toBe(false);

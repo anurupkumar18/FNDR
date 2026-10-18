@@ -33,7 +33,6 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 ├─────────────────────────────────────────────┤
 │          Python Sidecars (Optional)         │
 │  whisper_gguf_runner.py │ orpheus_tts.py    │
-│  agent_runner.py                            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -55,10 +54,32 @@ FNDR is a **local-first, privacy-focused memory assistant** for macOS. It contin
 ## UI/UX Design Principles
 
 1. **Calm Interface**: Warm, muted palette. No aggressive colors. The app should fade into the background.
-2. **Search-First**: Everything is accessible through the search bar. Power users can use filters.
+2. **Resume and Search First**: Home makes recent work and a memory query available together. Filters belong in Search and Ask.
 3. **Progressive Disclosure**: Show summaries first, details on demand.
 4. **Graph as Insight**: The knowledge graph is not just storage—it's a visualization tool for understanding your digital life patterns.
 5. **Privacy Visible**: Capture status, blocklist controls, and incognito mode are always accessible.
+
+### Home and Resume design contract, October 14, 2026
+
+**Purpose.** A returning person should find prior work, reopen the latest source when one exists, and see an evidenced next step. Home is the entry point for this task. The current October plan measures the time it takes to recover prior work correctly.
+
+**Hierarchy.** Search stays prominent, and the first recent-work card begins on the initial desktop screen. The vertical order is search, recent work, due soon, a due routine, saved sets, then the optional window arrangement control. A section that is loading, empty or unavailable states that plainly and keeps a route to Search or Vault. Cards are readable as soon as they enter view; content is never blurred or disabled to create a scroll effect.
+
+**Type and layout.** Use `--film-font-display` for the greeting and `--film-font-ui` for the input, controls, cards and status. The greeting caps at 48 CSS px, section headings are 19 px, item titles are 16 px, and body, supporting and action text are at least 14 px. The content column caps at 720 px so the eye can move between the query and work cards. The search placeholder stays short and stable across times of day, and Speak keeps a visible word at narrow widths. Use the shared `--s-*` spacing scale for the top offset and card padding. Text actions have at least 40 px of height, visible focus and room to wrap on a narrow window. At 200% zoom, content must reflow without clipping actions or meaning.
+
+**Color and motion.** Foreground cards use semantic `--surface`, `--surface-elevated`, `--text-primary`, `--text-secondary`, `--border` and `--accent` tokens over the wallpaper. The accent marks the primary continuation action and a due routine; status has words as well as color. Verify contrast against the composited surface in light and dark modes. The app's motion-off state and the operating system's Reduce Motion setting remove Home's entry animation; no reveal layer hides work.
+
+**Actions and outcomes.** A thread's Continue action calls `reopen_memory` for its latest cited record without resolving or opening the whole set. Open all is a separate, secondary action through `resolve_work_set` and `open_work_set`; it requires another tap for more than three items. The actions cannot run concurrently. Reopen checks current visibility and action rules, then shows the typed outcome beside Continue, including missing, blocked, no-target and unavailable cases. View latest source remains available to inspect the memory in FNDR when an external place cannot reopen. Suggested steps link to their cited memory. No work opens on page load.
+
+**Ownership and checks.** Rust `resume_work` owns grouping, ordering and current visibility rules. `WorkSetOpener` owns the shared foreground reopen state; Home composes the existing sections and IPC wrappers. This change adds no storage, command or model path. Check the Home component tests and typecheck, inspect the first screen and action states in the running browser UI in both themes, then inspect the native Tauri window with a synthetic profile whose capture is paused. Browser IPC fixtures establish presentation only; real reopen behavior needs a native result from an actual supported source.
+
+### Search and Vault insight display contract, October 14, 2026
+
+**Purpose.** A result should explain the captured work in ordinary language before offering its evidence and actions. Search and Vault use the same insight display rules for grouped and direct cards. Rows with no useful explanation stay absent instead of showing an internal value such as `Goal: organizing_information.`.
+
+**Boundary.** Display shaping may omit a stored machine identifier or older instruction-like text. It does not rewrite the record or its embedding, so the current vector space and source evidence stay intact. The stored fallback that created these values remains a separate migration and retrieval decision.
+
+**Check.** Verify the old-record cases in Rust card-projection tests and inspect an actual Tauri Search result from the paused synthetic profile. The card should retain its title, summary, source and actions when the unusable insight row is omitted.
 
 ### Screen Guide overlay
 
@@ -80,10 +101,7 @@ travel animation with a simple appearance at the target.
 
 ### Color System
 
-- **Background**: Warm white (#FAF9F6) with subtle grain
-- **Text**: Deep brown (#3E2723) for warmth over cold grays
-- **Accent**: Warm orange (#E65100) for primary actions
-- **Graph nodes**: Blue (memories), Purple (entities), Orange (tasks), Green (URLs)
+Product surfaces use semantic light and dark tokens defined in `src/shared/theme/film-paper.css` and the active cinematic palette. Component CSS uses `--surface`, `--text-primary`, `--text-secondary`, `--border`, `--focus-ring` and `--accent` so a palette change preserves hierarchy and contrast. Graph colors carry a label or shape in addition to hue.
 
 ---
 
@@ -128,23 +146,11 @@ Screen Capture → Deduplication → OCR → VLM Analysis → LLM Summary
 ## Agent System
 
 ### Architecture
-- **Hermes runtime**: Primary native agent path surfaced in the FNDR Agent panel.
-- **agent_runner.py**: Legacy Anthropic subprocess fallback for local tool-use experiments.
-- **Communication**: JSON over stdin/stdout from Tauri subprocess where the fallback is used.
+- **Hermes runtime**: the one agent path, surfaced on the Agent page. FNDR runs a pinned Hermes gateway as a child process and talks to it over a local port.
+- The legacy `agent_runner.py` subprocess and its commands were removed on 2026-10-08.
 
 ### Available Tools
-| Tool | Purpose | Risk |
-|---|---|---|
-| `read_file` | Read local files | Low |
-| `write_file` | Create/edit files | Medium |
-| `run_command` | Execute shell commands | High |
-| `web_search` | Search the web | Low |
-| `report_critical_point` | Human-in-the-loop gate | None |
-
-### Safety Model
-- **Critical Points**: Agent must stop and report before purchases, form submissions, emails, or data deletion
-- **Timeout**: Commands have a 30-second timeout
-- **Output Truncation**: All tool outputs are truncated to prevent context overflow
+Hermes started by FNDR gets FNDR's read-only memory tools over MCP and its own `todo` tool, and nothing else: no terminal, file or browser tools. See ADR 024.
 
 ---
 

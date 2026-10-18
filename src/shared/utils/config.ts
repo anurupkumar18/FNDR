@@ -12,6 +12,8 @@ export const STORAGE_KEYS = {
     searchHistory: "fndr-search-history",
     /** Selected top-level shell mode: "immersive" (scroll experience) or "work" (productive). */
     appMode: "fndr_app_mode",
+    /** Which sections Home shows below the search: a JSON object of section id to boolean. */
+    homeSections: "fndr-home-sections",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

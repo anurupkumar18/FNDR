@@ -48,6 +48,7 @@ image = { version = "0.23", default-features = false, features = ["png", "jpeg"]
 
 # Hashing for deduplication
 img_hash = "3.2"
+ring = "0.17"
 
 # UUID
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
@@ -90,8 +91,13 @@ futures-util = "0.3"
 dirs = "6.0.0"
 thiserror = "2.0.18"
 regex = "1.12.3"
+mailparse = "0.16"
 sha2 = "0.10"
-zip = { version = "4.6.1", default-features = false }
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
+rusqlite = "0.37"
+url = "2.5.8"
+quick-xml = "0.39.4"
+tempfile = "3"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
@@ -104,17 +110,18 @@ notify = "6.1.1"
 plist = "1"
 rfd = "0.15"
 objc2-screen-capture-kit = { version = "0.3.2", features = ["SCScreenshotManager", "SCShareableContent"] }
+tauri-plugin-notification = "2"
 
 # macOS specific
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+security-framework = "3"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread", "NSURL"] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "NSScreen", "libc"] }
 block2 = "0.5"
 
 [dev-dependencies]
-tempfile = "3"
 serial_test = "3"
 tower = { version = "0.5", features = ["util"] }
 

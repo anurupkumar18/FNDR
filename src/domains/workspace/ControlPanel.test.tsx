@@ -11,8 +11,13 @@ import {
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
+import { getAppleModelStatus, setAppleModelEnabled } from "@/shared/ipc/onboarding";
 
 const checkUpdateMock = vi.fn();
+
+vi.mock("@/shared/voice/VoiceOutputSection", () => ({
+    VoiceOutputSection: () => <div data-testid="voice-output-section" />,
+}));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
     check: (...args: unknown[]) => checkUpdateMock(...args),
@@ -23,6 +28,10 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ({
+    getActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    setActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    listActionApprovals: vi.fn().mockResolvedValue([]),
+    resolveActionApproval: vi.fn().mockResolvedValue(undefined),
     PRIVACY_ALERTS_EVENT: "privacy://alerts",
     CAPTURE_STATUS_EVENT: "capture://status",
     deleteAllData: vi.fn(),
@@ -77,6 +86,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
     getRetentionDays: vi.fn().mockResolvedValue(7),
+    notchDoSkills: vi.fn().mockResolvedValue([]),
+    notchDoRuns: vi.fn().mockResolvedValue([]),
     pauseCapture: vi.fn(),
     resumeCapture: vi.fn(),
     reclaimMemoryStorage: vi.fn(),
@@ -90,6 +101,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
 }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
+    getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
+    setAppleModelEnabled: vi.fn(),
     deleteAiModel: vi.fn(),
     downloadModel: vi.fn(),
     getModelDownloadStatus: vi.fn().mockResolvedValue({
@@ -128,7 +141,32 @@ afterEach(() => {
     document.getElementById("cinematic-palette-vars")?.remove();
 });
 
+function openTab(name: string) {
+    fireEvent.click(screen.getByRole("tab", { name: new RegExp(`^${name}`, "i") }));
+}
+
 describe("ControlPanel", () => {
+    it("shows the Apple text model switch and saves an opt out", async () => {
+        vi.mocked(getAppleModelStatus).mockResolvedValueOnce({ availability: "available", enabled: true });
+        vi.mocked(setAppleModelEnabled).mockResolvedValueOnce({ availability: "available", enabled: false });
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+
+        const toggle = await screen.findByRole("switch", { name: "Use Apple on-device model" });
+        await waitFor(() => expect(toggle).toBeChecked());
+        fireEvent.click(toggle);
+        await waitFor(() => expect(setAppleModelEnabled).toHaveBeenCalledWith(false));
+        await waitFor(() => expect(toggle).not.toBeChecked());
+    });
+
+    it("names the backend that handled the last text call", () => {
+        render(<ControlPanel status={{ ...statusWithEmbedder("real", false), last_text_backend: "apple_foundation" }} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+        expect(screen.getByText(/Last text backend: Apple on-device model/)).toBeInTheDocument();
+    });
+
     it("ignores an earlier settings load after reopening and saving consent", async () => {
         let finishFirstLoad!: (apps: string[]) => void;
         vi.mocked(getBlocklist).mockImplementationOnce(() => new Promise<string[]>((resolve) => {
@@ -136,6 +174,7 @@ describe("ControlPanel", () => {
         }));
         render(<ControlPanel status={null} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
         await waitFor(() => expect(getAgentNotesEnabled).toHaveBeenCalledTimes(1));
         fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
@@ -159,6 +198,7 @@ describe("ControlPanel", () => {
         }));
         render(<ControlPanel status={null} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
 
         const toggle = screen.getByRole("switch", { name: "Let assistants add notes" });
         expect(toggle).toBeDisabled();
@@ -182,6 +222,7 @@ describe("ControlPanel", () => {
         vi.mocked(setAgentNotesEnabled).mockRejectedValueOnce(new Error("config is read-only"));
         render(<ControlPanel status={null} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
         const toggle = screen.getByRole("switch", { name: "Let assistants add notes" });
         await waitFor(() => expect(toggle).toBeChecked());
 
@@ -197,6 +238,7 @@ describe("ControlPanel", () => {
         vi.mocked(getAgentNotesEnabled).mockRejectedValueOnce(new Error("IPC unavailable"));
         render(<ControlPanel status={null} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
 
         expect(await screen.findByText(/Some settings could not be loaded: assistant notes/))
             .toBeInTheDocument();
@@ -256,12 +298,14 @@ describe("ControlPanel", () => {
 
         render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("Capture");
 
         fireEvent.click(await screen.findByRole("button", { name: /pause capture/i }));
         expect(await screen.findByRole("alert", { name: /capture action failed/i })).toHaveTextContent(
             /capture unavailable/i,
         );
 
+        openTab("Privacy");
         fireEvent.change(screen.getByRole("textbox", { name: /app or website/i }), {
             target: { value: "Private Browser" },
         });
@@ -277,6 +321,7 @@ describe("ControlPanel", () => {
 
         render(<ControlPanel status={status} compact={true} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("Capture");
         fireEvent.click(await screen.findByRole("button", { name: /exit private mode/i }));
 
         await waitFor(() => expect(resumeCapture).toHaveBeenCalledTimes(1));
@@ -318,26 +363,47 @@ describe("ControlPanel", () => {
     it("shows one demo-safe settings sheet without destructive or model-management controls", async () => {
         render(<ControlPanel status={null} compact={true} />);
 
-        const settingsButton = screen.getByRole("button", { name: /open settings/i });
-        fireEvent.click(settingsButton);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
 
         expect(await screen.findByRole("heading", { name: /about/i })).toBeInTheDocument();
+        openTab("Capture");
         expect(screen.getByRole("heading", { name: /^capture$/i })).toBeInTheDocument();
+        openTab("Privacy");
         expect(screen.getByRole("heading", { name: /privacy alerts/i })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: /blocked apps & sites/i })).toBeInTheDocument();
-        expect(screen.getByRole("heading", { name: /^models$/i })).toBeInTheDocument();
         expect(await screen.findByText(/no recent apps or sites need your review/i)).toBeInTheDocument();
+        openTab("AI");
+        expect(screen.getByRole("heading", { name: /^models$/i })).toBeInTheDocument();
         expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
         expect(screen.queryByText(/danger zone/i)).toBeNull();
         expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
         expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
         expect(screen.queryByText(/auto-fill/i)).toBeNull();
-        expect(screen.queryByText(/mcp server/i)).toBeNull();
+        expect(screen.queryByText(/start mcp server|stop mcp server|mcp server status/i)).toBeNull();
     });
 
-    it("groups settings under the seven people-first sections", async () => {
+    it("groups settings into five tabs, each holding its own people-first sections", async () => {
         render(<ControlPanel status={null} compact={true} />);
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const tabs = [
+            ["General", ["Home", "About"]],
+            ["Capture", ["Capture"]],
+            ["Privacy", ["Privacy"]],
+            ["Voice", ["Voice"]],
+            ["AI", ["Agent access", "Models", "Updates"]],
+        ] as const;
+        expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.replace(/\d+$/, ""))).toEqual(
+            tabs.map(([name]) => name),
+        );
+
+        for (const [name, headings] of tabs) {
+            openTab(name);
+            const panel = screen.getByRole("tabpanel");
+            for (const heading of headings) {
+                expect(within(panel).getByRole("heading", { name: heading, level: 3 })).toBeInTheDocument();
+            }
+        }
 
         const sections = [
             ["Capture", "settings-section--capture", /control when fndr may process/i],
@@ -348,13 +414,64 @@ describe("ControlPanel", () => {
             ["Updates", "settings-section--updates", /components ready to use/i],
             ["About", "settings-section--about", /personalize fndr/i],
         ] as const;
-
         for (const [name, className, description] of sections) {
-            const heading = await screen.findByRole("heading", { name, level: 3 });
+            const heading = screen.getAllByRole("heading", { name, level: 3, hidden: true })[0];
             const section = heading.closest("section");
             expect(section).toHaveClass(className);
             expect(within(section as HTMLElement).getByText(description)).toBeInTheDocument();
         }
+    });
+
+    it("shows one tab page at a time and moves with the arrow keys", async () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const general = screen.getByRole("tab", { name: "General" });
+        expect(general).toHaveAttribute("aria-selected", "true");
+        expect(general).toHaveAttribute("tabindex", "0");
+        expect(screen.getByRole("tab", { name: "Capture" })).toHaveAttribute("tabindex", "-1");
+        expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+
+        fireEvent.keyDown(general, { key: "ArrowRight" });
+        const capture = screen.getByRole("tab", { name: "Capture" });
+        expect(capture).toHaveAttribute("aria-selected", "true");
+        expect(capture).toHaveFocus();
+        expect(screen.getByRole("tabpanel")).toHaveAttribute("data-direction", "forward");
+
+        fireEvent.keyDown(capture, { key: "ArrowLeft" });
+        expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByRole("tabpanel")).toHaveAttribute("data-direction", "back");
+
+        fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "End" });
+        expect(screen.getByRole("tab", { name: "AI" })).toHaveAttribute("aria-selected", "true");
+        fireEvent.keyDown(screen.getByRole("tab", { name: "AI" }), { key: "ArrowRight" });
+        expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("lets the person choose which sections Home shows, from the General tab", () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const switches = ["Routine offers", "Due soon", "Pick up where you left off", "Your sets"];
+        for (const name of switches) {
+            expect(screen.getByRole("switch", { name })).toBeChecked();
+        }
+        fireEvent.click(screen.getByRole("switch", { name: "Due soon" }));
+        expect(screen.getByRole("switch", { name: "Due soon" })).not.toBeChecked();
+        expect(JSON.parse(localStorage.getItem("fndr-home-sections") ?? "{}")).toMatchObject({ deadlines: false });
+    });
+
+    it("keeps a half-typed field when the person visits another tab", async () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        openTab("Privacy");
+        fireEvent.change(screen.getByRole("textbox", { name: /app or website/i }), {
+            target: { value: "bank.example" },
+        });
+        openTab("Capture");
+        openTab("Privacy");
+        expect(screen.getByRole("textbox", { name: /app or website/i })).toHaveValue("bank.example");
     });
 
     it("shows a read-only warning when capture cannot use its embedding model", async () => {
@@ -378,6 +495,7 @@ describe("ControlPanel", () => {
         render(<ControlPanel status={status} compact={true} />);
 
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("Capture");
 
         const trace = await screen.findByLabelText("Capture pipeline activity");
         expect(trace).toHaveTextContent("Capture enabled for the next sample");
@@ -405,6 +523,7 @@ describe("ControlPanel", () => {
         render(<ControlPanel status={statusWithEmbedder("real", false)} compact={true} />);
 
         fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
 
         expect(await screen.findByRole("heading", { name: /^models$/i })).toBeInTheDocument();
         expect(screen.queryByText(/capture is paused until the embedding model/i)).toBeNull();

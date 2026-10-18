@@ -1,5 +1,16 @@
-use crate::inference::model_config::{EmbeddingContractVersion, TextEmbeddingContract};
+use crate::inference::model_config::{
+    embedding_v5_contract, EmbeddingContractVersion, TextEmbeddingContract,
+};
 
+// The BGE v1.5 model card gives "Represent this sentence for searching
+// relevant passages: " for queries and no prefix for documents. These two
+// differ from it and are kept as they are (VS-88, decided 2026-10-08): no
+// profile holds BGE rows, the model is not installed, and ADR 019 has not
+// chosen the chunk model. Whoever changes them must clear the v5 memory and
+// chunk tables first, because the reindex skips memories that already have
+// rows and old and new vectors must never be searched together. The test
+// `bge_document_and_query_prefixes_are_distinct_and_stable` fails on a change
+// to make that step hard to miss.
 pub const BGE_DOCUMENT_PREFIX: &str = "Represent this sentence: ";
 pub const BGE_QUERY_PREFIX: &str = "Represent this question for searching relevant passages: ";
 /// EmbeddingGemma's retrieval prompts, from its model card (VS-47).
@@ -28,12 +39,14 @@ pub fn document_text_for(contract: TextEmbeddingContract, text: &str) -> String 
     }
 }
 
+/// A document for the BGE chunk index. One source with `document_text_for`.
 pub fn prefix_document_for_index(text: &str) -> String {
-    prefix_once(text, BGE_DOCUMENT_PREFIX)
+    document_text_for(embedding_v5_contract(), text)
 }
 
+/// A query for the BGE chunk route. One source with `query_text_for`.
 pub fn prefix_query_for_search(text: &str) -> String {
-    prefix_once(text, BGE_QUERY_PREFIX)
+    query_text_for(embedding_v5_contract(), text)
 }
 
 fn prefix_once(text: &str, prefix: &str) -> String {

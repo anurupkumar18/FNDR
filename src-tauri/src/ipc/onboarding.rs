@@ -60,6 +60,8 @@ pub enum OnboardingStep {
     Permissions,
     /// Model download / selection
     ModelDownload,
+    /// Optional local imports and guided retrieval
+    BringPast,
     /// Indexing started, showing live counter
     IndexingStarted,
     /// Onboarding complete — show main app
@@ -751,6 +753,28 @@ pub async fn get_model_download_status() -> Result<ModelDownloadStatus, String> 
 }
 
 #[tauri::command]
+pub fn get_apple_model_status(
+    state: State<'_, Arc<AppState>>,
+) -> crate::inference::foundation::AppleModelStatus {
+    crate::inference::foundation::status(state.app_data_dir.as_path())
+}
+
+#[tauri::command]
+pub async fn set_apple_model_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<crate::inference::foundation::AppleModelStatus, String> {
+    crate::inference::foundation::write_setting(state.app_data_dir.as_path(), enabled)
+        .map_err(|error| error.to_string())?;
+    let config = state.config.read().clone();
+    let loaded = load_ai_engines(state.app_data_dir.as_path(), &config).await;
+    state.replace_ai_engines(loaded.inference);
+    Ok(crate::inference::foundation::status(
+        state.app_data_dir.as_path(),
+    ))
+}
+
+#[tauri::command]
 pub async fn refresh_ai_models(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -758,19 +782,19 @@ pub async fn refresh_ai_models(
     let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let config = state.inner().config.read().clone();
     let preferred_model_id = models::inference_preferred_model_id(app_data_dir.as_path(), &config);
-    let ai_model_available =
-        models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
-            .is_some();
     let loaded_ai = load_ai_engines(app_data_dir.as_path(), &config).await;
+    let ai_model_available = loaded_ai.inference.is_some()
+        || models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
+            .is_some();
 
     let loaded_model_id = loaded_ai
         .inference
         .as_ref()
         .map(|engine| engine.model_id().to_string());
-    let loaded_model_path = loaded_ai
-        .inference
-        .as_ref()
-        .map(|engine| engine.model_path().display().to_string());
+    let loaded_model_path = loaded_ai.inference.as_ref().and_then(|engine| {
+        (!engine.model_path().as_os_str().is_empty())
+            .then(|| engine.model_path().display().to_string())
+    });
     let ai_model_loaded = loaded_ai.inference.is_some();
     let vlm_loaded = crate::inference::pixel_vlm_loaded();
 

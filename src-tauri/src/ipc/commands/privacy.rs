@@ -3,6 +3,7 @@
 use super::common::push_unique_case_insensitive;
 use crate::privacy::Blocklist;
 use crate::AppState;
+use crate::{graph::GraphStore, storage::Store};
 use std::sync::Arc;
 use tauri::State;
 
@@ -83,12 +84,20 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
         .delete_all()
         .await
         .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    // 2. Clear both graph table pairs and prune old Lance versions.
+    state
+        .inner()
+        .graph
+        .clear_all()
+        .await
+        .map_err(|error| error.to_string())?;
+    state
+        .inner()
+        .store
+        .compact_and_prune_erased_data()
+        .await
+        .map_err(|error| error.to_string())?;
     state.invalidate_memory_derived_caches();
-
-    // 2. Clear knowledge graph
-    if let Err(e) = state.inner().graph.clear_all().await {
-        tracing::warn!("Failed to clear graph store during delete_all: {}", e);
-    }
 
     // 3. Delete persisted capture artifacts
     for artifact_dir in ["frames", "screenshots", "meetings"] {
@@ -102,6 +111,131 @@ pub async fn delete_all_data(state: State<'_, Arc<AppState>>) -> Result<(), Stri
 
     tracing::info!("All FNDR data deleted");
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct EraseRangeReport {
+    pub matched: usize,
+    pub deleted: usize,
+}
+
+/// Preview or erase memories with timestamps in [start_ms, end_ms).
+pub(crate) async fn erase_memories_in_range(
+    store: &Arc<Store>,
+    graph: &GraphStore,
+    start_ms: i64,
+    end_ms: i64,
+    dry_run: bool,
+    tombstones: Option<&crate::storage::StateStore>,
+) -> Result<EraseRangeReport, String> {
+    if start_ms >= end_ms {
+        return Err("The end of the range must be after its start.".to_string());
+    }
+    let mut records = store
+        .get_memories_in_range(start_ms, end_ms)
+        .await
+        .map_err(|error| error.to_string())?;
+    records.retain(|record| record.timestamp < end_ms);
+    let matched = records.len();
+    if dry_run {
+        return Ok(EraseRangeReport {
+            matched,
+            deleted: 0,
+        });
+    }
+    if let Some(state_store) = tombstones {
+        crate::import::tombstone_records(state_store, &records)?;
+    }
+    let deleted = crate::privacy::erase::erase_memories(store, graph, &records).await?;
+    Ok(EraseRangeReport { matched, deleted })
+}
+
+#[tauri::command]
+pub async fn delete_memories_in_range(
+    state: State<'_, Arc<AppState>>,
+    start_ms: i64,
+    end_ms: i64,
+    dry_run: bool,
+) -> Result<EraseRangeReport, String> {
+    let report = erase_memories_in_range(
+        &state.store,
+        &state.graph,
+        start_ms,
+        end_ms,
+        dry_run,
+        Some(&*state.state_store),
+    )
+    .await?;
+    if report.deleted > 0 {
+        state.invalidate_memory_derived_caches();
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn export_memories_archive(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::privacy::export::ExportReport, String> {
+    let directory = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose where to save the FNDR archive")
+            .pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "No folder selected".to_string())?;
+    let archive_dir = directory.join(format!(
+        "FNDR export {} {}",
+        chrono::Local::now().format("%Y-%m-%d %H-%M-%S"),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let blocklist = state.config.read().blocklist.clone();
+    crate::privacy::export::export_archive(
+        &state.store,
+        &blocklist,
+        &crate::privacy::vault::KeychainKey::default(),
+        &archive_dir,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn import_memories_archive(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose an encrypted FNDR JSONL archive")
+            .add_filter("FNDR archives", &["fndrenc"])
+            .pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "No archive selected".to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    let restored = crate::privacy::export::import_archive(
+        &state.store,
+        &blocklist,
+        &crate::privacy::vault::KeychainKey::default(),
+        &path,
+    )
+    .await?;
+    if restored > 0 {
+        state.invalidate_memory_derived_caches();
+    }
+    Ok(restored)
+}
+
+#[tauri::command]
+pub async fn get_encryption_statement() -> Result<crate::privacy::vault::EncryptionStatement, String>
+{
+    let filevault = tokio::task::spawn_blocking(crate::privacy::vault::file_vault_status)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(crate::privacy::vault::encryption_statement(filevault))
+}
+
+#[tauri::command]
+pub fn get_privacy_exclusions() -> Vec<crate::privacy::exclusions::ExclusionCategory> {
+    crate::privacy::exclusions::categories()
 }
 
 // ── Proactive Privacy Shield Commands ───────────────────────────────────────────
@@ -281,5 +415,238 @@ mod agent_notes_settings_tests {
             assert_eq!(result.unwrap_err(), "config is read-only");
             assert_eq!(config.read().agent_notes_enabled, previous);
         }
+    }
+}
+
+#[cfg(test)]
+mod erasure_tests {
+    use super::*;
+    use crate::graph::GraphStore;
+    use crate::graph::{graph_store, schema};
+    use crate::storage::{MemoryChunkRecord, MemoryRecord, Store, Task, TaskType};
+
+    fn memory(id: &str, timestamp: i64) -> MemoryRecord {
+        MemoryRecord {
+            id: id.to_string(),
+            timestamp,
+            app_name: "Synthetic Notes".to_string(),
+            window_title: "Planning".to_string(),
+            session_id: "synthetic-session".to_string(),
+            day_bucket: "2026-10-15".to_string(),
+            clean_text: "Synthetic planning note".to_string(),
+            snippet: "Synthetic planning note".to_string(),
+            embedding: vec![0.01; crate::embedding::EMBEDDING_DIM],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn range_preview_counts_only_matching_rows_without_deleting_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+                .await
+                .unwrap(),
+        );
+        let graph = GraphStore::new(store.clone());
+        store
+            .add_batch_preserving_ids(&[
+                memory("before", 999),
+                memory("inside", 1_000),
+                memory("after", 2_000),
+            ])
+            .await
+            .unwrap();
+
+        let preview = erase_memories_in_range(&store, &graph, 1_000, 2_000, true, None)
+            .await
+            .unwrap();
+
+        assert_eq!(preview.matched, 1);
+        assert_eq!(preview.deleted, 0);
+        assert_eq!(store.list_all_memories().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn range_erase_removes_v4_v5_chunks_graph_and_task_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+                .await
+                .unwrap(),
+        );
+        let graph = GraphStore::new(store.clone());
+        let inside = memory("inside", 1_000);
+        let outside = memory("outside", 2_000);
+        store
+            .add_batch_preserving_ids(&[inside.clone(), outside.clone()])
+            .await
+            .unwrap();
+        let mut v5 = inside.clone();
+        for vector in [
+            &mut v5.embedding,
+            &mut v5.snippet_embedding,
+            &mut v5.support_embedding,
+        ] {
+            *vector = vec![0.01; crate::inference::model_config::BGE_V5_DIMENSIONS];
+        }
+        store.add_v5_batch_preserving_ids(&[v5]).await.unwrap();
+        store
+            .upsert_memory_chunks(&[MemoryChunkRecord {
+                id: "chunk-inside".to_string(),
+                memory_id: "inside".to_string(),
+                chunk_index: 0,
+                line_kind: "plain".to_string(),
+                text: "Synthetic planning note".to_string(),
+                embedding: vec![0.01; crate::inference::model_config::BGE_V5_DIMENSIONS],
+                created_at: 1_000,
+                app_name: "Synthetic Notes".to_string(),
+                window_title: "Planning".to_string(),
+                day_bucket: "2026-10-15".to_string(),
+                content_hash: "synthetic-chunk".to_string(),
+            }])
+            .await
+            .unwrap();
+        graph.ingest_memory(&inside).await.unwrap();
+        graph.ingest_memory(&outside).await.unwrap();
+        let insight = graph_store::GraphStore::new(store.clone());
+        let now = chrono::Utc::now();
+        let only_inside = schema::GraphNode {
+            id: uuid::Uuid::new_v4(),
+            node_type: schema::GraphNodeType::Concept,
+            label: "Only inside".to_string(),
+            confidence: 0.9,
+            source_memory_ids: vec!["inside".to_string()],
+            embedding: None,
+            created_at: now,
+            updated_at: now,
+            stale: false,
+            metadata: serde_json::json!({}),
+        };
+        let mut shared = only_inside.clone();
+        shared.id = uuid::Uuid::new_v4();
+        shared.label = "Shared concept".to_string();
+        shared.source_memory_ids.push("outside".to_string());
+        insight.upsert_node(&only_inside).await.unwrap();
+        insight.upsert_node(&shared).await.unwrap();
+        insight
+            .upsert_edge(&schema::GraphEdge {
+                id: uuid::Uuid::new_v4(),
+                source_id: only_inside.id,
+                target_id: shared.id,
+                edge_type: schema::GraphEdgeType::MentionedIn,
+                confidence: 0.8,
+                conflict_flag: false,
+                created_at: now,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_tasks(&[
+                Task {
+                    id: "grounded".to_string(),
+                    title: "Follow up".to_string(),
+                    description: String::new(),
+                    source_app: "Synthetic Notes".to_string(),
+                    source_memory_id: Some("inside".to_string()),
+                    created_at: 1_000,
+                    due_date: None,
+                    is_completed: false,
+                    is_dismissed: false,
+                    task_type: TaskType::Todo,
+                    linked_urls: Vec::new(),
+                    linked_memory_ids: Vec::new(),
+                },
+                Task {
+                    id: "linked".to_string(),
+                    title: "Review".to_string(),
+                    description: String::new(),
+                    source_app: "Synthetic Notes".to_string(),
+                    source_memory_id: Some("outside".to_string()),
+                    created_at: 2_000,
+                    due_date: None,
+                    is_completed: false,
+                    is_dismissed: false,
+                    task_type: TaskType::Todo,
+                    linked_urls: Vec::new(),
+                    linked_memory_ids: vec!["inside".to_string()],
+                },
+            ])
+            .await
+            .unwrap();
+
+        let report = erase_memories_in_range(&store, &graph, 1_000, 2_000, false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(report.matched, 1);
+        assert_eq!(report.deleted, 1);
+        assert!(store.get_memory_by_id("inside").await.unwrap().is_none());
+        assert!(store.get_memory_by_id("outside").await.unwrap().is_some());
+        assert!(store
+            .list_chunks_for_memory("inside")
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .get_v5_search_results_by_ids(&["inside".to_string()], None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        let nodes = store.get_all_nodes().await.unwrap();
+        assert!(!nodes.iter().any(|node| node.id == "memory:inside"));
+        assert!(nodes.iter().any(|node| node.id == "memory:outside"));
+        let insight_nodes = insight.all_nodes().await.unwrap();
+        assert!(!insight_nodes.iter().any(|node| node.id == only_inside.id));
+        assert_eq!(
+            insight_nodes
+                .iter()
+                .find(|node| node.id == shared.id)
+                .unwrap()
+                .source_memory_ids,
+            vec!["outside"]
+        );
+        assert!(insight.all_edges().await.unwrap().is_empty());
+        let tasks = store.list_tasks().await.unwrap();
+        assert!(
+            tasks
+                .iter()
+                .find(|task| task.id == "grounded")
+                .unwrap()
+                .is_dismissed
+        );
+        assert!(tasks
+            .iter()
+            .find(|task| task.id == "linked")
+            .unwrap()
+            .linked_memory_ids
+            .is_empty());
+        assert_eq!(
+            store.memories_table_scale_stats().await.unwrap().versions,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_all_graph_clears_nodes_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+                .await
+                .unwrap(),
+        );
+        let graph = GraphStore::new(store.clone());
+        graph.ingest_memory(&memory("inside", 1_000)).await.unwrap();
+        assert!(!store.get_all_nodes().await.unwrap().is_empty());
+        assert!(!store.get_all_edges().await.unwrap().is_empty());
+
+        graph.clear_all().await.unwrap();
+
+        assert!(store.get_all_nodes().await.unwrap().is_empty());
+        assert!(store.get_all_edges().await.unwrap().is_empty());
     }
 }

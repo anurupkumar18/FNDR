@@ -373,6 +373,8 @@ Measurements from 2026-09-23 on the owner's profile: 29 memories in 5 active day
 1. Extend the scale test to 10,000 memories and 60,000 chunks with synthetic text.
 2. Measure `retrieve` p50 and p95; add a vector index only if flat search exceeds the budget.
 
+**Result, 2026-10-09.** Run on the owner's M1 at 10,000 memories and 60,000 chunks: `retrieve` p95 481 ms and Search p95 488 ms with production route budgets, in a debug build with the machine under load. The flat chunk scan is 198 ms, so no vector index is added. The BGE query embedding is not in this number: the model is not installed and the chunk route is off in the product. `docs/evidence/W04/vs-20-scale-m1.md`.
+
 **Done when.** p95 is 500 ms or lower on the M1.
 
 **Evidence.** Scale test output.

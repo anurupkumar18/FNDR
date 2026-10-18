@@ -498,7 +498,7 @@ export function SearchBar({
 
         if (normalized.includes("open graph") || normalized.includes("open knowledge graph")) {
             onSetMemoryCardsPanelOpen(true);
-            setVoiceStatus("Opened Memory Vault. Connected context is available inside each memory.");
+            setVoiceStatus("Opened Memory Vault.");
             return;
         }
 

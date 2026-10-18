@@ -474,7 +474,7 @@
 
 .vault-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px;
+    grid-template-columns: minmax(0, 1fr) 148px;
     align-items: center;
     gap: 8px;
 }
@@ -985,4 +985,40 @@
     border-bottom: 0;
     padding-top: 6px;
     padding-bottom: 6px;
+}
+
+/* The most detailed earlier moment of a session, under the row's own line. */
+.vault-row-earlier {
+    grid-column: 1 / -1;
+    margin: -4px 0 6px;
+    padding: 0 16px 0 18px;
+    color: var(--text-secondary);
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.vault-row-earlier-label {
+    margin-right: 6px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* A session in another app that shares a file or a title with this one. */
+.vault-row-link {
+    margin-right: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-primary);
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.vault-row-link:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
 }

@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Product base: this repo (FNDR v1). FNDR v2 (`~/FNDR-2.0`) is a read-only knowledge source. Owner decision 2026-09-21.
-- Strictly local models: no cloud LLM at runtime, not even opt-in.
+- Local models by default. Capture, OCR, storage, embeddings and every background task never leave the Mac. A cloud model is used only on a turn the person starts, on a surface where they chose that provider, and every request is logged (ADR-018, accepted 2026-10-08; ADR 024).
 - Authorship: a human commits and pushes under their own name. AI agents (Claude Code, Codex) write and verify changes and leave them uncommitted; no commit, PR, or ticket carries an AI co-author trailer.
 - Automations are FNDR-internal scheduled jobs only. No external webhooks or integrations.
 - Mobile companion (`apps/ios/`, `src-tauri/src/companion/`) is parked until after Final. (Assumption D-2, confirm.)

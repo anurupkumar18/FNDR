@@ -3,10 +3,24 @@
 A release is one tag push. `.github/workflows/release.yml` typechecks and tests, builds an Apple Silicon DMG, publishes a GitHub Release with the updater manifest, verifies the signature, and uploads `FNDR-latest.dmg` as a stable public-download alias alongside the versioned DMG.
 
 ```bash
-# bump "version" in src-tauri/tauri.conf.json and package.json first
+# first set the same version in package.json, package-lock.json,
+# src-tauri/tauri.conf.json, src-tauri/Cargo.toml and src-tauri/Cargo.lock
 git tag v0.3.1
-git push origin v0.3.1
+git push gh v0.3.1
 ```
+
+The tag must name that version: `v0.3.1` for version `0.3.1`. The workflow stops before building when it does not, because the updater compares the installed version with the one inside the build, and `npm test` fails when the five files disagree (`src/dev/releaseDrift.test.ts`).
+
+## Check the release build without publishing
+
+```bash
+gh workflow run release.yml --ref main
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+A run by hand takes the same steps as a tag push, verifies the signature, and keeps the DMG as a workflow artifact named `FNDR-dmg-unpublished` for three days. It creates no release and uploads nothing to one. Run it before tagging whenever a native helper, a bundled resource or the workflow itself changed.
+
+The build job uses the macOS image the Rust tests use in `test.yml`. The speech helper needs the macOS 26 SDK to compile, although the app still runs on macOS 13. On 2026-10-13 the `v0.3.5` tag failed to build on the older image, and until a tag builds, the updater manifest and the site's plain download link return 404 (the site's script can still find a hand-uploaded DMG through the GitHub API). Do not repair a failed release by uploading files by hand: the site needs `FNDR-latest.dmg` and the updater needs `latest.json` with its signature, and only the workflow makes both.
 
 Installed copies pick the release up from Settings → Updates.
 
@@ -17,6 +31,23 @@ https://github.com/anurupkumar18/FNDR/releases/latest/download/FNDR-latest.dmg
 ```
 
 GitHub's `latest` redirect follows the newest full release, so neither the site nor its workflow contains a product version.
+
+## Blocked on 2026-10-13: the updater key password secret
+
+The first run by hand ([run 38473340644](https://github.com/anurupkumar18/FNDR/actions/runs/38473340644)) compiled the app on `macos-26` in 45 minutes, bundled `FNDR.app` and `FNDR_0.3.0_aarch64.dmg`, and signed them ad hoc. It then stopped while signing the updater archive:
+
+```text
+failed to decode secret key: incorrect updater private key password: Wrong password for that key
+```
+
+The repository secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` does not open the key in `TAURI_SIGNING_PRIVATE_KEY`. No tag can publish until the owner sets both from the backed-up key, then runs the workflow by hand again:
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/fndr-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+```
+
+The key must be the one whose public half is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`; a new key strands installed copies. The signature check and the artifact upload after this step have not run yet.
 
 ## One-time: enable the public website
 

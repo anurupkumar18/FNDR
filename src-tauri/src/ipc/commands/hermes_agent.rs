@@ -1,9 +1,7 @@
-//! Hermes bridge, gateway, and agent task Tauri commands.
+//! Hermes bridge, gateway, and chat Tauri commands.
 
 use crate::http_util::{llm_http_client, local_service_client, post_json_response};
-use crate::search::MemoryCard;
 use crate::AppState;
-use chrono::Timelike;
 use parking_lot::Mutex as AgentMutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,31 +11,6 @@ use std::sync::{Arc, OnceLock as AgentOnceLock};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 use tokio::time::{Duration, Instant};
-
-use super::common::{strip_internal_fndr_results, truncate_chars};
-use super::search::{memory_card_from_result, refine_memory_card_titles};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentStatus {
-    pub is_running: bool,
-    pub task_title: Option<String>,
-    pub last_message: Option<String>,
-    pub status: String, // "idle" | "running" | "completed" | "error"
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesAppContext {
-    pub app_name: String,
-    pub memory_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesMemoryDigest {
-    pub title: String,
-    pub app_name: String,
-    pub summary: String,
-    pub timestamp: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HermesBridgeStatus {
@@ -72,12 +45,9 @@ pub struct HermesBridgeStatus {
     pub codex_auth_path: String,
     pub profile_name: Option<String>,
     pub focus_task: Option<String>,
-    pub recent_memory_count: u32,
     pub open_task_count: u32,
     /// True when Ollama is reachable and configured — chat works without Hermes CLI.
     pub direct_ollama_ready: bool,
-    pub top_apps: Vec<HermesAppContext>,
-    pub recent_memories: Vec<HermesMemoryDigest>,
     pub last_error: Option<String>,
     pub install_command: String,
     /// `stopped`, `starting`, `running`, `restarting` or `crashed`.
@@ -149,24 +119,6 @@ fn tools_used_in(response: &serde_json::Value) -> Vec<String> {
         }
     }
     used
-}
-
-static AGENT_PROCESS: AgentOnceLock<AgentMutex<Option<Child>>> = AgentOnceLock::new();
-static AGENT_STATUS: AgentOnceLock<AgentMutex<AgentStatus>> = AgentOnceLock::new();
-
-fn get_agent_process() -> &'static AgentMutex<Option<Child>> {
-    AGENT_PROCESS.get_or_init(|| AgentMutex::new(None))
-}
-
-fn get_agent_status_store() -> &'static AgentMutex<AgentStatus> {
-    AGENT_STATUS.get_or_init(|| {
-        AgentMutex::new(AgentStatus {
-            is_running: false,
-            task_title: None,
-            last_message: None,
-            status: "idle".to_string(),
-        })
-    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,17 +381,32 @@ fn detect_ollama_executable() -> Option<PathBuf> {
 
 /// Codex binaries bundled inside OpenAI's desktop apps. They ship a working
 /// native build even when a global npm install has lost its platform binary.
-const BUNDLED_CODEX_CANDIDATES: &[&str] = &[
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
-];
+const CODEX_APP_ROOTS: &[&str] = &["/Applications/ChatGPT.app", "/Applications/Codex.app"];
+
+/// Where those apps keep their Codex: `Resources/codex-cli/bin/codex` since
+/// the ChatGPT 26.1002 update, `Resources/codex` before it.
+fn bundled_codex_paths(app_root: &Path) -> [PathBuf; 2] {
+    let resources = app_root.join("Contents/Resources");
+    [
+        resources.join("codex-cli/bin/codex"),
+        resources.join("codex"),
+    ]
+}
 
 /// First Codex that actually runs; otherwise the first one found, so callers
 /// can report a broken install instead of a missing one.
 pub(crate) fn detect_codex_executable() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = existing_executable_path("codex").into_iter().collect();
     candidates.extend(common_executable_candidates("codex"));
-    candidates.extend(BUNDLED_CODEX_CANDIDATES.iter().map(PathBuf::from));
+    candidates.extend(
+        CODEX_APP_ROOTS
+            .iter()
+            .flat_map(|root| bundled_codex_paths(Path::new(root))),
+    );
+    // The official installer (chatgpt.com/codex/install.sh) links here.
+    if let Some(home) = user_home_dir() {
+        candidates.push(home.join(".codex/packages/standalone/current/bin/codex"));
+    }
     candidates.retain(|candidate| candidate.is_file());
     candidates.dedup();
 
@@ -504,7 +471,7 @@ fn configure_uv_command(command: &mut Command, state: &AppState) -> Result<(), S
     Ok(())
 }
 
-fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
+pub(crate) fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
     if let Some(path) = detect_uv_executable(state) {
         return Ok(path);
     }
@@ -746,6 +713,13 @@ fn read_hermes_setup_record(state: &AppState) -> Option<HermesSetupRecord> {
     serde_json::from_str::<HermesSetupRecord>(&raw).ok()
 }
 
+/// Current consent for the embedded Hermes MCP grant, rechecked on each request.
+pub(crate) fn hermes_memory_search_enabled(state: &AppState) -> bool {
+    read_hermes_setup_record(state)
+        .as_ref()
+        .is_some_and(sends_related_memories)
+}
+
 /// A YAML double-quoted scalar. JSON string syntax is valid YAML, so this
 /// quotes and escapes model names and URLs safely. (This used to go through
 /// `toml::to_string`, which rejects a bare string with "unsupported rust type"
@@ -933,53 +907,8 @@ fn file_modified_at_ms(path: &PathBuf) -> Option<i64> {
 async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStatus, String> {
     let context_path = hermes_project_context_path(state);
     let home_dir = hermes_home_dir(state);
-    // Memory and task counts are decoration; a vault that can't be read
-    // (locked, migrating) must not hide Hermes setup.
-    let recent_results = state
-        .store
-        .list_recent_results(18, None)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "hermes:status_recent_memories_unavailable");
-            Vec::new()
-        });
-    let mut recent_memories: Vec<MemoryCard> = strip_internal_fndr_results(recent_results)
-        .into_iter()
-        .map(memory_card_from_result)
-        .collect();
-    refine_memory_card_titles(&mut recent_memories);
-
-    let mut app_counts: HashMap<String, usize> = HashMap::new();
-    for memory in &recent_memories {
-        *app_counts.entry(memory.app_name.clone()).or_insert(0) += 1;
-    }
-
-    let mut top_apps: Vec<HermesAppContext> = app_counts
-        .into_iter()
-        .map(|(app_name, memory_count)| HermesAppContext {
-            app_name,
-            memory_count: memory_count as u32,
-        })
-        .collect();
-    top_apps.sort_by(|left, right| {
-        right
-            .memory_count
-            .cmp(&left.memory_count)
-            .then_with(|| left.app_name.cmp(&right.app_name))
-    });
-    top_apps.truncate(6);
-
-    let recent_memories = recent_memories
-        .into_iter()
-        .take(6)
-        .map(|memory| HermesMemoryDigest {
-            title: memory.title,
-            app_name: memory.app_name,
-            summary: truncate_chars(&memory.summary, 180),
-            timestamp: memory.timestamp,
-        })
-        .collect::<Vec<_>>();
-
+    // The task count is decoration; a vault that can't be read (locked,
+    // migrating) must not hide Hermes setup.
     let open_task_count = state
         .store
         .list_tasks()
@@ -1057,10 +986,7 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
         codex_auth_path: codex_auth_path.display().to_string(),
         profile_name: read_hermes_profile_name(state),
         focus_task: state.focus_task.read().clone(),
-        recent_memory_count: recent_memories.len() as u32,
         open_task_count,
-        top_apps,
-        recent_memories,
         last_error,
         install_command: "FNDR installs a pinned Hermes into its own app data.".to_string(),
         gateway_state,
@@ -1248,10 +1174,9 @@ fn write_hermes_mcp_config(state: &AppState) {
     let mcp = crate::mcp::status();
     // Searching memory is another way for memories to reach the provider.
     if sends_related_memories(&record) && mcp.running && !mcp.endpoint.is_empty() {
-        config.push_str(&super::hermes_codex::hermes_mcp_yaml(
-            &mcp.endpoint,
-            &mcp.token,
-        ));
+        if let Some(token) = crate::mcp::hermes_read_token() {
+            config.push_str(&super::hermes_codex::hermes_mcp_yaml(&mcp.endpoint, &token));
+        }
     }
     if let Err(error) = write_private(&hermes_config_path(state), &config) {
         tracing::warn!(%error, "hermes:mcp_config_write_failed");
@@ -1491,13 +1416,6 @@ pub async fn get_hermes_bridge_status(
 }
 
 #[tauri::command]
-pub async fn sync_hermes_bridge_context(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    sync_hermes_bridge_files(state.inner()).await
-}
-
-#[tauri::command]
 pub async fn install_hermes_bridge(
     state: State<'_, Arc<AppState>>,
 ) -> Result<HermesBridgeStatus, String> {
@@ -1569,93 +1487,6 @@ pub async fn save_hermes_setup(
     stop_hermes_gateway_process();
     *get_hermes_gateway_error_store().lock() = None;
     sync_hermes_bridge_files(state.inner()).await
-}
-
-#[tauri::command]
-pub async fn start_hermes_gateway(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    ensure_hermes_gateway_ready(state.inner(), 12_000).await
-}
-
-#[tauri::command]
-pub async fn stop_hermes_gateway(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    stop_hermes_gateway_process();
-    *get_hermes_gateway_error_store().lock() = None;
-    build_hermes_bridge_status(state.inner()).await
-}
-
-/// Direct chat with an Ollama model — no Hermes CLI required.
-/// Works with any OpenAI-compatible base URL (Ollama's /v1 endpoint).
-#[tauri::command]
-pub async fn send_direct_chat(
-    state: State<'_, Arc<AppState>>,
-    messages: Vec<serde_json::Value>,
-    input: String,
-) -> Result<String, String> {
-    let _ = sync_hermes_bridge_files(state.inner()).await?;
-    let setup = read_hermes_setup_record(state.inner())
-        .ok_or_else(|| "Configure a provider in FNDR's Agent page first.".to_string())?;
-
-    let base_url = if setup.provider_kind == "ollama" {
-        setup
-            .base_url
-            .clone()
-            .filter(|u| !u.trim().is_empty())
-            .unwrap_or_else(|| OLLAMA_BASE_URL.to_string())
-    } else {
-        return Err(
-            "Direct chat is only available for Ollama. Use the Hermes gateway for other providers."
-                .to_string(),
-        );
-    };
-
-    // Memories retrieved for this message, never a stored snapshot.
-    let snippets = crate::operator::memory::snippets(state.inner(), input.trim()).await;
-    let system_content = format!(
-        "You are a helpful assistant embedded in FNDR, a privacy-first local memory app.{}",
-        memory_context(&snippets)
-    );
-
-    let mut all_messages: Vec<serde_json::Value> =
-        vec![serde_json::json!({ "role": "system", "content": system_content })];
-    all_messages.extend(messages);
-    all_messages.push(serde_json::json!({ "role": "user", "content": input.trim() }));
-
-    let request = serde_json::json!({
-        "model": setup.model_name,
-        "messages": all_messages,
-        "stream": false,
-    });
-
-    let client = llm_http_client().map_err(|e| format!("HTTP client: {e}"))?;
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let (status_code, json) = post_json_response(&client, &url, &request, None)
-        .await
-        .map_err(|e| format!("Could not reach Ollama at {base_url}: {e}"))?;
-
-    if !status_code.is_success() {
-        return Err(json
-            .get("error")
-            .and_then(|v| v.get("message").or(Some(v)))
-            .and_then(|v| v.as_str())
-            .unwrap_or("Ollama request failed.")
-            .to_string());
-    }
-
-    let content = json
-        .get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|msg| msg.get("content"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(content)
 }
 
 /// The memory block for one chat message: the evidence preamble and up to
@@ -1934,256 +1765,21 @@ async fn deliver_hermes_message(
     })
 }
 
-/// Start the agent to execute a task
-#[tauri::command]
-pub async fn start_agent_task(
-    task_title: String,
-    context_urls: Option<Vec<String>>,
-    context_notes: Option<Vec<String>>,
-) -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-
-    // Kill existing process if any
-    if let Some(ref mut child) = *process_guard {
-        let _ = child.kill();
-    }
-
-    // Find the agent runner script
-    let sidecar_path = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("No parent dir")?
-        .join("../Resources/sidecars/agent_runner.py");
-
-    let script_path = if sidecar_path.exists() {
-        sidecar_path
-    } else {
-        // Fallback for development
-        std::path::PathBuf::from("src-tauri/sidecars/agent_runner.py")
-    };
-
-    // Find the python executable in the virtual environment
-    let venv_python = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("No parent dir")?
-        .join("../.venv/bin/python3");
-
-    let python_exe = if venv_python.exists() {
-        venv_python
-    } else {
-        // Fallback for development (assuming project root relative to execution)
-        std::path::PathBuf::from(".venv/bin/python3")
-    };
-
-    let mut task_prompt = task_title.clone();
-    if let Some(urls) = context_urls {
-        if !urls.is_empty() {
-            let url_context = urls
-                .into_iter()
-                .take(6)
-                .map(|u| format!("- {}", u))
-                .collect::<Vec<_>>()
-                .join("\n");
-            task_prompt.push_str("\n\nGround-truth URLs from memory graph:\n");
-            task_prompt.push_str(&url_context);
-        }
-    }
-    if let Some(notes) = context_notes {
-        if !notes.is_empty() {
-            task_prompt.push_str("\n\nMemory graph notes:\n");
-            task_prompt.push_str(
-                &notes
-                    .into_iter()
-                    .take(5)
-                    .map(|n| format!("- {}", n))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-        }
-    }
-
-    // Start the agent process
-    let child = Command::new(python_exe)
-        .arg(&script_path)
-        .arg(&task_prompt)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start agent: {}", e))?;
-
-    *process_guard = Some(child);
-
-    // Update status
-    let mut status = get_agent_status_store().lock();
-    *status = AgentStatus {
-        is_running: true,
-        task_title: Some(task_title),
-        last_message: Some("Agent started...".to_string()),
-        status: "running".to_string(),
-    };
-
-    Ok(status.clone())
-}
-
-/// Get current agent status
-#[tauri::command]
-pub async fn get_agent_status() -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-    let mut status = get_agent_status_store().lock();
-
-    if let Some(ref mut child) = *process_guard {
-        // Check if process is still running
-        match child.try_wait() {
-            Ok(Some(exit_status)) => {
-                status.is_running = false;
-                status.status = if exit_status.success() {
-                    "completed".to_string()
-                } else {
-                    "error".to_string()
-                };
-            }
-            Ok(None) => {
-                // Still running, try to read output
-                status.is_running = true;
-            }
-            Err(e) => {
-                status.is_running = false;
-                status.status = "error".to_string();
-                status.last_message = Some(format!("Error: {}", e));
-            }
-        }
-    }
-
-    Ok(status.clone())
-}
-
-/// Stop the agent
-#[tauri::command]
-pub async fn stop_agent() -> Result<AgentStatus, String> {
-    let mut process_guard = get_agent_process().lock();
-
-    if let Some(ref mut child) = *process_guard {
-        let _ = child.kill();
-    }
-    *process_guard = None;
-
-    let mut status = get_agent_status_store().lock();
-    *status = AgentStatus {
-        is_running: false,
-        task_title: status.task_title.clone(),
-        last_message: Some("Agent stopped by user".to_string()),
-        status: "idle".to_string(),
-    };
-
-    Ok(status.clone())
-}
-
-/// Generate a smart daily briefing paragraph using the local LLM.
-/// `mode`: "morning" (actionable: what to focus on) or "evening" (recap + tomorrow).
-/// Defaults to time-of-day detection when None.
-#[tauri::command]
-pub async fn generate_daily_briefing(
-    state: State<'_, Arc<AppState>>,
-    mode: Option<String>,
-) -> Result<String, String> {
-    // The part of the day decides the briefing, unless the caller names one.
-    // It is written without a model: see `briefing.rs` for why.
-    let now = chrono::Local::now();
-    let resolved_mode =
-        mode.unwrap_or_else(|| crate::briefing::mode_for_hour(now.hour()).to_string());
-    Ok(crate::briefing::briefing_for(&state, &resolved_mode, now).await)
-}
-
-#[tauri::command]
-pub fn get_fun_greeting(name: Option<String>) -> Result<String, String> {
-    use rand::prelude::IndexedRandom;
-    let base_name = name.unwrap_or_else(|| "there".to_string());
-
-    let hour = chrono::Local::now().hour();
-
-    let prefix = if (4..12).contains(&hour) {
-        "Good Morning"
-    } else if (12..16).contains(&hour) {
-        "Good Afternoon"
-    } else if (16..20).contains(&hour) {
-        "Good Evening"
-    } else {
-        "Good Night"
-    };
-
-    let fun_suffixes = [
-        "Ready to conquer the day?",
-        "Let's dive into your memories.",
-        "What are we exploring today?",
-        "Time to make some magic happen.",
-        "Welcome back to the matrix.",
-        "Let's get productive.",
-        "System fully operational.",
-    ];
-
-    let mut rng = rand::rng();
-    let random_suffix = fun_suffixes.choose(&mut rng).unwrap_or(&"");
-
-    Ok(format!("{}, {}! {}", prefix, base_name, random_suffix))
-}
-
-#[tauri::command]
-pub async fn quick_setup_ollama(
-    state: State<'_, Arc<AppState>>,
-) -> Result<HermesBridgeStatus, String> {
-    let (installed, reachable, models) = detect_ollama_state().await;
-    if !installed {
-        return Err("Ollama is not installed on this Mac.".to_string());
-    }
-    if !reachable {
-        return Err(
-            "FNDR could not reach Ollama. Make sure Ollama is running (`ollama serve`)."
-                .to_string(),
-        );
-    }
-    if models.is_empty() {
-        return Err(
-            "No Ollama models found. Pull a model first: `ollama pull llama3.2` or `ollama pull qwen2.5-coder`.".to_string(),
-        );
-    }
-
-    let best_model = models
-        .iter()
-        .find(|m| {
-            let l = m.to_lowercase();
-            l.contains("llama3")
-                || l.contains("llama-3")
-                || l.contains("qwen2.5")
-                || l.contains("mistral")
-                || l.contains("gemma")
-        })
-        .or_else(|| models.first())
-        .cloned()
-        .unwrap_or_else(|| models[0].clone());
-
-    let payload = HermesSetupPayload {
-        provider_kind: "ollama".to_string(),
-        model_name: best_model,
-        api_key: None,
-        base_url: Some(OLLAMA_BASE_URL.to_string()),
-        related_memories: false,
-    };
-
-    persist_hermes_setup_files(state.inner(), &payload)?;
-    {
-        let mut process_guard = get_hermes_gateway_process().lock();
-        if let Some(child) = process_guard.as_mut() {
-            let _ = child.kill();
-        }
-        *process_guard = None;
-    }
-    *get_hermes_gateway_error_store().lock() = None;
-    sync_hermes_bridge_files(state.inner()).await
-}
-
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bundled_codex_is_looked_up_in_the_current_and_the_old_location() {
+        let paths = bundled_codex_paths(Path::new("/Applications/ChatGPT.app"));
+        assert_eq!(
+            paths[0],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        );
+        assert_eq!(
+            paths[1],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex")
+        );
+    }
 
     /// Regression: status read the supervisor three times in one struct
     /// literal; the first guard was still held, so the second lock deadlocked
@@ -2206,11 +1802,11 @@ mod tests {
     fn an_answer_reports_what_hermes_did_on_the_way_once_each_in_order() {
         // The shape the pinned gateway returned in the 2026-10-07 live check.
         let response = serde_json::json!({ "output": [
-            { "type": "function_call", "name": "mcp_fndr_memory_search_full_context", "arguments": "{}", "call_id": "a" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_search", "arguments": "{}", "call_id": "a" },
             { "type": "function_call_output", "call_id": "a", "output": "..." },
             { "type": "function_call", "name": "todo", "arguments": "{}", "call_id": "b" },
             { "type": "function_call_output", "call_id": "b", "output": "..." },
-            { "type": "function_call", "name": "mcp_fndr_memory_timeline", "arguments": "{}", "call_id": "c" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_timeline", "arguments": "{}", "call_id": "c" },
             { "type": "function_call", "name": "terminal", "arguments": "{}", "call_id": "d" },
             { "type": "message", "content": [{ "type": "output_text", "text": "Done." }] }
         ]});

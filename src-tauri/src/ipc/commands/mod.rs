@@ -8,7 +8,7 @@ pub use search::{
     search_raw_results, summarize_search, NeedsSignalCard,
 };
 
-mod memory;
+pub(crate) mod memory;
 pub use memory::*;
 
 mod quality;
@@ -28,6 +28,9 @@ pub use stats::*;
 
 mod autofill;
 pub use autofill::*;
+
+mod voice_output;
+pub use voice_output::*;
 
 mod omnibar;
 pub use omnibar::*;
@@ -50,8 +53,23 @@ pub use hermes_agent::*;
 mod agent_chats;
 pub use agent_chats::*;
 
+mod home;
+pub use home::*;
+
+mod proactive_signals;
+pub use proactive_signals::*;
+
+mod calendar;
+pub use calendar::*;
+
 pub(crate) mod codex_account;
 pub use codex_account::*;
+
+mod speech_out;
+pub use speech_out::*;
+
+mod tts;
+pub use tts::*;
 
 pub(crate) mod openclicky_bridge;
 pub use openclicky_bridge::*;
@@ -59,11 +77,15 @@ pub use openclicky_bridge::*;
 mod computer_use;
 mod hermes_codex;
 mod setup_center;
+mod hand_off;
+mod work_set;
 pub use computer_use::*;
 pub use setup_center::*;
+pub use hand_off::*;
+pub use work_set::*;
 
-mod agent;
-pub use agent::*;
+mod peer;
+pub use peer::*;
 
 mod graph;
 pub use graph::*;
@@ -71,8 +93,14 @@ pub use graph::*;
 mod glasses_import;
 pub use glasses_import::*;
 
+mod import;
+pub use import::*;
+
 mod daily_review;
 pub use daily_review::*;
+
+mod daily_outputs;
+pub use daily_outputs::*;
 
 pub mod debug;
 pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
@@ -80,12 +108,15 @@ pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
 pub mod retrieval;
 pub use retrieval::{
     fndr_answer, fndr_build_context_pack, fndr_get_memory_source_statements,
-    fndr_get_memory_subgraph, fndr_get_related_memories, fndr_quality_status, fndr_search,
+    fndr_get_related_memories, fndr_quality_status, fndr_search,
     fndr_timeline,
 };
 
 mod companion;
 pub use companion::*;
+
+mod mcp_connect;
+pub use mcp_connect::*;
 
 mod screen_guide;
 pub use screen_guide::*;
@@ -102,6 +133,9 @@ pub use memory_journey::*;
 mod quality_lab;
 #[cfg(debug_assertions)]
 pub use quality_lab::*;
+
+mod actions;
+pub use actions::*;
 
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;
@@ -213,7 +247,7 @@ mod daily_summary_tests {
         fallback.synthesis_branch = "llm_ocr_grounded_visual_fallback".to_string();
         fallback.ocr_block_count = 1;
 
-        let retained = surfaceable_daily_records(vec![fallback]);
+        let retained = surfaceable_daily_records(vec![fallback], &[]);
 
         assert!(retained.is_empty());
     }
@@ -340,6 +374,34 @@ mod daily_summary_tests {
         assert_eq!(card.activity_type, "coding");
         assert_eq!(card.files_touched.len(), 2);
         assert_eq!(card.session_duration_mins, 37);
+    }
+
+    #[test]
+    fn a_vault_card_counts_what_its_memory_records() {
+        let mut card = memory_card_from_result(result(
+            "list-2",
+            chrono::Utc::now().timestamp_millis(),
+            "Figma",
+            "Vault cards",
+            "Chose the smaller cards for the Vault",
+            None,
+        ));
+        assert_eq!(
+            (card.decision_count, card.error_count, card.next_step_count),
+            (0, 0, 0)
+        );
+
+        let record = MemoryRecord {
+            decisions: vec!["Use the smaller cards".to_string(), "  ".to_string()],
+            errors: vec!["build failed on lint".to_string()],
+            next_steps: Vec::new(),
+            ..Default::default()
+        };
+        super::search::set_fact_counts(&mut card, &record);
+        assert_eq!(
+            (card.decision_count, card.error_count, card.next_step_count),
+            (1, 1, 0)
+        );
     }
 
     #[test]

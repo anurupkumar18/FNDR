@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     computerUseStatus: vi.fn(),
     setComputerUseEnabled: vi.fn(),
     openClickyBridgeStatus: vi.fn(),
+    getVoiceOutputSettings: vi.fn(() => Promise.resolve({ provider: "auto", system_voice: "", rate: 1 })),
+    setVoiceOutputSettings: vi.fn((settings: unknown) => Promise.resolve(settings)),
 }));
 
 vi.mock("@/shared/ipc/tauri", () => mocks);
@@ -320,6 +322,39 @@ describe("ScreenGuidePanel", () => {
         ).toBeInTheDocument();
         expect(screen.getByText(/other clicks and typing wait for your tap/i)).toBeInTheDocument();
         expect(screen.queryByText("Local and read-only")).not.toBeInTheDocument();
+    });
+
+    it("cannot turn Operate my Mac on when nothing can click and type, and says why", async () => {
+        mocks.computerUseStatus.mockResolvedValue({
+            enabled: false,
+            codexReady: true,
+            backend: null,
+            backendPath: null,
+            activeRun: null,
+        });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        const why = await screen.findByText(/so this stays off/i);
+        expect(why).toBeInTheDocument();
+        // A Beta person is never sent to a terminal to install a helper (ADR 026).
+        expect(why.textContent).not.toMatch(/npm|open-computer-use/);
+        expect(screen.getByRole("switch", { name: "Operate my Mac" })).toBeDisabled();
+    });
+
+    it("can still turn Operate my Mac off when the helper has gone", async () => {
+        mocks.computerUseStatus.mockResolvedValue({
+            enabled: true,
+            codexReady: true,
+            backend: null,
+            backendPath: null,
+            activeRun: null,
+        });
+        render(<ScreenGuidePanel isVisible onClose={() => {}} />);
+
+        await screen.findByText(/so this stays off/i);
+        await waitFor(() =>
+            expect(screen.getByRole("switch", { name: "Operate my Mac" })).not.toBeDisabled(),
+        );
     });
 
     it("moves focus into the modal and closes it with Escape", async () => {

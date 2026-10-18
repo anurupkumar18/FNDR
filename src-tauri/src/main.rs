@@ -5,10 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use chrono::Timelike;
-use fndr_lib::{
-    capture, config::Config, graph::GraphStore, ipc, models, storage::Store, AppState,
-    ProactiveSuggestion,
-};
+use fndr_lib::{capture, config::Config, graph::GraphStore, ipc, models, storage::Store, AppState};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -21,6 +18,9 @@ const TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 // whole process is visible at a glance.
 const MAINTENANCE_FIRST_DELAY: Duration = Duration::from_secs(60);
 const STORAGE_RECLAIM_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const RETENTION_FIRST_DELAY: Duration = Duration::from_secs(10 * 60);
+const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 3600);
+const RETENTION_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DECAY_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const DECAY_LOOKBACK_MS: i64 = 24 * 3600 * 1000;
 const DECAY_FLOOR: f32 = 0.15;
@@ -39,6 +39,11 @@ const GRAPH_COMMIT_INTERVAL: Duration = Duration::from_secs(90);
 const MEMORY_REVIEW_INTERVAL: Duration = Duration::from_secs(45);
 
 fn main() {
+    // `fndr operator-mcp`: Notch Do's computer-use tools, started by Codex as
+    // a child process. It must not initialise the app, and stdout is the protocol.
+    if std::env::args().nth(1).as_deref() == Some("operator-mcp") {
+        std::process::exit(fndr_lib::operator::mcp::run());
+    }
     // Install default TLS crypto provider (required by rustls 0.23+)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -83,6 +88,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -154,6 +160,16 @@ fn main() {
                 }
             }
 
+            if config.import_retention_days > 0 {
+                match tauri::async_runtime::block_on(
+                    store_arc.delete_imports_older_than(config.import_retention_days),
+                ) {
+                    Ok(n) if n > 0 => tracing::info!("Import retention: removed {} old records", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Import retention cleanup failed: {}", e),
+                }
+            }
+
             // Create app state with no engines yet — we kick off the eager
             // load below as a background task so the Tauri setup callback
             // is not blocked on Metal initialization. The capture loop
@@ -171,6 +187,13 @@ fn main() {
             fndr_lib::privacy_proof::init_model_request_log(&data_dir);
             ipc::commands::sweep_screen_guide_scratch();
             ipc::commands::reap_stale_hermes_gateway(&data_dir);
+            // A hand-off that was working when FNDR quit has no worker now.
+            if let Err(error) = fndr_lib::handoff::store::sweep_after_restart(
+                &state.state_store,
+                chrono::Utc::now().timestamp_millis(),
+            ) {
+                tracing::warn!(%error, "hand_off:sweep_after_restart_failed");
+            }
 
             // Restore last-session model: if onboarding is complete and the
             // preferred GGUF is on disk, load it eagerly. This means the
@@ -214,12 +237,105 @@ fn main() {
             // Start capture pipeline (named thread + 8MB stack; see capture::spawn_capture_loop)
             capture::spawn_capture_loop(state.clone());
 
+            // Apply retention during long-running sessions and collapse Lance
+            // fragments after capture has gone idle. The frame lock prevents
+            // compaction from racing an admitted capture frame.
+            {
+                let retention_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(RETENTION_FIRST_DELAY).await;
+                    loop {
+                        let config = retention_state.config.read().clone();
+                        let capturing = retention_state.is_capturing();
+                        let fps = if capturing {
+                            capture::AdaptiveSampler::new().get_current_fps(&config)
+                        } else {
+                            0.0
+                        };
+                        let Some(frame_guard) =
+                            capture::try_idle_maintenance_guard(capturing, fps)
+                        else {
+                            tokio::time::sleep(RETENTION_RETRY_INTERVAL).await;
+                            continue;
+                        };
+
+                        let mut failed = false;
+                        if config.retention_days > 0 {
+                            match retention_state
+                                .store
+                                .delete_older_than(config.retention_days)
+                                .await
+                            {
+                                Ok(removed) if removed > 0 => {
+                                    tracing::info!("Periodic retention removed {} old records", removed)
+                                }
+                                Ok(_) => {}
+                                Err(err) => {
+                                    failed = true;
+                                    tracing::warn!("Periodic retention failed: {err}");
+                                }
+                            }
+                        }
+                        if config.import_retention_days > 0 {
+                            match retention_state
+                                .store
+                                .delete_imports_older_than(config.import_retention_days)
+                                .await
+                            {
+                                Ok(removed) if removed > 0 => tracing::info!(
+                                    "Periodic import retention removed {} old records",
+                                    removed
+                                ),
+                                Ok(_) => {}
+                                Err(err) => {
+                                    failed = true;
+                                    tracing::warn!("Periodic import retention failed: {err}");
+                                }
+                            }
+                        }
+                        match retention_state.store.compact_and_prune(7).await {
+                            Ok(_) => tracing::info!("Periodic Lance compaction finished"),
+                            Err(err) => {
+                                failed = true;
+                                tracing::warn!("Periodic Lance compaction failed: {err}");
+                            }
+                        }
+                        drop(frame_guard);
+                        tokio::time::sleep(if failed {
+                            RETENTION_RETRY_INTERVAL
+                        } else {
+                            RETENTION_INTERVAL
+                        })
+                        .await;
+                    }
+                });
+            }
+
             // Background task: compact legacy capture payloads and purge stray artifacts.
             {
                 let maintenance_state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(MAINTENANCE_FIRST_DELAY).await;
                     loop {
+                        let image_dir = maintenance_state.store.data_dir().to_path_buf();
+                        match tauri::async_runtime::spawn_blocking(move || {
+                            fndr_lib::privacy::vault::seal_capture_images(
+                                &fndr_lib::privacy::vault::KeychainKey::default(),
+                                &image_dir,
+                            )
+                        })
+                        .await
+                        {
+                            Ok(report) if report.sealed > 0 || report.failed > 0 => {
+                                tracing::info!(
+                                    "Capture image sealing: {} sealed, {} failed",
+                                    report.sealed,
+                                    report.failed
+                                );
+                            }
+                            Err(error) => tracing::warn!("Capture image sealing failed: {error}"),
+                            _ => {}
+                        }
                         match ipc::commands::reclaim_memory_storage_silent(maintenance_state.clone()).await {
                             Ok(summary)
                                 if summary.bytes_reclaimed > 0
@@ -422,30 +538,27 @@ fn main() {
                             }
                         };
 
-                        let suggestion = hits.into_iter().find(|r| {
-                            r.score > config.proactive.similarity_threshold
-                                && !seen_ring.contains(&r.id)
-                        });
+                        // The toast obeys the rules every other surface does:
+                        // current blocklist, quality gate, a real sentence.
+                        let ids = hits.iter().map(|hit| hit.id.clone()).collect::<Vec<_>>();
+                        let Ok(records) = proactive_state.store.get_memories_by_ids(&ids).await
+                        else {
+                            continue;
+                        };
+                        let suggestion = fndr_lib::context_runtime::proactive::pick_suggestion(
+                            &hits,
+                            &records,
+                            &config.blocklist,
+                            config.proactive.similarity_threshold,
+                            |id| seen_ring.iter().any(|seen| seen == id),
+                            chrono::Utc::now().timestamp_millis(),
+                        );
 
-                        if let Some(hit) = suggestion {
-                            // Prefer the distilled summary over raw OCR text for display.
-                            let snippet = if hit.display_summary.trim().is_empty() {
-                                hit.snippet.clone()
-                            } else {
-                                hit.display_summary.clone()
-                            };
-
-                            let suggestion = ProactiveSuggestion {
-                                memory_id: hit.id.clone(),
-                                snippet,
-                                similarity: hit.score,
-                                task_title: None,
-                            };
-
+                        if let Some(suggestion) = suggestion {
                             if seen_ring.len() >= config.proactive.seen_ring_capacity {
                                 seen_ring.pop_front();
                             }
-                            seen_ring.push_back(hit.id.clone());
+                            seen_ring.push_back(suggestion.memory_id.clone());
 
                             let _ = proactive_state.proactive_tx.send(Some(suggestion.clone()));
                             let _ = app_handle.emit("proactive_suggestion", suggestion);
@@ -477,9 +590,20 @@ fn main() {
                     let mut recent_app_switches: std::collections::VecDeque<String> =
                         std::collections::VecDeque::with_capacity(APP_SWITCH_RECENT_CAPACITY);
 
+                    let mut signal_clock = fndr_lib::proactive_signals::SignalClock::default();
+
                     let mut interval = tokio::time::interval(PROACTIVE_NOTIFICATION_TICK);
                     loop {
                         interval.tick().await;
+
+                        // Stuck detector, thread updates and meeting prep:
+                        // each on its own cadence, switch and daily limit.
+                        fndr_lib::proactive_signals::run_due(
+                            &notif_handle,
+                            &notif_state,
+                            &mut signal_clock,
+                        )
+                        .await;
 
                         let now = chrono::Local::now();
                         let hour = now.hour();
@@ -502,13 +626,12 @@ fn main() {
                                 } else {
                                     "🌙 FNDR Evening Recap"
                                 };
-                                let _ = notif_handle.emit(
-                                    "fndr_notification",
-                                    serde_json::json!({
-                                        "title": title,
-                                        "body": briefing,
-                                        "kind": "briefing",
-                                    }),
+                                fndr_lib::notify::send(
+                                    &notif_handle,
+                                    &notif_state,
+                                    "briefing",
+                                    title,
+                                    &briefing,
                                 );
                                 tracing::info!("Sent {} briefing notification", mode);
                                 briefing_sent_today = true;
@@ -548,13 +671,12 @@ fn main() {
                                         stale.len(),
                                         titles.join(", ")
                                     );
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "📋 Stale Tasks",
-                                            "body": body,
-                                            "kind": "stale_tasks",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "stale_tasks",
+                                        "📋 Stale Tasks",
+                                        &body,
                                     );
                                 }
                             }
@@ -580,13 +702,12 @@ fn main() {
                                 let unique: std::collections::HashSet<_> =
                                     recent_app_switches.iter().collect();
                                 if unique.len() >= APP_SWITCH_UNIQUE_THRESHOLD {
-                                    let _ = notif_handle.emit(
-                                        "fndr_notification",
-                                        serde_json::json!({
-                                            "title": "🔀 High Context Switching",
-                                            "body": "You've been switching between many apps. Want to refocus?",
-                                            "kind": "context_switch",
-                                        }),
+                                    fndr_lib::notify::send(
+                                        &notif_handle,
+                                        &notif_state,
+                                        "context_switch",
+                                        "🔀 High Context Switching",
+                                        "You've been switching between many apps. Want to refocus?",
                                     );
                                     recent_app_switches.clear();
                                 }
@@ -599,11 +720,26 @@ fn main() {
             app.manage(state.clone());
             app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
 
-            // Start the Companion API (iPhone/Watch local-network surface) as a
-            // background task so app startup is not blocked on TLS init. The
-            // server lives on a sibling port to MCP; pairing tokens are issued
-            // and stored via StateStore. See ADR-008.
+            // Restore the local MCP endpoint only when this app connected a client.
             {
+                let mcp_app = app.handle().clone();
+                let mcp_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = ipc::commands::resume_if_connected(mcp_app, mcp_state).await {
+                        tracing::warn!(%error, "mcp:resume_failed");
+                    }
+                });
+            }
+            fndr_lib::privacy::recording::create_indicator(app.handle(), state.as_ref());
+            if let Err(error) = fndr_lib::privacy::recording::register_pause_shortcut(app.handle()) {
+                tracing::warn!("Capture pause shortcut registration failed: {error}");
+            }
+
+            // The Companion API (iPhone/Watch local-network surface) starts at
+            // launch only once a device is paired; otherwise nothing listens
+            // on the local network until the person starts it from the Mac
+            // (`companion_start_server`). TLS init runs off the startup path.
+            if fndr_lib::companion::should_start_at_launch(&state) {
                 let companion_state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     match fndr_lib::companion::start(companion_state, None, None).await {
@@ -629,9 +765,19 @@ fn main() {
             ipc::commands::create_screen_guide_notch_companion(app.handle());
             ipc::commands::create_screen_guide_overlay_window(app.handle());
 
-            // Alpha demo: Auto-Fill and the Alt+Space Omnibar are not part of
-            // the demo surface, so their windows and global shortcuts are not
-            // registered.
+            // The command bar (Alt+Space): memory search, and a request to do
+            // something handed to Notch Do. It was off for the Alpha demo
+            // (2026-09-18); back on as the command bar (2026-10-14). Auto-Fill
+            // stays off.
+            ipc::commands::create_omnibar_window(app.handle());
+            if let Err(err) = ipc::commands::register_omnibar_shortcut(app.handle()) {
+                tracing::warn!("Command bar shortcut registration failed: {err}");
+            } else {
+                tracing::info!(
+                    "Command bar global shortcut registered: {}",
+                    ipc::commands::OMNIBAR_SHORTCUT
+                );
+            }
 
             // Pre-create the notch HUD (hidden) and register its toggle.
             ipc::commands::create_notch_hud_window(app.handle());
@@ -676,7 +822,6 @@ fn main() {
             ipc::commands::retrieval::fndr_search,
             ipc::commands::retrieval::fndr_answer,
             ipc::commands::retrieval::fndr_build_context_pack,
-            ipc::commands::retrieval::fndr_get_memory_subgraph,
             ipc::commands::retrieval::fndr_get_related_memories,
             ipc::commands::retrieval::fndr_get_memory_source_statements,
             ipc::commands::retrieval::fndr_quality_status,
@@ -692,6 +837,19 @@ fn main() {
             ipc::commands::start_mcp_server,
             ipc::commands::stop_mcp_server,
             ipc::commands::resolve_mcp_approval,
+            ipc::commands::mcp_connect_status,
+            ipc::commands::mcp_connect_preview,
+            ipc::commands::mcp_connect_apply,
+            ipc::commands::mcp_connect_test,
+            ipc::commands::mcp_connect_rotate_token,
+            ipc::commands::mcp_connect_disconnect,
+            ipc::commands::mcp_connect_revoke,
+            ipc::commands::mcp_connect_set_keep_running,
+            ipc::commands::mcp_connect_set_hide_more,
+            ipc::commands::get_action_settings,
+            ipc::commands::set_action_settings,
+            ipc::commands::list_action_approvals,
+            ipc::commands::resolve_action_approval,
             // Companion API (iPhone / Apple Watch)
             ipc::commands::companion_get_status,
             ipc::commands::companion_get_endpoint,
@@ -720,6 +878,9 @@ fn main() {
             fndr_lib::voice::voice_start,
             fndr_lib::voice::voice_stop,
             fndr_lib::voice::voice_cancel,
+            fndr_lib::voice::notch_do::get_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_do_muted,
+            fndr_lib::voice::notch_do::set_notch_escape_monitor,
             // Capture control
             ipc::commands::pause_capture,
             ipc::commands::resume_capture,
@@ -730,14 +891,33 @@ fn main() {
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,
             ipc::commands::delete_memory,
+            ipc::commands::delete_memories_in_range,
+            ipc::commands::export_memories_archive,
+            ipc::commands::import_memories_archive,
+            ipc::commands::get_encryption_statement,
+            ipc::commands::get_privacy_exclusions,
             ipc::commands::reopen_memory,
             ipc::commands::get_stats,
             ipc::commands::get_runtime_metrics,
             ipc::commands::get_privacy_proof,
             ipc::commands::resume_work,
+            ipc::commands::what_changed_since,
+            ipc::commands::mark_thread_seen,
+            ipc::commands::calendar_meeting_prep_state,
+            ipc::commands::set_calendar_meeting_prep,
+            ipc::commands::open_calendar_privacy_settings,
             ipc::commands::get_retention_days,
             ipc::commands::set_retention_days,
             ipc::commands::delete_older_than,
+            ipc::commands::import_list_sources,
+            ipc::commands::import_get_consent,
+            ipc::commands::import_set_consent,
+            ipc::commands::import_record_first_answer,
+            ipc::commands::import_first_answer_ms,
+            ipc::commands::import_start,
+            ipc::commands::import_status,
+            ipc::commands::import_cancel,
+            ipc::commands::import_forget,
             ipc::commands::get_app_names,
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,
@@ -756,7 +936,6 @@ fn main() {
             ipc::commands::run_idle_wiki_knowledge_compile,
             ipc::commands::get_graph_for_project,
             ipc::commands::get_full_graph,
-            ipc::commands::search_graph,
             ipc::commands::get_node_detail,
             ipc::commands::find_graph_path,
             ipc::commands::get_god_nodes,
@@ -772,32 +951,19 @@ fn main() {
             ipc::commands::complete_todo,
             ipc::commands::set_todo_completed,
             // Agent SDK
-            ipc::commands::start_agent_task,
-            ipc::commands::get_agent_status,
-            ipc::commands::stop_agent,
-            ipc::commands::build_agent_context_pack,
-            ipc::commands::run_agent_request,
-            ipc::commands::propose_agent_action,
-            ipc::commands::approve_agent_action,
-            ipc::commands::execute_agent_action,
-            ipc::commands::list_agent_audit_runs,
-            ipc::commands::get_agent_audit_run,
-            ipc::commands::explain_agent_retrieval,
-            ipc::commands::rate_agent_result,
-            ipc::commands::propose_skill_from_run,
-            ipc::commands::list_agent_skill_drafts,
-            ipc::commands::propose_eval_from_run,
-            ipc::commands::list_agent_eval_drafts,
-            ipc::commands::list_agent_prompts,
-            ipc::commands::get_agent_prompt,
             ipc::commands::get_hermes_bridge_status,
             ipc::commands::install_hermes_bridge,
             ipc::commands::save_hermes_setup,
-            ipc::commands::sync_hermes_bridge_context,
-            ipc::commands::start_hermes_gateway,
-            ipc::commands::stop_hermes_gateway,
             ipc::commands::send_hermes_message,
             ipc::commands::cancel_hermes_message,
+            ipc::commands::list_configured_peers,
+            ipc::commands::add_configured_peer,
+            ipc::commands::remove_configured_peer,
+            ipc::commands::preview_peer_delegation,
+            ipc::commands::send_peer_delegation,
+            ipc::commands::list_peer_runs,
+            ipc::commands::refresh_peer_task,
+            ipc::commands::cancel_peer_task,
             ipc::commands::list_agent_chats,
             ipc::commands::get_agent_chat,
             ipc::commands::delete_agent_chat,
@@ -805,6 +971,18 @@ fn main() {
             ipc::commands::codex_login_start,
             ipc::commands::codex_login_cancel,
             ipc::commands::codex_logout,
+            ipc::commands::voice_out_status,
+            ipc::commands::voice_out_voices,
+            ipc::commands::voice_out_start,
+            ipc::commands::voice_out_speak,
+            ipc::commands::voice_out_cancel,
+            ipc::commands::voice_out_stop,
+            ipc::commands::tts_status,
+            ipc::commands::tts_voices,
+            ipc::commands::tts_install,
+            ipc::commands::tts_remove,
+            ipc::commands::tts_cancel,
+            ipc::commands::tts_synthesize,
             ipc::commands::openclicky_bridge_status,
             ipc::commands::computer_use_status,
             ipc::commands::set_computer_use_enabled,
@@ -813,11 +991,41 @@ fn main() {
             ipc::commands::install_component,
             ipc::commands::computer_use_permissions,
             ipc::commands::computer_use_start,
+            ipc::commands::notch_do_rate_run,
+            ipc::commands::notch_do_save_skill,
+            ipc::commands::notch_do_runs,
+            ipc::commands::notch_do_skills,
+            ipc::commands::notch_do_delete_skill,
+            ipc::commands::notch_do_request,
             ipc::commands::computer_use_respond,
             ipc::commands::computer_use_stop,
-            ipc::commands::send_direct_chat,
-            ipc::commands::quick_setup_ollama,
+            ipc::commands::resolve_work_set,
+            ipc::commands::hand_off_status,
+            ipc::commands::hand_off_install_toolchain,
+            ipc::commands::hand_off_draft,
+            ipc::commands::hand_off_update_draft,
+            ipc::commands::hand_off_start,
+            ipc::commands::hand_off_stop,
+            ipc::commands::hand_off_open,
+            ipc::commands::hand_off_rate,
+            ipc::commands::open_work_set,
+            ipc::commands::list_named_sets,
+            ipc::commands::save_named_set,
+            ipc::commands::delete_named_set,
+            ipc::commands::routine_offers,
+            ipc::commands::dismiss_routine_offer,
             ipc::commands::generate_daily_briefing,
+            ipc::commands::generate_daily_output,
+            ipc::commands::render_daily_output,
+            ipc::commands::save_daily_output,
+            ipc::commands::output_destination_status,
+            ipc::commands::set_output_destination,
+            ipc::commands::propose_daily_output_send,
+            ipc::commands::resolve_daily_output_send,
+            ipc::commands::send_daily_output_allowed,
+            ipc::commands::trust_output_destination,
+            ipc::commands::list_output_allowed_destinations,
+            ipc::commands::forget_output_allowed_destination,
             ipc::commands::generate_daily_summary_for_date,
             ipc::commands::get_daily_summary_overview,
             ipc::commands::get_daily_summary_followups,
@@ -829,6 +1037,8 @@ fn main() {
             // Auto-fill
             ipc::commands::get_autofill_settings,
             ipc::commands::set_autofill_settings,
+            ipc::commands::get_voice_output_settings,
+            ipc::commands::set_voice_output_settings,
             ipc::commands::set_autofill_overlay_ready,
             ipc::commands::take_pending_autofill_payload,
             ipc::commands::resolve_autofill,
@@ -899,6 +1109,8 @@ fn main() {
             ipc::onboarding::download_model,
             ipc::onboarding::get_model_download_status,
             ipc::onboarding::refresh_ai_models,
+            ipc::onboarding::get_apple_model_status,
+            ipc::onboarding::set_apple_model_enabled,
             ipc::onboarding::check_model_exists,
             ipc::onboarding::delete_ai_model,
             ipc::onboarding::set_preferred_inference_model,

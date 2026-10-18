@@ -62,22 +62,28 @@ pub fn is_system_surface(app_name: &str) -> bool {
     SYSTEM_SURFACES.contains(&app_name.trim().to_lowercase().as_str())
 }
 
+/// Whether this app or page is an AI assistant's own window.
+pub fn is_ai_surface(app_name: &str, url: Option<&str>) -> bool {
+    let app = app_name.trim().to_lowercase();
+    if AI_CHAT_APPS
+        .iter()
+        .any(|name| app == *name || app.starts_with(&format!("{name} ")))
+    {
+        return true;
+    }
+    let host = host_of(url);
+    AI_CHAT_HOSTS
+        .iter()
+        .any(|known| host == *known || host.ends_with(&format!(".{known}")))
+}
+
 /// Whether captures from this app or page may be asked for tasks at all.
 pub fn is_task_source(app_name: &str, url: Option<&str>) -> bool {
     let app = app_name.trim().to_lowercase();
     if app.is_empty() || SYSTEM_SURFACES.contains(&app.as_str()) {
         return false;
     }
-    if AI_CHAT_APPS
-        .iter()
-        .any(|name| app == *name || app.starts_with(&format!("{name} ")))
-    {
-        return false;
-    }
-    let host = host_of(url);
-    !AI_CHAT_HOSTS
-        .iter()
-        .any(|known| host == *known || host.ends_with(&format!(".{known}")))
+    !is_ai_surface(app_name, url)
 }
 
 /// Lowercase words only, single spaces, padded so phrases match whole words.
@@ -597,6 +603,15 @@ pub const SUGGESTION_LIFESPAN_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 /// A task FNDR proposed from a capture that the person has not accepted.
 pub fn is_suggestion(task: &Task) -> bool {
     task.source_app.starts_with("Memory:") || task.source_app.eq_ignore_ascii_case("auto")
+}
+
+/// Whether a suggestion quotes an app the person has blocked since. It is no
+/// longer offered, as its memory is no longer shown. A task the person
+/// accepted or wrote is theirs and stays.
+pub fn suggested_from_blocked_app(task: &Task, blocklist: &[String]) -> bool {
+    task.source_app
+        .strip_prefix("Memory:")
+        .is_some_and(|app| crate::privacy::Blocklist::is_blocked(app.trim(), blocklist))
 }
 
 /// A suggestion the person accepted: theirs now, still linked to its memory.

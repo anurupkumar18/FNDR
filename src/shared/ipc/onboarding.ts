@@ -9,6 +9,7 @@ export type OnboardingStep =
     | "privacy_promise"
     | "permissions"
     | "model_download"
+    | "bring_past"
     | "indexing_started"
     | "complete";
 
@@ -129,6 +130,27 @@ export interface AiRuntimeStatus {
     model_mode: 'ocr_only' | 'lightweight_vlm' | 'heavy_vlm' | 'disabled';
     vlm_status: 'unavailable' | 'loaded' | 'fallback';
     vlm_model_id: string | null;
+}
+
+export type AppleModelAvailability =
+    | "available"
+    | "model_not_ready"
+    | "apple_intelligence_off"
+    | "unsupported_device"
+    | "unsupported_os"
+    | "helper_unavailable";
+
+export interface AppleModelStatus {
+    availability: AppleModelAvailability;
+    enabled: boolean;
+}
+
+export async function getAppleModelStatus(): Promise<AppleModelStatus> {
+    return invoke<AppleModelStatus>("get_apple_model_status");
+}
+
+export async function setAppleModelEnabled(enabled: boolean): Promise<AppleModelStatus> {
+    return invoke<AppleModelStatus>("set_apple_model_enabled", { enabled });
 }
 
 export function onDownloadProgress(handler: (p: DownloadProgress) => void): Promise<() => void> {

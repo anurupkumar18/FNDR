@@ -173,6 +173,11 @@ async fn llm_refinement_smoke_skips_when_model_missing() {
     let Ok(engine) = fndr_lib::inference::InferenceEngine::new(None, None).await else {
         return;
     };
+    // With only Apple's on-device model available there is no GGUF model to
+    // refine a plan; the engine reports that as its model id.
+    if engine.model_id() == "apple-foundation" {
+        return;
+    }
 
     let mut successes = 0;
     for query in [

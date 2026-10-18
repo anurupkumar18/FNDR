@@ -13,6 +13,10 @@ const ipc = vi.hoisted(() => ({
     listMemoryCards: vi.fn(),
     reopenMemory: vi.fn(),
     searchMemoryCards: vi.fn(),
+    listConfiguredPeers: vi.fn(),
+    listPeerRuns: vi.fn(),
+    addConfiguredPeer: vi.fn(),
+    removeConfiguredPeer: vi.fn(),
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ipc);
@@ -52,6 +56,8 @@ beforeEach(() => {
     ipc.sendHermesMessage.mockResolvedValue({ response_id: "r1", conversation_id: "c", content: "Here is the plan." });
     ipc.deleteAgentChat.mockResolvedValue(undefined);
     ipc.cancelHermesMessage.mockResolvedValue(undefined);
+    ipc.listConfiguredPeers.mockResolvedValue([]);
+    ipc.listPeerRuns.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -60,6 +66,14 @@ afterEach(() => {
 });
 
 describe("AgentWorkspace", () => {
+    it("opens the peer directory and returns to chat", async () => {
+        render(<AgentWorkspace isVisible onClose={vi.fn()} />);
+        fireEvent.click(screen.getByRole("button", { name: "Peers" }));
+        expect(await screen.findByRole("heading", { name: "Peer agents" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+        expect(screen.getByRole("heading", { name: "What should we work on?" })).toBeInTheDocument();
+    });
+
     it("still opens setup when Hermes status cannot be read, and retries", async () => {
         ipc.getHermesBridgeStatus.mockRejectedValueOnce(new Error("vault is locked"));
         render(<AgentWorkspace isVisible onClose={vi.fn()} />);

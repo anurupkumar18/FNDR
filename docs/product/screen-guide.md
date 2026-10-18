@@ -84,6 +84,9 @@ get an optional visual point cue or learn where a matching local file lives.
 - Sending screen pixels, microphone audio, transcripts, or answers to a cloud
   provider by default.
 - Clicking, typing, purchasing, submitting forms, or executing agent actions.
+  The "Operate my Mac" switch shown in this panel belongs to Notch Do, with its
+  own setting (`operator.enabled`) and policy (ADR 024); Screen Guide itself
+  never acts.
 - General full-Mac, full-home, file-content, Library, or arbitrary-volume
   search.
 - Reading, previewing, opening, revealing, moving, or modifying a located file.
@@ -167,6 +170,15 @@ get an optional visual point cue or learn where a matching local file lives.
   Over-budget or failed writes publish no incomplete bundle.
 - FR27: Reveal is an explicit backend-owned action for FNDR's fixed diagnostics
   directory; the renderer supplies no path.
+
+- FR28: **Point with OpenClicky** (Labs, off by default) hands the point cue
+  and its caption to an OpenClicky app the person already runs, over its
+  local bridge on `127.0.0.1`, authenticated with the token OpenClicky itself
+  uses. FNDR does not bundle or launch OpenClicky. The bridge only draws and
+  speaks; it never clicks. When OpenClicky is not running or has no token,
+  FNDR's own cursor is used.
+- FR29: The panel hosts the **Operate my Mac** switch (Labs) as a convenience.
+  It turns Notch Do on or off and changes nothing about a Screen Guide turn.
 
 ## Non-functional requirements
 

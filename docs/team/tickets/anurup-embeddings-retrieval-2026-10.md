@@ -21,6 +21,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 
 **Done when.** The scorecard shows top-five at 36 of 40 or better on the same copy, the three seeded gates still pass, and the miss classes are written down.
 
+**Result.** Done on 2026-10-07; this line was added on 2026-10-08. On a re-embedded copy the gist search went from 30 to 37 of 40 in the top five, over the target of 36. Miss classes: the summary was absent from the embedded text (the largest, fixed by VS-86), two lost in fusion while the vector branch had them (VS-87), one with a primary vector far from its own summary. On the owner's vault after both repairs (2026-10-08, a different sample of 40): the exact memory in the top five for 34, a memory with the same title for 37, none wrongly marked weak. The three seeded gates pass.
+
 **Evidence.** `docs/evidence/W04/vs-85-known-item-search.md` with the before and after scorecard, counts only.
 
 ## VS-86 Make the embedding text say what the memory is about
@@ -37,6 +39,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Cap each list segment (commands, entities, files) so one long item cannot dominate.
 3. Confirm no `context_thread: session` segment is written any more (2 of 147 older rows still carry one).
 4. This changes the embedding document, so bump `EMBEDDING_DOCUMENT_VERSION`, update the Python mirror in `scripts/audit/embedding_bakeoff.py`, and plan the re-embed of existing rows.
+
+**Result.** Done on 2026-10-07 with VS-85; this line was added on 2026-10-08. The card summary leads the primary text when it is not a placeholder, prose misfiled as a command is left out, capture, review and repair share one recipe (`memory_embedding_document::refresh_text_vectors`), and `EMBEDDING_DOCUMENT_VERSION` is 2. On the owner's vault 152 of 158 primary vectors match a fresh embedding of their text and 6 have drifted slightly; 2 rows still carry a `context_thread: session` segment.
 
 **Done when.** Unit tests cover the composition, the three seeded gates pass, and the VS-85 scorecard improves on a re-embedded copy.
 
@@ -69,6 +73,8 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 2. Change the prefixes and route the two call sites (`prefix_query_for_search`, `prefix_document_for_index`) through `query_text_for` and `document_text_for`.
 3. The v5 reindex skips memories that already have rows (`should_skip_v5_reindex`), so add a guard that forces a full rebuild when the prompt contract changes. Old and new vectors must never be searched together.
 4. Record after. Ship only if the numbers hold.
+
+**Result, 2026-10-08: deferred, with the cheap half done.** No profile holds BGE rows, the BGE model is not installed on the owner's Mac, and ADR 019 has not chosen the chunk model. Measuring would mean a 1.3 GB download and a full chunk index on an 8 GB machine to tune a path nothing runs, for a model that may be replaced. So: the prefixes stay as they are; both call sites now go through `query_text_for` and `document_text_for`, so there is one place to change; the constants carry the model-card difference and the rule that the v5 tables are cleared before a change; the existing test pins both strings. The rebuild guard and the before and after numbers move to whichever model ADR 019 picks.
 
 **Done when.** Before and after numbers are in the evidence file and a test proves a prompt change invalidates existing BGE rows.
 
@@ -139,6 +145,15 @@ Filed after the instruction and model review (`docs/product/instruction-model-ca
 **Why.** The Vault now groups captures no more than 30 minutes apart into one row for display only. The row still shows the newest moment's sentence. Eleven captures of one piece of work are one memory with eleven pieces of evidence.
 
 **Do.** When a session goes quiet, write one session record from its moments: what was worked on, what was decided, where it stopped. Keep the moments as evidence beneath it. Stop adding a new card when a new moment adds no new fact. Link sessions across apps that share a project within minutes.
+
+**Progress, 2026-10-08.** Decided: the session summary is composed from the session's own moments and no model writes it. The on-device model was measured on the same kind of job for the briefing and invented advice, copied its notes, and reported an open task as done. `sessionDigest` (`src/domains/memory-vault/sessionDigest.ts`) gives a session row its moments, its length in minutes, its distinct files, and the most detailed earlier sentence when that says something the row's own line does not. Nothing is stored, so it covers every past session and can never disagree with its moments. The counts and the links followed the same day; see the result below.
+
+
+**Result, 2026-10-08.** The Vault list now sets `decision_count`, `error_count` and `next_step_count` on each card from the stored record, and a session row adds them up beside its files ("In this session: 3 files, 2 decisions, 1 error"). On the owner's vault 13 percent of memories record a decision, 8 percent a next step and 6 percent an error.
+
+Sessions across apps: only 21 of 158 memories carry a project, so grouping by project links almost nothing. `linkSessions` (`src/domains/memory-vault/sessionLinks.ts`) ties two sessions in different threads when they are no more than ten minutes apart and share a file, or two distinctive words of their window titles. Each row lists the others under "Same stretch of work" as buttons that jump to them. Sessions are linked, never merged: two apps open at the same time are not evidence of one piece of work.
+
+Not done: no session record is stored, by decision (see the decision log), so a session is not one search result. "Stop adding a new card when a new moment adds no new fact" is covered for display by the fold into one row; nothing changes what capture stores. The new row has tests and has not yet been looked at in the running app.
 
 **Done when.** The Vault session row shows the session's own summary with counts of decisions, next steps and errors, and the moments still open individually.
 

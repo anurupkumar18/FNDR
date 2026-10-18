@@ -21,6 +21,9 @@ use std::sync::Arc;
 pub const PAIRING_TTL_MS: i64 = 5 * 60_000;
 
 const PAIRING_CODE_LEN: usize = 6;
+/// Wrong codes allowed before every outstanding code is void. A six-digit
+/// code is a million guesses; this leaves five.
+const MAX_WRONG_CODES: u32 = 5;
 const ACCESS_TOKEN_LEN: usize = 48;
 const DEFAULT_PERMISSIONS: &[&str] = &[
     "ask",
@@ -68,6 +71,8 @@ pub struct PairingService {
     /// Outstanding pairing offers, keyed by code. Bounded by `PAIRING_TTL_MS`
     /// (expired entries are pruned on every lookup).
     offers: Mutex<HashMap<String, PairingOffer>>,
+    /// Wrong codes since the last code was issued.
+    wrong_codes: Mutex<u32>,
     registry: Arc<DeviceRegistry>,
 }
 
@@ -75,6 +80,7 @@ impl PairingService {
     pub fn new(registry: Arc<DeviceRegistry>) -> Self {
         Self {
             offers: Mutex::new(HashMap::new()),
+            wrong_codes: Mutex::new(0),
             registry,
         }
     }
@@ -96,6 +102,7 @@ impl PairingService {
             prune_expired(&mut offers, now_ms);
             offers.insert(code.clone(), offer);
         }
+        *self.wrong_codes.lock() = 0;
 
         let qr = QrPayload {
             version: 1,
@@ -139,7 +146,16 @@ impl PairingService {
         let offer = {
             let mut offers = self.offers.lock();
             prune_expired(&mut offers, now_ms);
-            offers.remove(&code)
+            let offer = offers.remove(&code);
+            if offer.is_none() {
+                let mut wrong = self.wrong_codes.lock();
+                *wrong += 1;
+                if *wrong >= MAX_WRONG_CODES {
+                    // Someone is guessing: no code issued so far works.
+                    offers.clear();
+                }
+            }
+            offer
         };
         let offer = offer.ok_or(CompanionError::PairingCodeInvalid)?;
         if offer.expires_at_ms <= now_ms {
@@ -239,6 +255,30 @@ mod tests {
             mac_name: "Test Mac".to_string(),
             cert_fingerprint_sha256: Some("abc".to_string()),
         }
+    }
+
+    #[test]
+    fn five_wrong_codes_void_every_code_the_mac_has_issued() {
+        let (_tmp, service) = fresh_service();
+        let issued = service.start(1_000, &hint()).pairing_code;
+        let wrong = if issued == "000000" {
+            "111111"
+        } else {
+            "000000"
+        };
+        for _ in 0..MAX_WRONG_CODES {
+            assert!(service
+                .complete(1_001, "Mac", complete_request(wrong))
+                .is_err());
+        }
+        assert!(service
+            .complete(1_002, "Mac", complete_request(&issued))
+            .is_err());
+        // A new code from the Mac works again.
+        let fresh = service.start(1_003, &hint()).pairing_code;
+        assert!(service
+            .complete(1_004, "Mac", complete_request(&fresh))
+            .is_ok());
     }
 
     fn complete_request(code: &str) -> PairCompleteRequest {

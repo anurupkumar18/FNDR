@@ -86,6 +86,7 @@ module doc comment), **verdict**.
 - **4 execute-class tools require approval**: `agent.run`, `start_meeting`, `stop_meeting`, and `fndr.open_target` consult `policy_for_action` and wait for an explicit in-app approval card before dispatch. Missing UI, timeout, decline, or the actions kill switch refuses the action.
 - **Raw captured text is opt-in**: `memory.source_evidence` has `include_raw`, which defaults to false. `memory.search_raw` was removed.
 - **Retrieval feedback is a write**: `agent.rate_result` requires a valid MCP token, actions enabled, and assistant notes enabled before it can append feedback.
+- **Hermes has a server-enforced read grant**: FNDR gives its embedded Hermes runtime a separate process-lifetime token for four memory read tools. The MCP server filters discovery, rejects every other tool or method, and refuses `include_raw=true` on the two reads that support it. It rechecks the saved memory-sharing choice on each request. The full token remains available to local clients through existing owner-controlled discovery; the grant does not isolate a malicious same-user process.
 - **Task and graph reads check current sources**: `memory.todos` uses the same source and historical-event admission as context packs. `memory.graph_context` filters its UUID neighborhood before traversal, including edge provenance. Legacy `memory.graph_query` now searches only memory-backed nodes rebuilt from current authorized records; unattributed entities and edges are omitted. Saved context packs still need separate authorization work.
 - **Saved audit reads refresh their source fields**: MCP `agent.explain_retrieval` and the Agent panel's audit list, detail, and explanation omit excluded or missing memories. Historical titles, URLs, ranking prose, output text, and exclusion reasons are replaced with current-source data or neutral text. Skill/eval draft creation from a saved run still needs its own provenance gate.
 
@@ -116,8 +117,28 @@ callers.
    MCP and UI checks pass.
 2. Remove `memory.search_raw` and `search_memories` (pure duplicates). Done.
 3. Point every merge candidate's callers at its `fndr.*` equivalent, then
-   remove the old name once nothing calls it.
-4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency.
+   remove the old name once nothing calls it. In progress (owner decision,
+   2026-10-15). First slice, 2026-10-15: `fndr.get_memory_subgraph` removed
+   (it always returned an empty graph, and so did the Memory Vault card's
+   "Connected context" line that called its app twin); `agent.privacy_status`
+   folded into `fndr.privacy_status`, `ask_fndr` into `fndr.answer`,
+   `fndr_context` into `fndr.build_context_pack` (which now takes
+   `agent_type` and `active_files`), and `get_fndr_stats` into
+   `fndr.quality_status` (which now also returns the store statistics and
+   capture state). 46 tools. Second slice, 2026-10-15: `memory.search_full_context`
+   folded into `fndr.search` (the search screen's pipeline); `memory.timeline`'s
+   range and grouping now serve `fndr.timeline`; `memory.get_context_pack`,
+   `agent.build_context_pack`, `memory.agent_brief`, `memory.warm_start` and
+   `memory.agent_onboarding` into `fndr.build_context_pack`;
+   `memory.active_focus` renamed `fndr.active_focus`, with the focus task and
+   working state that `get_ambient_context` and
+   `fndr_get_recent_working_state` returned. Hermes' grant is `fndr.search`,
+   `fndr.build_context_pack`, `fndr.timeline` and `memory.source_evidence`
+   (raw text refused). The prompt templates name only listed tools, which a
+   test checks; `turn_workflow_into_skill`, which pointed at a removed skill
+   path, is gone. 37 tools. Left: the graph pair, `memory.project_context`
+   with `memory.project_wiki`, `memory.recent_changes`, and step 4.
+4. Rename `agent.rate_result` to `fndr.rate_result` for naming consistency. Done, 2026-10-15.
 
 Steps 1 and 2 are implemented as separate migrations. Steps 3 and 4 remain
 follow-up work so they can be reviewed independently rather than landing as one

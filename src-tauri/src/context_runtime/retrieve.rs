@@ -108,7 +108,7 @@ pub(crate) fn memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> 
 pub(crate) fn memory_is_permitted(record: &MemoryRecord, blocklist: &[String]) -> bool {
     // Notes are admitted against title, body and project; later rules must
     // apply to those same retained fields when following their links.
-    let context = if record.is_agent_note() {
+    let context = if record.is_leaf_row() {
         format!(
             "{}\n{}\n{}",
             record.window_title, record.clean_text, record.project
@@ -124,6 +124,31 @@ pub(crate) fn memory_is_permitted(record: &MemoryRecord, blocklist: &[String]) -
         && !crate::privacy::Blocklist::is_blocked(&record.app_name, blocklist)
         && !crate::privacy::Blocklist::is_context_blocked(
             record.url.as_deref(),
+            Some(&context),
+            blocklist,
+        )
+}
+
+/// The same access policy for a search result. Surfaces that read results in
+/// bulk (the briefing, the Daily Summary) use it, so a memory from an app or
+/// a page blocked since it was captured is hidden there as it is in Search.
+pub(crate) fn result_is_permitted(result: &SearchResult, blocklist: &[String]) -> bool {
+    let context = if result.is_leaf_row() {
+        format!(
+            "{}\n{}\n{}",
+            result.window_title, result.clean_text, result.project
+        )
+    } else {
+        result.window_title.clone()
+    };
+    !result.is_soft_deleted
+        && !crate::privacy::Blocklist::is_internal_app(
+            &result.app_name,
+            result.bundle_id.as_deref(),
+        )
+        && !crate::privacy::Blocklist::is_blocked(&result.app_name, blocklist)
+        && !crate::privacy::Blocklist::is_context_blocked(
+            result.url.as_deref(),
             Some(&context),
             blocklist,
         )
@@ -224,7 +249,7 @@ pub async fn related_memories(
     // Assistant notes expose only their explicit references. Ordinary memories
     // retain the existing hybrid-similarity fallback using text that survives
     // compaction, with retrieval scores/routes distinguished from stored links.
-    if seed.is_agent_note() {
+    if seed.is_leaf_row() {
         return Ok(Vec::new());
     }
     let query = crate::memory_compaction::best_embedding_text(&seed);
@@ -507,9 +532,13 @@ pub(crate) async fn retrieve_with_fused(
 ///
 /// One case is taken back out. The keyword route also scores rows that hold
 /// few or none of the query's whole words, which lifted unrelated queries
-/// over the bar. When under a third of the words are there, no time or
-/// entity route found the hit, and it is not close in meaning either
+/// over the bar. When under a third of the words are there, the entity
+/// route did not find the hit, and it is not close in meaning either
 /// (`vector` under `STRONG_MATCH_MIN_VECTOR`), the hit is weak.
+///
+/// The time route is not evidence here. It finds every memory in the time
+/// the query names, so "probate documents yesterday" would otherwise be a
+/// strong match for whatever was on screen yesterday.
 fn is_strong_match(hit: &RetrieveHit, terms: &[String], vector: f32) -> bool {
     let words = terms
         .iter()
@@ -530,7 +559,6 @@ fn is_strong_match(hit: &RetrieveHit, terms: &[String], vector: f32) -> bool {
     };
     let only_loose_keyword_support = found_by("keyword")
         && !found_by("chunk")
-        && !found_by("temporal")
         && !found_by("entity")
         && matched * 3 < words.len()
         && vector < STRONG_MATCH_MIN_VECTOR;
@@ -892,6 +920,17 @@ mod tests {
     }
 
     #[test]
+    fn incidental_about_word_does_not_make_unrelated_notes_strong() {
+        let words =
+            QueryContext::from_query("notes from the podcast about sourdough baking").anchor_terms;
+        assert!(!is_strong_match(
+            &found_by(&["vector", "keyword"], 0.3685, &["notes", "about"]),
+            &words,
+            0.2446
+        ));
+    }
+
+    #[test]
     fn other_evidence_keeps_a_match_strong() {
         let words = terms(&["estate", "probate", "trust", "documents"]);
         let routes = ["vector", "keyword"];
@@ -903,9 +942,9 @@ mod tests {
             &words,
             0.18
         ));
-        // The time or entity route also found it.
+        // The entity route also found it.
         assert!(is_strong_match(
-            &found_by(&["vector", "keyword", "temporal"], 0.30, &[]),
+            &found_by(&["vector", "keyword", "entity"], 0.30, &[]),
             &words,
             0.18
         ));
@@ -914,6 +953,74 @@ mod tests {
             &found_by(&routes, 0.20, &["estate", "probate", "trust", "documents"]),
             &words,
             0.0
+        ));
+    }
+
+    #[test]
+    fn a_result_from_an_app_or_page_blocked_since_is_not_permitted() {
+        let result = |app: &str, title: &str, url: Option<&str>| SearchResult {
+            app_name: app.to_string(),
+            window_title: title.to_string(),
+            url: url.map(str::to_string),
+            ..Default::default()
+        };
+        let blocklist = ["Messages".to_string(), "bank.example.com".to_string()];
+        assert!(result_is_permitted(
+            &result("Pages", "Lab 5", None),
+            &blocklist
+        ));
+        assert!(!result_is_permitted(
+            &result("Messages", "Riya", None),
+            &blocklist
+        ));
+        assert!(!result_is_permitted(
+            &result("Safari", "Accounts", Some("https://bank.example.com/home")),
+            &blocklist
+        ));
+        let mut deleted = result("Pages", "Lab 5", None);
+        deleted.is_soft_deleted = true;
+        assert!(!result_is_permitted(&deleted, &[]));
+    }
+
+    #[test]
+    fn imported_leaf_body_is_checked_against_the_current_blocklist() {
+        let blocklist = ["private project".to_string()];
+        let record = MemoryRecord {
+            source_type: "import:mail".into(),
+            app_name: "Mail".into(),
+            window_title: "Status update".into(),
+            clean_text: "The private project shipped.".into(),
+            ..Default::default()
+        };
+        let result = SearchResult {
+            source_type: record.source_type.clone(),
+            app_name: record.app_name.clone(),
+            window_title: record.window_title.clone(),
+            clean_text: record.clean_text.clone(),
+            ..Default::default()
+        };
+        assert!(!memory_is_permitted(&record, &blocklist));
+        assert!(!result_is_permitted(&result, &blocklist));
+    }
+
+    #[test]
+    fn being_in_the_named_time_is_not_evidence_of_the_topic() {
+        // "estate probate trust documents yesterday": the time route finds
+        // every memory from yesterday, whatever it is about.
+        let words = terms(&["estate", "probate", "trust", "documents"]);
+        let routes = ["vector", "keyword", "temporal"];
+        assert!(!is_strong_match(
+            &found_by(&routes, 0.40, &[]),
+            &words,
+            0.18
+        ));
+        // A query that is only a time has no topic words to miss.
+        assert!(is_strong_match(&found_by(&routes, 0.40, &[]), &[], 0.18));
+        // The topic is there as well.
+        assert!(is_strong_match(
+            &found_by(&routes, 0.40, &["estate", "probate"]),
+            &words,
+            0.18
         ));
     }
 

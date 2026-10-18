@@ -15,11 +15,6 @@ vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     findVisuallySimilarMemories: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
-    fndrGetMemorySubgraph: vi.fn().mockResolvedValue({
-        seed_ids: [],
-        node_count: 0,
-        edge_count: 0,
-    }),
     fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrGetRelatedMemories: vi.fn().mockResolvedValue([]),
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),
@@ -103,6 +98,36 @@ describe("MemoryCardsPanel", () => {
         fireEvent.click(within(trace).getByRole("button", { name: "Show Memory Vault loading activity details" }));
         expect(within(trace).getByText("2 memories returned")).toBeInTheDocument();
         expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+    });
+
+    it("offers Try again when the vault cannot load, and loads again on it", async () => {
+        vi.mocked(listMemoryCards).mockRejectedValueOnce(new Error("store busy")).mockResolvedValueOnce([card(1)]);
+        renderVault();
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Memories could not be loaded: store busy");
+        fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+
+        expect(await screen.findByText("Memory 1")).toBeInTheDocument();
+        expect(listMemoryCards).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells an empty vault from a filter with no matches, and clears filters in one click", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+        renderVault();
+        await screen.findByText("Memory 1");
+
+        fireEvent.change(screen.getByRole("searchbox", { name: "Filter memories by text" }), {
+            target: { value: "nothing like this" },
+        });
+        expect(screen.getByText("No memories match these filters.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+        expect(screen.getByText("Memory 1")).toBeInTheDocument();
+
+        cleanup();
+        vi.mocked(listMemoryCards).mockResolvedValue([]);
+        renderVault();
+        expect(await screen.findByText(/No memories yet\. While capture is on/)).toBeInTheDocument();
     });
 
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
@@ -332,6 +357,57 @@ describe("MemoryCardsPanel", () => {
         renderVault();
 
         expect(await screen.findByLabelText("Session time range")).toHaveTextContent(/to/);
+    });
+
+    it("says how long a session ran and shows its most detailed earlier moment", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        const earlier = "Measured the parallel loop with four threads and recorded a speedup of 3.1.";
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            { ...card(1), title: "Latest moment", timestamp: VAULT_NOW - 10 * 60 * 1000 },
+            {
+                ...card(2),
+                title: "Second moment",
+                insight_what_happened: earlier,
+                timestamp: VAULT_NOW - 35 * 60 * 1000,
+            },
+            { ...card(3), title: "First moment", decision_count: 2, timestamp: VAULT_NOW - 52 * 60 * 1000 },
+        ]);
+
+        renderVault();
+
+        expect(await screen.findByRole("button", { name: /^2 more moments/ })).toHaveTextContent(
+            "3 moments over 42 min",
+        );
+        expect(screen.getByText("In this session").parentElement).toHaveTextContent("2 decisions");
+        expect(screen.getByText(earlier)).toBeInTheDocument();
+        expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
+    });
+
+    it("links a session to one in another app that touched the same file", async () => {
+        vi.useFakeTimers({ now: VAULT_NOW, toFake: ["Date"] });
+        vi.mocked(listMemoryCards).mockResolvedValue([
+            {
+                ...card(1),
+                title: "Edited the ranking rule",
+                app_name: "Visual Studio Code",
+                files_touched: ["src/retrieve.rs"],
+                timestamp: VAULT_NOW - 5 * 60 * 1000,
+            },
+            {
+                ...card(2),
+                title: "Ran the tests",
+                app_name: "Terminal",
+                files_touched: ["retrieve.rs"],
+                timestamp: VAULT_NOW - 8 * 60 * 1000,
+            },
+        ]);
+
+        renderVault();
+
+        const [first] = await screen.findAllByText("Same stretch of work");
+        const link = within(first.parentElement!).getByRole("button", { name: "Terminal" });
+        fireEvent.click(link);
+        expect(document.activeElement).toHaveAccessibleName("Open memory: Ran the tests");
     });
 
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {

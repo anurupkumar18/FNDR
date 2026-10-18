@@ -112,6 +112,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut placeholder, mut narrated, mut cut, mut no_why, mut zero_vec, mut same_vec, mut session_noise) = (0, 0, 0, 0, 0, 0, 0);
         let (mut by_source, mut by_status, mut by_intent, mut by_model, mut by_activity) =
             (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // The Vault links moments across apps by project. How many have one?
+        let mut by_project = BTreeMap::new();
+        // How many memories carry a decision, an error or a next step at all?
+        let (mut with_decisions, mut with_errors, mut with_next_steps) = (0usize, 0usize, 0usize);
+        // Which apps carry the label the model reaches for most?
+        let mut agent_review_by_app = BTreeMap::new();
         for row in &rows {
             let lower = row.display_summary.trim().to_lowercase();
             placeholder += usize::from(is_placeholder_summary(&row.display_summary));
@@ -128,6 +134,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tally(&mut by_intent, &row.intent_analysis.intent_label);
             tally(&mut by_model, &format!("{} / {}", row.embedding_model, row.embedding_dim));
             tally(&mut by_activity, &row.activity_type);
+            tally(&mut by_project, if row.project.trim().is_empty() { "(none)" } else { "(has a project)" });
+            with_decisions += usize::from(!row.decisions.is_empty());
+            with_errors += usize::from(!row.errors.is_empty());
+            with_next_steps += usize::from(!row.next_steps.is_empty());
+            if row.activity_type == "reviewing_agent_output" {
+                tally(&mut agent_review_by_app, &row.app_name);
+            }
         }
 
         // How does each card line open, as stored and as shown after the
@@ -141,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if lower.starts_with("the user") || lower.starts_with("you ") || lower.starts_with("user ") {
                 "narrator (the user, you)"
             } else if lower.starts_with("the ") || lower.starts_with("a ") || lower.starts_with("an ") || lower.starts_with("in ") {
-                "describes a thing (the, a, in)"
+                "states what the screen held (the, a, in)"
             } else if matches!(first, "has" | "have" | "had" | "is" | "was" | "are" | "were") {
                 "dangling verb (has, is)"
             } else if first.ends_with("ing") {
@@ -155,21 +168,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut voice_stored, mut voice_shown): (BTreeMap<String, usize>, BTreeMap<String, usize>) =
             (BTreeMap::new(), BTreeMap::new());
         let mut other_first_words: BTreeMap<String, usize> = BTreeMap::new();
+        let mut other_title_overlap: BTreeMap<String, usize> = BTreeMap::new();
         for row in rows.iter().filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_none()) {
             tally(&mut voice_stored, opening(&row.display_summary));
             // The line a card shows: voice cleanup, then a title-based
             // fallback when the sentence is still about the screen.
             let (shown, _fell_back) = fndr_lib::summariser::narration_filter::clean_or_fallback_display_summary(
                 &row.display_summary,
+                &row.app_name,
                 &row.window_title,
                 row.url.as_deref(),
                 row.timestamp,
             );
             tally(&mut voice_shown, opening(&shown));
-            if matches!(opening(&shown), "other" | "-ing word" | "describes a thing (the, a, in)") {
+            if matches!(opening(&shown), "other" | "-ing word") {
                 // Four words show the sentence pattern without quoting the memory.
                 let opener = shown.split_whitespace().take(4).collect::<Vec<_>>().join(" ").to_lowercase();
                 tally(&mut other_first_words, &opener);
+                // Is the line only a label? How much of it is the window
+                // title, and how much more with the app's name counted.
+                let words = |text: &str| -> Vec<String> {
+                    text.to_lowercase()
+                        .split(|c: char| !c.is_alphanumeric())
+                        .filter(|word| word.len() >= 2)
+                        .map(str::to_string)
+                        .collect()
+                };
+                let line = words(&shown);
+                let title = words(&row.window_title);
+                let app = words(&row.app_name);
+                let in_title = line.iter().filter(|word| title.contains(word)).count();
+                let in_either = line.iter().filter(|word| title.contains(word) || app.contains(word)).count();
+                let bucket = if line.is_empty() {
+                    "no words"
+                } else if in_title == line.len() {
+                    "every word is in the window title"
+                } else if in_either == line.len() {
+                    "every word is in the title or the app name"
+                } else if in_either * 2 >= line.len() {
+                    "half or more of the words are in the title or app name"
+                } else {
+                    "mostly its own words"
+                };
+                tally(&mut other_title_overlap, &format!("{bucket}, {} words", if line.len() <= 8 { "8 or fewer" } else { "over 8" }));
             }
         }
         let mut common_other: Vec<_> = other_first_words.into_iter().collect();
@@ -483,9 +524,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "memories": rows.len(),
             "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
-            "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other },
+            "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other, "other_lines_and_the_title": other_title_overlap },
             "weak_summaries": weak_summaries,
-            "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity },
+            "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity, "reviewing_agent_output_by_app": agent_review_by_app },
+"project": by_project,
+                        "extracted_lists": { "with_decisions": pct(with_decisions), "with_errors": pct(with_errors), "with_next_steps": pct(with_next_steps) },
             "search_dedup": dedup,
             "vector_freshness": freshness,
             "unrelated_queries": unrelated,

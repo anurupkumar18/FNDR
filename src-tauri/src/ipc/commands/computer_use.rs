@@ -25,14 +25,15 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use super::codex_account::{
-    configured_mcp_server_names, is_plain_config_key, parse_account, ready_executable, AppServer,
-    READ_ONLY_DISABLED_FEATURES,
+    account_model, configured_mcp_server_names, is_plain_config_key, parse_account,
+    read_only_feature_args, ready_executable, refresh_codex_features, with_model, AppServer,
 };
 use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
 use crate::operator::journal::{redact, Journal, JournalEntry};
 use crate::operator::plan::{self, Plan, PlanStep, StepAction, StepCheck};
 use crate::operator::policy::{classify, Decision, Observed, Risk};
 use crate::operator::{memory, native};
+use crate::workset::{ItemOutcome, Resolution, WorkItem, WorkSet};
 use crate::AppState;
 
 pub const COMPUTER_USE_EVENT: &str = "computer-use://event";
@@ -56,6 +57,21 @@ pub struct StepView {
     pub label: String,
     pub action: StepAction,
     pub app: String,
+    /// What a `reopen_memory` step opens, for the card and the narration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<WorkItem>,
+}
+
+fn step_views(plan: &Plan) -> Vec<StepView> {
+    plan.steps
+        .iter()
+        .map(|step| StepView {
+            label: step.label.clone(),
+            action: step.action,
+            app: step.app.clone(),
+            item: step.item.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +90,12 @@ pub enum ComputerUseEvent {
         steps: Vec<StepView>,
         /// The plan may start by itself: no step in it can need a yes.
         auto_start: bool,
+    },
+    /// A work-set request matched more than one thread about equally; the
+    /// person picks one (ADR 027). The run ends here.
+    Choose {
+        run_id: String,
+        options: Vec<WorkSet>,
     },
     StepStarted {
         run_id: String,
@@ -173,9 +195,16 @@ fn current_run() -> &'static Mutex<Option<RunHandle>> {
 
 // MARK: - Backends
 
+/// Shown when FNDR's own executor cannot start and no other helper is
+/// installed. The ChatGPT app's current Computer Use is one run-any-code tool,
+/// which FNDR cannot decide action by action, so FNDR does not attach it (ADR 026).
+const NO_HELPER: &str = "Notch Do could not start its own click-and-type tools and found no other helper. Reinstall FNDR, or install open-computer-use; the ChatGPT app's Computer Use is not supported.";
+
 /// Which computer-use MCP server the run attaches.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Backend {
+    /// FNDR's own binary, run as `fndr operator-mcp` (ADR 026).
+    Native(PathBuf),
     /// OpenAI's Computer Use plugin, installed with the ChatGPT/Codex app.
     CodexBundled(PathBuf),
     OpenComputerUse(PathBuf),
@@ -184,6 +213,7 @@ pub(crate) enum Backend {
 impl Backend {
     pub(crate) fn label(&self) -> &'static str {
         match self {
+            Backend::Native(_) => "fndr_native",
             Backend::CodexBundled(_) => "codex_computer_use",
             Backend::OpenComputerUse(_) => "open_computer_use",
         }
@@ -191,9 +221,24 @@ impl Backend {
 
     pub(crate) fn path(&self) -> &Path {
         match self {
-            Backend::CodexBundled(path) | Backend::OpenComputerUse(path) => path,
+            Backend::Native(path)
+            | Backend::CodexBundled(path)
+            | Backend::OpenComputerUse(path) => path,
         }
     }
+
+    /// The argument that makes the program speak MCP on stdio.
+    pub(crate) fn mcp_arg(&self) -> &'static str {
+        match self {
+            Backend::Native(_) => "operator-mcp",
+            _ => "mcp",
+        }
+    }
+}
+
+/// FNDR's own executable, which serves the tools itself.
+fn detect_native() -> Option<PathBuf> {
+    std::env::current_exe().ok().filter(|path| path.is_file())
 }
 
 /// The newest installed `computer-use-client-launcher` under a Codex home.
@@ -244,31 +289,42 @@ static BUNDLED_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 const AUTOMATION_REFUSED: &str = "Computer Use was refused Automation access. Allow FNDR under System Settings > Privacy & Security > Automation, then try again; the next run uses open-computer-use if it is installed.";
 
-pub(crate) fn detect_backend() -> Option<Backend> {
-    // A fixed choice for diagnosis: `codex_computer_use` or `open_computer_use`.
-    match std::env::var("FNDR_COMPUTER_USE").ok().as_deref() {
-        Some("open_computer_use") => {
-            return detect_open_computer_use().map(Backend::OpenComputerUse)
-        }
-        Some("codex_computer_use") => {
-            return bundled_computer_use(&super::codex_account::codex_home_dir())
-                .map(Backend::CodexBundled)
-        }
+/// Picks the computer-use server. FNDR's own comes first; the third-party
+/// helpers stay as fallbacks until the twenty-task set passes (ADR 026, item 5).
+/// `forced` is `FNDR_COMPUTER_USE`, a fixed choice for diagnosis.
+fn choose_backend(
+    forced: Option<&str>,
+    native: Option<PathBuf>,
+    bundled: impl FnOnce() -> Option<PathBuf>,
+    open_computer_use: impl FnOnce() -> Option<PathBuf>,
+) -> Option<Backend> {
+    match forced {
+        Some("fndr_native") => return native.map(Backend::Native),
+        Some("open_computer_use") => return open_computer_use().map(Backend::OpenComputerUse),
+        Some("codex_computer_use") => return bundled().map(Backend::CodexBundled),
         _ => {}
     }
-    let bundled = (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
-        .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
-        .flatten()
-        .map(Backend::CodexBundled);
-    bundled.or_else(|| detect_open_computer_use().map(Backend::OpenComputerUse))
+    native
+        .map(Backend::Native)
+        .or_else(|| bundled().map(Backend::CodexBundled))
+        .or_else(|| open_computer_use().map(Backend::OpenComputerUse))
+}
+
+pub(crate) fn detect_backend() -> Option<Backend> {
+    choose_backend(
+        std::env::var("FNDR_COMPUTER_USE").ok().as_deref(),
+        detect_native(),
+        || {
+            (!BUNDLED_REFUSED.load(std::sync::atomic::Ordering::Relaxed))
+                .then(|| bundled_computer_use(&super::codex_account::codex_home_dir()))
+                .flatten()
+        },
+        detect_open_computer_use,
+    )
 }
 
 fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    for feature in READ_ONLY_DISABLED_FEATURES {
-        args.push("--disable".to_string());
-        args.push((*feature).to_string());
-    }
+    let mut args = read_only_feature_args();
     for name in user_mcp_servers
         .iter()
         .filter(|name| name.as_str() != COMPUTER_SERVER)
@@ -287,7 +343,10 @@ fn session_args(user_mcp_servers: &[String], backend: &Backend) -> Result<Vec<St
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.command={command}"),
         "-c".to_string(),
-        format!("mcp_servers.{COMPUTER_SERVER}.args=[\"mcp\"]"),
+        format!(
+            "mcp_servers.{COMPUTER_SERVER}.args=[\"{}\"]",
+            backend.mcp_arg()
+        ),
         "-c".to_string(),
         format!("mcp_servers.{COMPUTER_SERVER}.default_tools_approval_mode=\"prompt\""),
     ]);
@@ -436,9 +495,12 @@ struct PendingApproval {
 
 pub(crate) struct Session {
     server: AppServer,
-    next_id: u64,
     planner_thread: String,
     operator_thread: String,
+    /// The person said no to an action during the turn in progress.
+    declined: bool,
+    /// What the operator said about the last operate step it finished.
+    last_report: Option<String>,
 }
 
 impl Session {
@@ -459,15 +521,19 @@ impl Session {
         let cwd = std::env::temp_dir().join("fndr-computer-use");
         std::fs::create_dir_all(&cwd)
             .map_err(|e| RunError::Failed(format!("Could not prepare Notch Do: {e}")))?;
+        let model = account_model(&mut server).await;
         let thread = |instructions: &'static str, service: &'static str| {
-            json!({
-                "ephemeral": true,
-                "cwd": cwd,
-                "sandbox": "read-only",
-                "approvalPolicy": "on-request",
-                "developerInstructions": instructions,
-                "serviceName": service,
-            })
+            with_model(
+                json!({
+                    "ephemeral": true,
+                    "cwd": cwd,
+                    "sandbox": "read-only",
+                    "approvalPolicy": "on-request",
+                    "developerInstructions": instructions,
+                    "serviceName": service,
+                }),
+                model.as_deref(),
+            )
         };
         let planner = server
             .request(
@@ -493,18 +559,16 @@ impl Session {
             planner_thread: id(planner)?,
             operator_thread: id(operator)?,
             server,
-            next_id: 1_000,
+            declined: false,
+            last_report: None,
         })
     }
 
     async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, RunError> {
-        self.next_id += 1;
-        let id = self.next_id;
         self.server
-            .write(json!({ "method": method, "id": id, "params": params }))
+            .send(method, params)
             .await
-            .map_err(RunError::Failed)?;
-        Ok(id)
+            .map_err(RunError::Failed)
     }
 
     async fn answer(&mut self, request_id: Value, approve: bool) -> Result<(), RunError> {
@@ -545,6 +609,7 @@ impl Session {
                 command = ctx.commands.recv() => match command {
                     Some(RunCommand::Respond { request_key, approve }) => {
                         if let Some(approval) = pending.remove(&request_key) {
+                            self.declined |= !approve;
                             self.answer(approval.request_id, approve).await?;
                             journal(ctx, &approval.tool, &approval.args, Some(approval.risk), if approve { "approved" } else { "declined" }, None);
                             (ctx.emit)(ComputerUseEvent::ApprovalResolved { run_id: ctx.run_id.to_string(), request_key });
@@ -609,6 +674,12 @@ impl Session {
                                     journal(ctx, &tool, &args, Some(risk), "blocked", Some(reason.clone()));
                                     (ctx.emit)(ComputerUseEvent::Blocked { run_id: ctx.run_id.to_string(), index, tool, summary, reason });
                                 }
+                                Risk::Confirm if asks_no_more(self.declined) => {
+                                    // After a no the model tries other routes to the same
+                                    // end (letter keys, set_value). One no covers them all.
+                                    self.answer(request_id, false).await?;
+                                    journal(ctx, &tool, &args, Some(risk), "declined", Some(NO_COVERS_THE_STEP.to_string()));
+                                }
                                 Risk::Confirm => {
                                     let request_key = uuid::Uuid::new_v4().to_string();
                                     (ctx.emit)(ComputerUseEvent::Approval {
@@ -655,7 +726,7 @@ impl Session {
                                         let ok = item.get("status").and_then(Value::as_str) == Some("completed")
                                             && item.get("error").is_none_or(Value::is_null)
                                             && item.pointer("/result/isError").and_then(Value::as_bool) != Some(true);
-                                        record_tool_result(ctx, &tool, &args, ok, &result_text);
+                                        record_tool_result(ctx, &tool, &args, ok, &result_text, tool_result_image_bytes(item));
                                         if result_text.contains("-1743") {
                                             // Apple Events refused: every retry would wait
                                             // minutes for the same answer.
@@ -702,6 +773,23 @@ impl Session {
     }
 }
 
+/// Bytes of pictures in a tool result. A helper with Screen Recording access
+/// attaches a picture of the app's window, and Codex passes it to the model.
+fn tool_result_image_bytes(item: &Value) -> usize {
+    item.pointer("/result/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("image"))
+        .map(|part| {
+            ["data", "image_url", "imageUrl"]
+                .iter()
+                .find_map(|key| part.get(*key).and_then(Value::as_str))
+                .map_or(1, str::len)
+        })
+        .sum()
+}
+
 fn tool_result_text(item: &Value) -> String {
     item.pointer("/result/content")
         .and_then(Value::as_array)
@@ -738,6 +826,15 @@ fn journal(
     }
 }
 
+/// What a tool result carried to the model, for Privacy Activity.
+fn sent_kinds(result_text: &str, image_bytes: usize) -> &'static [&'static str] {
+    match (!result_text.is_empty(), image_bytes > 0) {
+        (true, true) => &["screen_text", "screenshot"],
+        (false, true) => &["screenshot"],
+        _ => &["screen_text"],
+    }
+}
+
 /// Bookkeeping after a computer-use call: what FNDR learned about the UI,
 /// the journal line, and the screen text that went to the model.
 fn record_tool_result(
@@ -746,8 +843,12 @@ fn record_tool_result(
     args: &Value,
     ok: bool,
     result_text: &str,
+    image_bytes: usize,
 ) {
     let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
+    // The risk the call was decided at, before this result changes what
+    // FNDR knows about focus.
+    let risk = classify(tool, args, ctx.observed).risk;
     if ok && tool == "get_app_state" && !app.is_empty() {
         ctx.observed.observe_tree(app, result_text);
     }
@@ -766,15 +867,14 @@ fn record_tool_result(
     if result_text.contains("-1743") {
         BUNDLED_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    if !result_text.is_empty() {
+    if !result_text.is_empty() || image_bytes > 0 {
         crate::privacy_proof::record_model_request_including(
             crate::privacy_proof::Feature::NotchDoScreenText,
             MODEL_HOST,
-            result_text.len(),
-            &["screen_text"],
+            result_text.len() + image_bytes,
+            sent_kinds(result_text, image_bytes),
         );
     }
-    let risk = classify(tool, args, ctx.observed).risk;
     let detail = (!ok).then(|| truncate(result_text, 200));
     journal(
         ctx,
@@ -788,14 +888,49 @@ fn record_tool_result(
 
 // MARK: - A run
 
-fn plan_request_text(transcript: &str, snippets: &[memory::MemorySnippet]) -> String {
-    if snippets.is_empty() {
-        format!("Request: {transcript}")
-    } else {
-        format!(
-            "Request: {transcript}\n\nMemory snippets:\n{}",
+fn plan_request_text(
+    transcript: &str,
+    snippets: &[memory::MemorySnippet],
+    in_front: Option<&str>,
+) -> String {
+    let mut text = format!("Request: {transcript}");
+    if let Some(app) = in_front {
+        // The name only, so "this page" has something to mean.
+        text.push_str(&format!("\nIn front: {app}"));
+    }
+    if !snippets.is_empty() {
+        text.push_str(&format!(
+            "\n\nMemory snippets:\n{}",
             memory::format_block(snippets)
-        )
+        ));
+    }
+    text
+}
+
+/// The app the person is looking at, for the planner and for a paste that
+/// names no app. While FNDR's own notch or command bar is in front, it is the
+/// app they were in when it opened (`looked_at`). Never an app FNDR may not
+/// read, and never FNDR itself.
+fn app_in_front(
+    seen: &plan::Observation,
+    guards: &Guards,
+    looked_at: Option<&str>,
+) -> Option<String> {
+    let front = seen.frontmost_app.trim();
+    let app = if crate::privacy::Blocklist::is_internal_app(front, Some(&seen.frontmost_bundle)) {
+        looked_at.unwrap_or_default().trim()
+    } else {
+        front
+    };
+    (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
+}
+
+/// What a run adds to "Done" when its last operate step reported something:
+/// the answer to a request that only reads, in the model's words and marked so.
+fn with_report(summary: String, report: Option<&str>) -> String {
+    match report.map(str::trim).filter(|report| !report.is_empty()) {
+        Some(report) => format!("{summary} Reported: {}", truncate(report, 400)),
+        None => summary,
     }
 }
 
@@ -827,10 +962,16 @@ struct RunContext {
     guards: Guards,
     /// The person's own words, to tell a link they asked for from one they did not.
     request: String,
+    /// Where the run's record is kept for rating and skills; none in tests.
+    runs: Option<Arc<crate::storage::StateStore>>,
 }
 
+/// A work set of more than this many reopens waits for Start (ADR 027).
+const MAX_AUTO_REOPENS: usize = 3;
+
 /// Whether every step is one that cannot need the person's yes: opening an
-/// app, opening a link their words account for, or playback in a media app.
+/// app, opening a link their words account for, playback in a media app, or
+/// a plan of at most three reopens FNDR resolved itself.
 fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
     plan.steps.iter().all(|step| match step.action {
         StepAction::OpenApp => {
@@ -846,6 +987,17 @@ fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
         StepAction::OpenUrl => plan::link_was_asked_for(&step.url, request),
         StepAction::Operate => {
             !(guards.off_limits)(&step.app) && crate::operator::policy::is_media_app(&step.app)
+        }
+        // The person sees the exact text and taps Allow at the step itself.
+        StepAction::Paste => false,
+        StepAction::ReopenMemory => {
+            plan.steps.len() <= MAX_AUTO_REOPENS
+                && plan
+                    .steps
+                    .iter()
+                    .all(|step| step.action == StepAction::ReopenMemory)
+                && step.item.is_some()
+                && !(guards.off_limits)(&step.app)
         }
     })
 }
@@ -894,9 +1046,43 @@ async fn wait_for_start(
     }
 }
 
+const NO_COVERS_THE_STEP: &str = "the person already said no in this step";
+
+/// Whether to stop asking for the rest of a step: once the person has said
+/// no, nothing else in it that needs a yes is put to them.
+fn asks_no_more(declined_in_this_step: bool) -> bool {
+    declined_in_this_step
+}
+
+/// What the approval card shows of copied text: all of a short one, the
+/// start and the length of a long one.
+fn paste_preview(text: &str) -> String {
+    const SHOWN: usize = 280;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= SHOWN {
+        format!("\u{201c}{flat}\u{201d}")
+    } else {
+        let start: String = flat.chars().take(SHOWN).collect();
+        format!(
+            "\u{201c}{}\u{2026}\u{201d} ({count} characters)",
+            start.trim_end()
+        )
+    }
+}
+
+/// Whether a failed step gets its second attempt. Asking again after the
+/// person declined would put the same question to them twice, and a second
+/// paste would put the text in twice.
+fn worth_retrying(step: &PlanStep, verdict: &plan::Verdict) -> bool {
+    !verdict.ok
+        && step.action != StepAction::Paste
+        && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
+}
+
 /// One attempt at one step; returns what FNDR saw afterward.
 async fn attempt_step(
-    session: &mut Session,
+    session: Option<&mut Session>,
     ctx: &RunContext,
     observed: &mut Observed,
     commands: &mut mpsc::UnboundedReceiver<RunCommand>,
@@ -917,7 +1103,7 @@ async fn attempt_step(
             detail,
         });
     };
-    if step.action != StepAction::OpenUrl && (ctx.guards.off_limits)(&step.app) {
+    if !step.app.is_empty() && (ctx.guards.off_limits)(&step.app) {
         native_entry(
             "open_app",
             json!({ "name": step.app }),
@@ -970,11 +1156,11 @@ async fn attempt_step(
                 if !approved {
                     return Ok(plan::Verdict {
                         ok: false,
-                        detail: "The link was not opened".to_string(),
+                        detail: plan::LINK_DECLINED.to_string(),
                     });
                 }
             }
-            if let Err(error) = native::open_url(&step.url) {
+            if let Err(error) = native::open_url_in(&step.url, &step.app) {
                 native_entry("open_url", args, "failed", Some(error.clone()));
                 return Ok(plan::Verdict {
                     ok: false,
@@ -997,7 +1183,101 @@ async fn attempt_step(
             );
             Ok(verdict)
         }
+        StepAction::ReopenMemory => Ok(plan::Verdict {
+            ok: false,
+            detail: "A reopen runs only in a work set FNDR planned".to_string(),
+        }),
+        StepAction::Paste => {
+            let app = if step.app.is_empty() {
+                app_in_front(
+                    &native::observe(None).await,
+                    &ctx.guards,
+                    native::app_looked_at().as_deref(),
+                )
+            } else {
+                Some(step.app.clone())
+            };
+            let Some(app) = app else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "No app is in front to paste into".to_string(),
+                });
+            };
+            // Empty text pastes what an earlier step copied.
+            let copied = step.text.is_empty();
+            let text = if copied {
+                match crate::capture::clipboard::copied_text() {
+                    Ok(text) => text,
+                    Err(detail) => return Ok(plan::Verdict { ok: false, detail }),
+                }
+            } else {
+                step.text.clone()
+            };
+            let args = json!({ "app": app, "text": text });
+            if (ctx.guards.off_limits)(&app)
+                || classify("paste", &args, observed).risk == Risk::Never
+            {
+                native_entry("paste", args, "blocked", None);
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: format!("FNDR does not paste into {app}"),
+                });
+            }
+            let summary = if copied {
+                format!("Paste what was copied into {app}: {}", paste_preview(&text))
+            } else {
+                format!("Paste \u{201c}{}\u{201d} into {app}", text.trim())
+            };
+            let approved = ask_person(ctx, commands, "paste", summary).await?;
+            native_entry(
+                "paste",
+                args.clone(),
+                if approved { "approved" } else { "declined" },
+                None,
+            );
+            if !approved {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: plan::ACTION_DECLINED.to_string(),
+                });
+            }
+            let (target, pasting) = (app.clone(), text.clone());
+            let pasted = tokio::task::spawn_blocking(move || {
+                // What the person had copied goes back once the field has
+                // been read, by when the app has taken the paste.
+                let previous = (!copied)
+                    .then(crate::capture::clipboard::restorable_text)
+                    .flatten();
+                let pasted = crate::accessibility::paste_into_app(&target, &pasting);
+                if let Some(previous) = previous {
+                    crate::capture::clipboard::put_back(&previous);
+                }
+                pasted
+            })
+            .await
+            .map_err(|error| RunError::Failed(format!("The paste did not finish: {error}")))?;
+            let verdict = match pasted {
+                Ok(field) => plan::verify_paste(&app, &text, field.as_deref()),
+                Err(error) => plan::Verdict {
+                    ok: false,
+                    detail: error,
+                },
+            };
+            native_entry(
+                "paste",
+                args,
+                if verdict.ok { "ok" } else { "failed" },
+                Some(verdict.detail.clone()),
+            );
+            Ok(verdict)
+        }
         StepAction::Operate => {
+            let Some(session) = session else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "Operating an app needs the planner's session".to_string(),
+                });
+            };
             let media_app = (step.check == StepCheck::MediaPlaying).then_some(step.app.as_str());
             let track_before = match media_app {
                 Some(app) => native::media_state(app).await.1,
@@ -1014,6 +1294,7 @@ async fn attempt_step(
                 text.len(),
             );
             let operator_thread = session.operator_thread.clone();
+            session.declined = false;
             let mut turn = TurnContext {
                 run_id: &ctx.run_id,
                 step: Some(index),
@@ -1034,9 +1315,15 @@ async fn attempt_step(
             )
             .await
             .map_err(|_| RunError::Failed(format!("\"{}\" took too long.", step.label)))??;
-            let reported_done = serde_json::from_str::<Value>(&report)
-                .ok()
+            let report = serde_json::from_str::<Value>(&report).ok();
+            let reported_done = report
+                .as_ref()
                 .and_then(|value| value.get("done").and_then(Value::as_bool));
+            session.last_report = report
+                .as_ref()
+                .filter(|_| reported_done == Some(true))
+                .and_then(|value| value.get("detail").and_then(Value::as_str))
+                .map(str::to_string);
             let mut seen = native::observe(media_app).await;
             // Poll only a player that answered: an unreadable one stays unreadable.
             if media_app.is_some() && seen.media_playing == Some(false) {
@@ -1051,7 +1338,14 @@ async fn attempt_step(
             }
             seen.media_track_before = track_before;
             seen.reported_done = reported_done;
-            Ok(plan::verify(step, &seen))
+            let verdict = plan::verify(step, &seen);
+            if !verdict.ok && session.declined {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: plan::ACTION_DECLINED.to_string(),
+                });
+            }
+            Ok(verdict)
         }
     }
 }
@@ -1063,16 +1357,309 @@ async fn run(
     commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
-    let snippets = if plan::refers_to_past(&transcript) {
-        memory::snippets(&state, &transcript).await
-    } else {
+    let saved = crate::workset::saved_sets(&state);
+    let names: Vec<String> = saved.iter().map(|set| set.name.clone()).collect();
+    let skills = crate::operator::skills::list(&state.state_store).unwrap_or_else(|error| {
+        tracing::warn!(%error, "computer_use:skills_load_failed");
         Vec::new()
+    });
+    let skill_names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
+    // Decided before any await: what it is routed against is not Send.
+    let route = {
+        let known = plan::Known {
+            saved_sets: &names,
+            skills: &skill_names,
+            is_app: &native::is_installed,
+        };
+        plan::route(&transcript, &known)
     };
-    run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
+    let (resolution, layout) = match route {
+        plan::Route::Skill { index } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            let plan = Plan {
+                steps: skills[index].steps.clone(),
+            };
+            // Only an operate step needs Codex; opening apps and links does not.
+            let session = if plan
+                .steps
+                .iter()
+                .any(|step| step.action == StepAction::Operate)
+            {
+                Some(operator_session(&codex_pid).await?)
+            } else {
+                None
+            };
+            return carry_out(session, ctx, plan, "skill", commands, Observed::default()).await;
+        }
+        plan::Route::SaveSet { name } => return save_last_set(&state, &ctx, &name),
+        plan::Route::Local { plan } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            return carry_out(None, ctx, plan, "local", commands, Observed::default()).await;
+        }
+        plan::Route::Planner { memory_snippets } => {
+            let snippets = if memory_snippets {
+                memory::snippets(&state, &transcript).await
+            } else {
+                Vec::new()
+            };
+            return run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await;
+        }
+        plan::Route::SavedSet { index, layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (
+                crate::workset::resolve_saved(&state, &saved[index]).await,
+                layout,
+            )
+        }
+        plan::Route::WorkSet { layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (crate::workset::resolve(&state, &transcript).await, layout)
+        }
+    };
+    let open_state = state.clone();
+    run_work_set(
+        ctx,
+        resolution,
+        commands,
+        move |item| {
+            let state = open_state.clone();
+            async move {
+                let id = item.memory_id.clone();
+                crate::workset::open_items(&state, &[item])
+                    .await
+                    .pop()
+                    .unwrap_or(ItemOutcome {
+                        memory_id: id,
+                        label: String::new(),
+                        kind: None,
+                        ok: false,
+                        detail: "Nothing was opened".to_string(),
+                        outcome: None,
+                        arrangement: None,
+                    })
+            }
+        },
+        move |set, opened| async move {
+            let requested: Vec<String> = set
+                .items
+                .iter()
+                .map(|item| item.memory_id.clone())
+                .collect();
+            let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
+            let arranged = match layout {
+                Some(layout) => {
+                    let windows = opened
+                        .iter()
+                        .map(|item| crate::workset::arrange::Opened {
+                            app: item.app_name.clone(),
+                            label: item.label.clone(),
+                        })
+                        .collect();
+                    Some(
+                        crate::workset::arrange::after_open(&state, windows, layout)
+                            .await
+                            .sentence(),
+                    )
+                }
+                None => None,
+            };
+            crate::workset::note_opened(
+                &state,
+                &requested,
+                &ids,
+                &set.title,
+                crate::workset::routines::Source::Notch,
+            );
+            arranged
+        },
+    )
+    .await
+}
+
+/// "Save this as <name>": saves the set this session opened last, on this
+/// Mac, with no planner turn.
+fn save_last_set(state: &AppState, ctx: &RunContext, name: &str) -> Result<(), RunError> {
+    if let Some(reason) = (ctx.guards.halt)() {
+        return Err(RunError::Failed(reason));
+    }
+    let ids = crate::workset::last_opened().ok_or_else(|| {
+        RunError::Failed(
+            "Open a work set first, then say \u{201c}save this as\u{201d} and a name.".to_string(),
+        )
+    })?;
+    let saved =
+        crate::workset::named::save(&state.state_store, name, &ids).map_err(RunError::Failed)?;
+    (ctx.emit)(ComputerUseEvent::Finished {
+        run_id: ctx.run_id.clone(),
+        ok: true,
+        summary: format!(
+            "Saved as \u{201c}{}\u{201d}. Say \u{201c}open {}\u{201d} to bring it back.",
+            saved.name, saved.name
+        ),
+    });
+    Ok(())
+}
+
+/// A work-set request (ADR 027): resolved on this Mac, planned by code from
+/// what FNDR resolved, and opened through the reopen core. No Codex session
+/// and no cloud call. A failed item does not stop the others; Stop and a
+/// halt do. `finish` gets the set and the items that opened, arranges and
+/// logs them, and may return a sentence that leads the summary.
+async fn run_work_set<F, Fut, G, GFut>(
+    ctx: RunContext,
+    resolution: Resolution,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    mut open: F,
+    finish: G,
+) -> Result<(), RunError>
+where
+    F: FnMut(WorkItem) -> Fut,
+    Fut: std::future::Future<Output = ItemOutcome>,
+    G: FnOnce(WorkSet, Vec<WorkItem>) -> GFut,
+    GFut: std::future::Future<Output = Option<String>>,
+{
+    let set = match resolution {
+        Resolution::Best(set) => set,
+        Resolution::Ambiguous(options) => {
+            (ctx.emit)(ComputerUseEvent::Choose {
+                run_id: ctx.run_id.clone(),
+                options,
+            });
+            return Ok(());
+        }
+        Resolution::None { why } => return Err(RunError::Failed(why)),
+    };
+    let plan = plan::from_work_set(&set);
+    (ctx.emit)(ComputerUseEvent::Planned {
+        run_id: ctx.run_id.clone(),
+        auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
+        steps: step_views(&plan),
+    });
+    wait_for_start(&mut commands).await?;
+
+    let mut opened = Vec::new();
+    let mut opened_items = Vec::new();
+    let mut missed = Vec::new();
+    for (index, step) in plan.steps.iter().enumerate() {
+        if let Some(reason) = (ctx.guards.halt)() {
+            return Err(RunError::Failed(reason));
+        }
+        let Some(item) = step.item.clone() else {
+            continue;
+        };
+        (ctx.emit)(ComputerUseEvent::StepStarted {
+            run_id: ctx.run_id.clone(),
+            index,
+            attempt: 1,
+        });
+        let blocked = (ctx.guards.off_limits)(&step.app);
+        let outcome = if blocked {
+            ItemOutcome {
+                memory_id: item.memory_id.clone(),
+                label: item.label.clone(),
+                kind: Some(item.kind),
+                ok: false,
+                detail: format!("{} is off limits", step.app),
+                outcome: None,
+                arrangement: None,
+            }
+        } else {
+            open(item.clone()).await
+        };
+        let _ = ctx.journal.append(&JournalEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            run_id: ctx.run_id.clone(),
+            step: Some(index),
+            tool: "reopen_memory".to_string(),
+            args: redact(&json!({ "memory_id": item.memory_id })),
+            risk: Some(Risk::Runs),
+            outcome: if blocked {
+                "blocked"
+            } else if outcome.ok {
+                "ok"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            detail: Some(outcome.detail.clone()),
+        });
+        let verdict = plan::Verdict {
+            ok: outcome.ok,
+            detail: outcome.detail.clone(),
+        };
+        (ctx.emit)(ComputerUseEvent::StepDone {
+            run_id: ctx.run_id.clone(),
+            index,
+            ok: verdict.ok,
+            checked: plan::checked_by_fndr(step, &verdict),
+            detail: verdict.detail,
+        });
+        if outcome.ok {
+            opened.push(item.label.clone());
+            opened_items.push(item);
+        } else {
+            missed.push(format!("{} ({})", item.label, outcome.detail));
+        }
+    }
+    let lead = if opened_items.is_empty() {
+        None
+    } else {
+        finish(set, opened_items).await
+    };
+    let summary = match (opened.is_empty(), missed.is_empty()) {
+        (_, true) => format!("Opened: {}.", opened.join(", ")),
+        (true, false) => format!("Nothing opened: {}.", missed.join("; ")),
+        (false, false) => format!(
+            "Opened: {}. Not opened: {}.",
+            opened.join(", "),
+            missed.join("; ")
+        ),
+    };
+    let summary = match lead {
+        Some(lead) => format!("{lead} {summary}"),
+        None => summary,
+    };
+    (ctx.emit)(ComputerUseEvent::Finished {
+        run_id: ctx.run_id.clone(),
+        ok: missed.is_empty(),
+        summary,
+    });
+    Ok(())
 }
 
 /// Plans, waits for Start, then runs and checks every step. Everything after
 /// memory retrieval, so it runs without the app's state.
+/// A Codex session with FNDR's computer-use tools attached, for planning and
+/// for `operate` steps. Its process id is kept so Stop can kill it.
+async fn operator_session(codex_pid: &Arc<Mutex<Option<u32>>>) -> Result<Session, RunError> {
+    let codex = ready_executable().map_err(RunError::Failed)?;
+    let backend = detect_backend().ok_or_else(|| RunError::Failed(NO_HELPER.to_string()))?;
+    let user_servers = configured_mcp_server_names(&codex)
+        .await
+        .map_err(RunError::Failed)?;
+    refresh_codex_features(&codex)
+        .await
+        .map_err(RunError::Failed)?;
+    let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
+    let session = Session::open(&codex, &args).await?;
+    if let Ok(mut slot) = codex_pid.lock() {
+        *slot = session.server.pid();
+    }
+    Ok(session)
+}
+
 async fn run_with_snippets(
     ctx: RunContext,
     transcript: String,
@@ -1080,27 +1667,19 @@ async fn run_with_snippets(
     mut commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
-    let codex = ready_executable().map_err(RunError::Failed)?;
-    let backend = detect_backend().ok_or_else(|| {
-        RunError::Failed("Notch Do needs Computer Use. Install the ChatGPT app with Computer Use, or open-computer-use.".to_string())
-    })?;
-    let user_servers = configured_mcp_server_names(&codex)
-        .await
-        .map_err(RunError::Failed)?;
-    let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
-
     (ctx.emit)(ComputerUseEvent::Planning {
         run_id: ctx.run_id.clone(),
         used_memories: snippets.len(),
     });
-
-    let mut session = Session::open(&codex, &args).await?;
-    if let Ok(mut slot) = codex_pid.lock() {
-        *slot = session.server.pid();
-    }
+    let mut session = operator_session(&codex_pid).await?;
     let mut observed = Observed::default();
 
-    let request = plan_request_text(&transcript, &snippets);
+    let in_front = app_in_front(
+        &native::observe(None).await,
+        &ctx.guards,
+        native::app_looked_at().as_deref(),
+    );
+    let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
         MODEL_HOST,
@@ -1134,18 +1713,36 @@ async fn run_with_snippets(
     .map_err(|_| RunError::Failed("Planning took too long.".to_string()))??;
     let plan = plan::parse_plan(&plan_text)
         .map_err(|error| RunError::Failed(plan::explain_empty_plan(error, &ctx.request)))?;
+    let plan = plan::settled(plan, in_front.as_deref());
+    carry_out(Some(session), ctx, plan, "planner", commands, observed).await
+}
+
+/// Shows a plan, waits for it to start, and carries it out step by step.
+/// `session` is the Codex session an `operate` step needs; a plan FNDR made
+/// on this Mac (`plan::local_plan`) has none and starts no Codex.
+async fn carry_out(
+    mut session: Option<Session>,
+    ctx: RunContext,
+    plan: Plan,
+    planned_by: &str,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    mut observed: Observed,
+) -> Result<(), RunError> {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_plan(
+            store,
+            &ctx.run_id,
+            &ctx.request,
+            planned_by,
+            &plan.steps,
+        ) {
+            tracing::warn!(%error, "computer_use:run_record_failed");
+        }
+    }
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
-        steps: plan
-            .steps
-            .iter()
-            .map(|step| StepView {
-                label: step.label.clone(),
-                action: step.action,
-                app: step.app.clone(),
-            })
-            .collect(),
+        steps: step_views(&plan),
     });
 
     wait_for_start(&mut commands).await?;
@@ -1167,7 +1764,7 @@ async fn run_with_snippets(
                 attempt,
             });
             verdict = attempt_step(
-                &mut session,
+                session.as_mut(),
                 &ctx,
                 &mut observed,
                 &mut commands,
@@ -1176,7 +1773,8 @@ async fn run_with_snippets(
                 retry_note.as_deref(),
             )
             .await?;
-            if verdict.ok {
+            // A no from the person is an answer, not a failure to retry.
+            if verdict.ok || !worth_retrying(&plan.steps[index], &verdict) {
                 break;
             }
             retry_note = Some(verdict.detail.clone());
@@ -1189,26 +1787,51 @@ async fn run_with_snippets(
             checked: plan::checked_by_fndr(&plan.steps[index], &verdict),
         });
         if !verdict.ok {
+            let summary = format!(
+                "Stopped at \"{}\": {}",
+                plan.steps[index].label, verdict.detail
+            );
+            record_outcome(&ctx, false, &summary);
             (ctx.emit)(ComputerUseEvent::Finished {
                 run_id: ctx.run_id.clone(),
                 ok: false,
-                summary: format!(
-                    "Stopped at \"{}\": {}",
-                    plan.steps[index].label, verdict.detail
-                ),
+                summary,
             });
-            session.server.shutdown().await;
+            if let Some(session) = session {
+                session.server.shutdown().await;
+            }
             return Ok(());
         }
         done.push(plan.steps[index].label.clone());
     }
+    let summary = plan::with_left_out_note(
+        with_report(
+            format!("Done: {}.", done.join(", ")),
+            session
+                .as_ref()
+                .and_then(|session| session.last_report.as_deref()),
+        ),
+        &ctx.request,
+    );
+    record_outcome(&ctx, true, &summary);
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: format!("Done: {}.", done.join(", ")),
+        summary,
     });
-    session.server.shutdown().await;
+    if let Some(session) = session {
+        session.server.shutdown().await;
+    }
     Ok(())
+}
+
+/// Keeps how a run ended with its record (`operator::runs`).
+fn record_outcome(ctx: &RunContext, ok: bool, summary: &str) {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_outcome(store, &ctx.run_id, ok, summary) {
+            tracing::warn!(%error, "computer_use:run_outcome_failed");
+        }
+    }
 }
 
 fn kill_process_group(pid: u32) {
@@ -1373,6 +1996,7 @@ pub async fn computer_use_plan(
         ),
         guards,
         request: transcript.clone(),
+        runs: Some(state.inner().state_store.clone()),
     };
     let task_state = state.inner().clone();
     let task_app = app.clone();
@@ -1427,6 +2051,112 @@ pub async fn computer_use_plan(
     Ok(run_id)
 }
 
+/// The person's rating of a run that ended. A run rated as not working is
+/// kept as a draft case for the evaluation suite (`operator::runs`).
+#[tauri::command]
+pub async fn notch_do_rate_run(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    worked: bool,
+) -> Result<(), String> {
+    let rating = if worked {
+        crate::operator::runs::Rating::Worked
+    } else {
+        crate::operator::runs::Rating::DidNotWork
+    };
+    crate::operator::runs::rate(&state.inner().state_store, &run_id, rating).map(|_| ())
+}
+
+/// Saves a run that worked as a skill, run again by saying its name.
+#[tauri::command]
+pub async fn notch_do_save_skill(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    name: String,
+) -> Result<String, String> {
+    crate::operator::skills::save_from_run(&state.inner().state_store, &run_id, &name)
+        .map(|skill| skill.name)
+}
+
+/// How many recent runs Settings lists.
+const RUNS_LISTED: usize = 20;
+
+/// A Notch Do run as Settings lists it: the request, how it was planned, its
+/// steps by label, how it ended, the person's rating and whether a skill
+/// could repeat it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoRun {
+    pub run_id: String,
+    pub at: String,
+    pub request: String,
+    pub planned_by: String,
+    pub steps: Vec<String>,
+    pub ok: Option<bool>,
+    pub summary: String,
+    pub rating: Option<crate::operator::runs::Rating>,
+    pub repeatable: bool,
+}
+
+/// A saved skill as Settings lists it, its steps by label.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoSkill {
+    pub id: String,
+    pub name: String,
+    pub request: String,
+    pub steps: Vec<String>,
+    pub saved_at: String,
+}
+
+fn step_labels(steps: &[PlanStep]) -> Vec<String> {
+    steps.iter().map(|step| step.label.clone()).collect()
+}
+
+/// The newest Notch Do runs, so a run can be rated or saved as a skill after
+/// the notch has closed.
+#[tauri::command]
+pub async fn notch_do_runs(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoRun>, String> {
+    Ok(
+        crate::operator::runs::recent(&state.inner().state_store, RUNS_LISTED)?
+            .into_iter()
+            .map(|run| NotchDoRun {
+                repeatable: run.repeatable(),
+                steps: step_labels(&run.steps),
+                run_id: run.run_id,
+                at: run.at,
+                request: run.request,
+                planned_by: run.planned_by,
+                ok: run.ok,
+                summary: run.summary,
+                rating: run.rating,
+            })
+            .collect(),
+    )
+}
+
+#[tauri::command]
+pub async fn notch_do_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoSkill>, String> {
+    Ok(crate::operator::skills::list(&state.inner().state_store)?
+        .into_iter()
+        .map(|skill| NotchDoSkill {
+            steps: step_labels(&skill.steps),
+            id: skill.id,
+            name: skill.name,
+            request: skill.request,
+            saved_at: skill.saved_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn notch_do_delete_skill(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    crate::operator::skills::delete(&state.inner().state_store, &id)
+}
+
 /// Starts the planned run (the plan card's countdown, "go", or a tap).
 #[tauri::command]
 pub async fn computer_use_start(run_id: String) -> Result<(), String> {
@@ -1475,8 +2205,17 @@ pub struct OperatorPermissions {
 /// list, which is what triggers and then proves its macOS permissions.
 async fn probe_backend(backend: &Backend) -> (bool, String) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    if matches!(backend, Backend::Native(_))
+        && !crate::accessibility::has_accessibility_permission()
+    {
+        return (
+            false,
+            "Allow FNDR under System Settings > Privacy & Security > Accessibility, then check again."
+                .to_string(),
+        );
+    }
     let spawned = tokio::process::Command::new(backend.path())
-        .arg("mcp")
+        .arg(backend.mcp_arg())
         .env("CODEX_HOME", super::codex_account::codex_home_dir())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1596,6 +2335,51 @@ mod tests {
     }
 
     #[test]
+    fn fndrs_own_executor_is_attached_with_its_subcommand() {
+        let backend = Backend::Native(PathBuf::from("/Applications/FNDR.app/Contents/MacOS/fndr"));
+        assert_eq!(backend.label(), "fndr_native");
+        let args = session_args(&["computer-use".into()], &backend)
+            .unwrap()
+            .join(" ");
+        assert!(args.contains(
+            "mcp_servers.fndr_computer.command=\"/Applications/FNDR.app/Contents/MacOS/fndr\""
+        ));
+        assert!(args.contains("mcp_servers.fndr_computer.args=[\"operator-mcp\"]"));
+        assert!(args.contains("mcp_servers.fndr_computer.default_tools_approval_mode=\"prompt\""));
+    }
+
+    #[test]
+    fn the_native_backend_wins_and_the_old_helpers_are_fallbacks() {
+        let at = |p: &str| Some(PathBuf::from(p));
+        let pick = |forced: Option<&str>, native: Option<PathBuf>, bundled, open| {
+            choose_backend(forced, native, move || bundled, move || open)
+        };
+        let all = |forced| pick(forced, at("/fndr"), at("/launcher"), at("/occ"));
+        assert_eq!(all(None), Some(Backend::Native("/fndr".into())));
+        assert_eq!(
+            all(Some("open_computer_use")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(
+            all(Some("codex_computer_use")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, at("/launcher"), at("/occ")),
+            Some(Backend::CodexBundled("/launcher".into()))
+        );
+        assert_eq!(
+            pick(None, None, None, at("/occ")),
+            Some(Backend::OpenComputerUse("/occ".into()))
+        );
+        assert_eq!(pick(None, None, None, None), None);
+        assert_eq!(
+            pick(Some("fndr_native"), None, at("/launcher"), at("/occ")),
+            None
+        );
+    }
+
+    #[test]
     fn finds_the_newest_bundled_computer_use() {
         let home = tempfile::tempdir().unwrap();
         for version in ["1.0.900", "1.0.1000926", "1.0.99"] {
@@ -1658,7 +2442,7 @@ mod tests {
     #[test]
     fn memories_reach_the_planner_only_when_retrieved() {
         assert_eq!(
-            plan_request_text("open Spotify", &[]),
+            plan_request_text("open Spotify", &[], None),
             "Request: open Spotify"
         );
         let snippet = memory::MemorySnippet {
@@ -1669,8 +2453,123 @@ mod tests {
             timestamp: 1_790_000_000_000,
             text: "played".into(),
         };
-        let text = plan_request_text("play the song from yesterday", &[snippet]);
+        let text = plan_request_text("play the song from yesterday", &[snippet], Some("Music"));
         assert!(text.contains("Memory snippets:\n[1] 2026-10-05 21:00 | Spotify | Blinding Lights"));
+        assert!(text.starts_with("Request: play the song from yesterday\nIn front: Music\n"));
+    }
+
+    #[test]
+    fn the_planner_learns_the_app_the_person_is_in_even_behind_fndr_unless_it_is_off_limits() {
+        let seen = |app: &str| plan::Observation {
+            frontmost_app: app.to_string(),
+            ..Default::default()
+        };
+        let mut guards = Guards::open();
+        assert_eq!(
+            app_in_front(&seen("Google Chrome"), &guards, Some("Notes")).as_deref(),
+            Some("Google Chrome")
+        );
+        assert_eq!(app_in_front(&seen(""), &guards, None), None);
+        // FNDR's own notch is in front: the app the person was in counts.
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("Safari")).as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(app_in_front(&seen("FNDR"), &guards, None), None);
+        guards.off_limits = Arc::new(|app| app == "1Password" || app.starts_with("FNDR"));
+        assert_eq!(
+            app_in_front(&seen("1Password"), &guards, Some("Safari")),
+            None
+        );
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("1Password")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_run_that_only_read_shows_what_was_reported() {
+        // Live run, 2026-10-08: "summarize the article" ended in a bare "Done".
+        assert_eq!(
+            with_report("Done: Summarize article.".into(), Some(" It argues X. ")),
+            "Done: Summarize article. Reported: It argues X."
+        );
+        assert_eq!(
+            with_report("Done: Open Chrome.".into(), None),
+            "Done: Open Chrome."
+        );
+        assert_eq!(with_report("Done.".into(), Some("  ")), "Done.");
+    }
+
+    #[test]
+    fn a_picture_in_a_tool_result_is_counted_and_named() {
+        // The shape open-computer-use 0.3.6 returned with Screen Recording on.
+        let item = json!({ "result": { "content": [
+            { "type": "text", "text": "App=com.google.Chrome" },
+            { "type": "image", "mimeType": "image/png", "data": "AAAABBBB" }
+        ]}});
+        assert_eq!(tool_result_image_bytes(&item), 8);
+        assert_eq!(sent_kinds("tree", 8), ["screen_text", "screenshot"]);
+        let text_only = json!({ "result": { "content": [{ "type": "text", "text": "tree" }] }});
+        assert_eq!(tool_result_image_bytes(&text_only), 0);
+        assert_eq!(sent_kinds("tree", 0), ["screen_text"]);
+    }
+
+    #[test]
+    fn a_declined_step_is_not_asked_about_twice_and_a_paste_is_never_repeated() {
+        let verdict = |ok: bool, detail: &str| plan::Verdict {
+            ok,
+            detail: detail.to_string(),
+        };
+        let step = |action: StepAction| PlanStep {
+            action,
+            label: "x".into(),
+            app: "Notes".into(),
+            url: String::new(),
+            goal: String::new(),
+            text: "https://zoom.us/j/123".into(),
+            check: StepCheck::Frontmost,
+            item: None,
+        };
+        let open = step(StepAction::OpenApp);
+        assert!(!worth_retrying(&open, &verdict(false, plan::LINK_DECLINED)));
+        assert!(!worth_retrying(
+            &open,
+            &verdict(false, plan::ACTION_DECLINED)
+        ));
+        assert!(worth_retrying(
+            &open,
+            &verdict(false, "Notes is not in front")
+        ));
+        assert!(!worth_retrying(&open, &verdict(true, "")));
+        assert!(
+            !worth_retrying(
+                &step(StepAction::Paste),
+                &verdict(false, "The field in Notes does not show the text")
+            ),
+            "a second paste would put the text in twice"
+        );
+        let paste = Plan {
+            steps: vec![step(StepAction::Paste)],
+        };
+        let guards = Guards {
+            off_limits: Arc::new(|_| false),
+            halt: Arc::new(|| None),
+        };
+        assert!(!plan_starts_by_itself(
+            &paste,
+            "paste the zoom link into Notes",
+            &guards
+        ));
+        assert_eq!(
+            paste_preview("  see\n you  at five "),
+            "\u{201c}see you at five\u{201d}"
+        );
+        let long = paste_preview(&"word ".repeat(100));
+        assert!(
+            long.ends_with("\u{2026}\u{201d} (499 characters)"),
+            "{long}"
+        );
     }
 
     #[test]
@@ -1681,7 +2580,9 @@ mod tests {
             app: "Spotify".into(),
             url: String::new(),
             goal: "play Blinding Lights".into(),
+            text: String::new(),
             check: StepCheck::MediaPlaying,
+            item: None,
         };
         assert_eq!(
             step_request_text(1, 3, &step, None),
@@ -1975,6 +2876,96 @@ mod tests {
         );
     }
 
+    /// The Notch Do suite's planner cases against the real planner, on the
+    /// person's ChatGPT sign-in. Planning only: the session has no
+    /// computer-use tools and a planning turn refuses every tool request, so
+    /// nothing on this Mac is read or done. Writes the raw answers to
+    /// `scripts/operator/recordings/<date>-live.json`, which
+    /// `operator::eval` rescores offline from then on.
+    ///
+    /// `FNDR_NOTCH_DO_LIVE_EVAL=1 cargo test --lib notch_do_live_planner_eval -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "sends the suite's synthetic requests to the planner on the person's ChatGPT plan"]
+    async fn notch_do_live_planner_eval() {
+        if std::env::var("FNDR_NOTCH_DO_LIVE_EVAL").is_err() {
+            return;
+        }
+        let suite = crate::operator::eval::load_suite();
+        let codex =
+            crate::ipc::commands::codex_account::ready_executable().expect("Codex is installed");
+        let mut session = Session::open(&codex, &[])
+            .await
+            .expect("signed in with ChatGPT");
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let emit = |_: ComputerUseEvent| {};
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let guards = Guards::open();
+        let mut answers = serde_json::Map::new();
+        let (mut passed, mut scored) = (0usize, 0usize);
+        for case in suite.cases.iter().filter(|case| {
+            case.plan.is_some() && crate::operator::eval::goes_to_planner(&suite, case)
+        }) {
+            let mut observed = Observed::default();
+            let planner = session.planner_thread.clone();
+            let mut turn = TurnContext {
+                run_id: "eval",
+                step: None,
+                guards: &guards,
+                observed: &mut observed,
+                journal: &journal,
+                emit: &emit,
+                commands: &mut receiver,
+            };
+            let request = plan_request_text(
+                &case.request,
+                &case.synthetic_snippets(),
+                case.in_front.as_deref(),
+            );
+            let answer = tokio::time::timeout(
+                PLAN_TIMEOUT,
+                session.run_turn(&mut turn, &planner, &request, plan::plan_output_schema()),
+            )
+            .await
+            .map_err(|_| "timed out".to_string())
+            .and_then(|answer| answer.map_err(|error| format!("{error:?}")))
+            .unwrap_or_else(|error| format!("ERROR {error}"));
+            let wrong = crate::operator::eval::plan_mismatches(case, &answer);
+            scored += 1;
+            if wrong.is_empty() {
+                passed += 1;
+            }
+            println!(
+                "{}: {}",
+                case.id,
+                if wrong.is_empty() {
+                    "ok".to_string()
+                } else {
+                    wrong.join("; ")
+                }
+            );
+            answers.insert(case.id.clone(), serde_json::Value::String(answer));
+        }
+        session.server.shutdown().await;
+        let share = passed as f64 / scored.max(1) as f64;
+        println!("planner: {passed} of {scored} plans as labeled");
+        let recording = json!({
+            "recorded_at": chrono::Utc::now().to_rfc3339(),
+            "codex": codex.display().to_string(),
+            "prompt_version": crate::inference::prompts::LLM_PROMPT_VERSION,
+            // The share today; rescoring later may not fall below it.
+            "pass_floor": (share * 100.0).floor() / 100.0,
+            "answers": answers,
+        });
+        let path = crate::operator::eval::repo_path(&format!(
+            "scripts/operator/recordings/{}-live.json",
+            chrono::Local::now().format("%Y-%m-%d")
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec_pretty(&recording).unwrap()).unwrap();
+        println!("recorded {}", path.display());
+    }
+
     /// A planner that asks to read the screen is refused: nothing is read or
     /// done before the plan is shown and started.
     #[tokio::test]
@@ -2125,6 +3116,62 @@ mod tests {
         session.server.shutdown().await;
     }
 
+    /// One no covers the step: the routes the model tries next are declined
+    /// without putting each to the person.
+    #[tokio::test]
+    async fn after_a_no_nothing_else_in_the_step_is_put_to_the_person() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(&fake_codex(), &[]).await.unwrap();
+        let (commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorded = asked.clone();
+        let emit = move |event: ComputerUseEvent| {
+            if let ComputerUseEvent::Approval {
+                request_key, tool, ..
+            } = &event
+            {
+                recorded.lock().unwrap().push(tool.clone());
+                commands
+                    .send(RunCommand::Respond {
+                        request_key: request_key.clone(),
+                        approve: false,
+                    })
+                    .unwrap();
+            }
+        };
+        let journal_path = dir.path().join("journal.jsonl");
+        let journal = Journal::new(journal_path.clone());
+        let mut observed = Observed::default();
+        let guards = Guards::open();
+        let operator = session.operator_thread.clone();
+        let mut turn = TurnContext {
+            run_id: "r8",
+            step: Some(0),
+            guards: &guards,
+            observed: &mut observed,
+            journal: &journal,
+            emit: &emit,
+            commands: &mut receiver,
+        };
+        session
+            .run_turn(
+                &mut turn,
+                &operator,
+                "Step 1 of 1. App: Notes. Goal: PERSISTS_AFTER_NO.",
+                plan::step_report_schema(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(*asked.lock().unwrap(), ["type_text"], "asked once");
+        assert!(session.declined);
+        let declined = journal_lines(&journal_path)
+            .iter()
+            .filter(|line| line["outcome"] == "declined")
+            .count();
+        assert_eq!(declined, 3, "all three were declined and journaled");
+        session.server.shutdown().await;
+    }
+
     /// A Codex whose approval wording FNDR cannot read fails with the cause.
     #[tokio::test]
     async fn an_unreadable_action_ends_the_turn_with_the_cause() {
@@ -2178,6 +3225,7 @@ mod tests {
             journal: Journal::new(journal_dir.join("journal.jsonl")),
             guards: Guards::open(),
             request: transcript.clone(),
+            runs: None,
             emit: Arc::new(move |event| {
                 println!(
                     "[{:>5.1}s] {}",
@@ -2279,5 +3327,299 @@ mod tests {
         })
         .unwrap();
         assert_eq!(failed["reconnect"], true);
+    }
+
+    fn work_item(id: &str, label: &str) -> WorkItem {
+        WorkItem {
+            memory_id: id.into(),
+            label: label.into(),
+            kind: crate::workset::ItemKind::Url,
+            reopen_rank: 4,
+            app_name: "Google Chrome".into(),
+            host: Some("canvas.example".into()),
+            page: None,
+            captured_at: 1,
+        }
+    }
+
+    fn work_set(ids: &[&str]) -> WorkSet {
+        WorkSet {
+            id: "ws".into(),
+            title: "Assignment 3".into(),
+            reason: "r".into(),
+            score: 1.0,
+            items: ids
+                .iter()
+                .map(|id| work_item(id, &id.to_uppercase()))
+                .collect(),
+        }
+    }
+
+    type Events = Arc<Mutex<Vec<ComputerUseEvent>>>;
+
+    /// A run context that records its events and starts a plan when shown.
+    fn work_set_run(
+        guards: Guards,
+        dir: &Path,
+    ) -> (RunContext, Events, mpsc::UnboundedReceiver<RunCommand>) {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let events: Events = Arc::default();
+        let recorded = events.clone();
+        let ctx = RunContext {
+            run_id: "w".to_string(),
+            journal: Journal::new(dir.join("journal.jsonl")),
+            guards,
+            request: "pull up everything related to the assignment".to_string(),
+            runs: None,
+            emit: Arc::new(move |event| {
+                if matches!(event, ComputerUseEvent::Planned { .. }) {
+                    let _ = commands.send(RunCommand::Start);
+                }
+                recorded.lock().unwrap().push(event);
+            }),
+        };
+        (ctx, events, receiver)
+    }
+
+    fn fake_open(
+        opened: Arc<Mutex<Vec<String>>>,
+    ) -> impl FnMut(WorkItem) -> std::future::Ready<ItemOutcome> {
+        move |item| {
+            opened.lock().unwrap().push(item.memory_id.clone());
+            let outcome = if item.memory_id == "b" {
+                crate::memory::reopen::ReopenOutcome::Missing {
+                    path: "/Users/k/b.pdf".into(),
+                }
+            } else {
+                crate::memory::reopen::ReopenOutcome::Opened
+            };
+            let verdict = plan::verify_reopen(&outcome);
+            std::future::ready(ItemOutcome {
+                memory_id: item.memory_id,
+                label: item.label,
+                kind: Some(item.kind),
+                ok: verdict.ok,
+                detail: verdict.detail,
+                outcome: Some(outcome),
+                arrangement: None,
+            })
+        }
+    }
+
+    fn no_finish(_: WorkSet, _: Vec<WorkItem>) -> std::future::Ready<Option<String>> {
+        std::future::ready(None)
+    }
+
+    #[tokio::test]
+    async fn the_finish_gets_what_opened_and_its_sentence_leads_the_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let given: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = given.clone();
+        let result = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "b", "c"])),
+            receiver,
+            fake_open(Arc::default()),
+            move |set, opened| {
+                assert_eq!(set.items.len(), 3);
+                *seen.lock().unwrap() = opened.into_iter().map(|item| item.memory_id).collect();
+                std::future::ready(Some("Arranged side by side.".to_string()))
+            },
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(*given.lock().unwrap(), ["a", "c"], "only what opened");
+        let events = events.lock().unwrap();
+        match events.last().unwrap() {
+            ComputerUseEvent::Finished { summary, .. } => assert_eq!(
+                summary,
+                "Arranged side by side. Opened: A, C. Not opened: B (b.pdf is no longer there)."
+            ),
+            other => panic!("expected the end, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_work_set_opens_every_item_and_judges_each_from_its_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let result = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "b", "c"])),
+            receiver,
+            fake_open(opened.clone()),
+            no_finish,
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *opened.lock().unwrap(),
+            ["a", "b", "c"],
+            "a failed item does not stop the rest"
+        );
+        let events = events.lock().unwrap();
+        match &events[0] {
+            ComputerUseEvent::Planned {
+                steps, auto_start, ..
+            } => {
+                assert!(auto_start, "three plain reopens start by themselves");
+                assert_eq!(steps[0].action, StepAction::ReopenMemory);
+                assert_eq!(steps[0].label, "Open A");
+                assert_eq!(steps[1].item.as_ref().unwrap().memory_id, "b");
+            }
+            other => panic!("expected the plan first, got {other:?}"),
+        }
+        let done: Vec<(usize, bool, bool)> = events
+            .iter()
+            .filter_map(|event| match event {
+                ComputerUseEvent::StepDone {
+                    index, ok, checked, ..
+                } => Some((*index, *ok, *checked)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(done, [(0, true, true), (1, false, false), (2, true, true)]);
+        match events.last().unwrap() {
+            ComputerUseEvent::Finished { ok, summary, .. } => {
+                assert!(!ok);
+                assert_eq!(
+                    summary,
+                    "Opened: A, C. Not opened: B (b.pdf is no longer there)."
+                );
+            }
+            other => panic!("expected the end, got {other:?}"),
+        }
+        let journal = journal_lines(&dir.path().join("journal.jsonl"));
+        let outcomes: Vec<&str> = journal
+            .iter()
+            .map(|line| line["outcome"].as_str().unwrap())
+            .collect();
+        assert_eq!(outcomes, ["ok", "failed", "ok"]);
+        assert!(journal.iter().all(|line| line["tool"] == "reopen_memory"));
+    }
+
+    #[test]
+    fn more_than_three_reopens_wait_for_a_tap() {
+        let request = "pull up everything related to the assignment";
+        let open = Guards::open();
+        let three = plan::from_work_set(&work_set(&["a", "b", "c"]));
+        assert!(plan_starts_by_itself(&three, request, &open));
+        let four = plan::from_work_set(&work_set(&["a", "b", "c", "d"]));
+        assert!(!plan_starts_by_itself(&four, request, &open));
+        let blocked = Guards {
+            halt: Arc::new(|| None),
+            off_limits: Arc::new(|app| app == "Google Chrome"),
+        };
+        assert!(!plan_starts_by_itself(&three, request, &blocked));
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_request_offers_a_choice_and_opens_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, events, receiver) = work_set_run(Guards::open(), dir.path());
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let options = vec![work_set(&["a"]), work_set(&["b"])];
+        let result = run_work_set(
+            ctx,
+            Resolution::Ambiguous(options.clone()),
+            receiver,
+            fake_open(opened.clone()),
+            no_finish,
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(opened.lock().unwrap().is_empty());
+        let events = events.lock().unwrap();
+        assert!(
+            matches!(&events[..], [ComputerUseEvent::Choose { options: shown, .. }] if *shown == options)
+        );
+        let none = run_work_set(
+            work_set_run(Guards::open(), dir.path()).0,
+            Resolution::None {
+                why: "Nothing FNDR remembers matches \u{201c}tax\u{201d}.".into(),
+            },
+            mpsc::unbounded_channel().1,
+            fake_open(opened.clone()),
+            no_finish,
+        )
+        .await;
+        assert!(matches!(none, Err(RunError::Failed(why)) if why.contains("tax")));
+    }
+
+    #[tokio::test]
+    async fn stop_and_a_halt_end_a_work_set_before_the_next_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+
+        // Stopped while the plan card is showing: nothing opens.
+        let (commands, receiver) = mpsc::unbounded_channel::<RunCommand>();
+        drop(commands);
+        let (ctx, _, _) = work_set_run(Guards::open(), dir.path());
+        let ctx = RunContext {
+            emit: Arc::new(|_| {}),
+            ..ctx
+        };
+        let stopped = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a"])),
+            receiver,
+            fake_open(opened.clone()),
+            no_finish,
+        )
+        .await;
+        assert_eq!(stopped, Err(RunError::Stopped));
+        assert!(opened.lock().unwrap().is_empty());
+
+        // Actions switched off after the first item: the second never opens.
+        let switched_off = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = switched_off.clone();
+        let guards = Guards {
+            halt: Arc::new(move || {
+                flag.load(std::sync::atomic::Ordering::SeqCst)
+                    .then(|| ACTIONS_OFF.to_string())
+            }),
+            off_limits: Arc::new(|_| false),
+        };
+        let (ctx, _, receiver) = work_set_run(guards, dir.path());
+        let record = opened.clone();
+        let halted = run_work_set(
+            ctx,
+            Resolution::Best(work_set(&["a", "c"])),
+            receiver,
+            move |item| {
+                switched_off.store(true, std::sync::atomic::Ordering::SeqCst);
+                fake_open(record.clone())(item)
+            },
+            no_finish,
+        )
+        .await;
+        assert_eq!(halted, Err(RunError::Failed(ACTIONS_OFF.to_string())));
+        assert_eq!(*opened.lock().unwrap(), ["a"]);
+    }
+
+    #[test]
+    fn a_choice_and_a_reopen_step_serialize_in_the_shape_the_notch_reads() {
+        let choose = serde_json::to_value(ComputerUseEvent::Choose {
+            run_id: "r".into(),
+            options: vec![work_set(&["a"])],
+        })
+        .unwrap();
+        assert_eq!(choose["kind"], "choose");
+        assert_eq!(choose["runId"], "r");
+        assert_eq!(choose["options"][0]["items"][0]["memoryId"], "a");
+        let planned = serde_json::to_value(ComputerUseEvent::Planned {
+            run_id: "r".into(),
+            auto_start: true,
+            steps: step_views(&plan::from_work_set(&work_set(&["a"]))),
+        })
+        .unwrap();
+        assert_eq!(planned["steps"][0]["action"], "reopen_memory");
+        assert_eq!(planned["steps"][0]["item"]["host"], "canvas.example");
+        let plain = serde_json::to_value(step_views(&plan::parse_plan(
+            r#"{"steps":[{"action":"open_app","label":"x","app":"Notes","url":"","goal":"","check":"frontmost"}]}"#,
+        ).unwrap())).unwrap();
+        assert!(plain[0].get("item").is_none());
     }
 }

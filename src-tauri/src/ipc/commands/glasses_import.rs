@@ -21,7 +21,7 @@ use crate::memory_embedding_document::{
     text_embedding_status, upsert_embedding_manifest, VisualSemanticSource,
 };
 use crate::models;
-use crate::ocr::OcrEngine;
+use crate::ocr::{OcrConfig, OcrEngine};
 use crate::storage::MemoryRecord;
 use crate::AppState;
 use chrono::Local;
@@ -159,7 +159,10 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
                 let dynamic =
                     image::load_from_memory(&file_bytes).map_err(|e| format!("decode image: {e}"))?;
                 let png_bytes = dynamic_image_to_png_bytes(&dynamic)?;
-                let engine = OcrEngine::new().map_err(|e| format!("OCR init: {e}"))?;
+                // Manual imports can spend more time reading small labels and
+                // numbers. The capture loop keeps its faster OCR profile.
+                let engine = OcrEngine::with_config(OcrConfig::high_quality())
+                    .map_err(|e| format!("OCR init: {e}"))?;
                 let recognized = engine
                     .recognize_with_metadata(&png_bytes)
                     .map_err(|e| format!("OCR: {e}"))?;
@@ -354,7 +357,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         insight_what_happened: composed.insight_what_happened.clone(),
         insight_why_mattered: composed.insight_why_mattered.clone(),
         insight_card_confidence: insight.confidence,
-        errors: extraction_issues.clone(),
         ..Default::default()
     };
     crate::memory_insight::derive_insight_for_record(&mut embedding_seed);
@@ -536,7 +538,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         insight_context_thread: embedding_seed.insight_context_thread.clone(),
         insight_spans_json: embedding_seed.insight_spans_json.clone(),
         insight_card_confidence: insight.confidence,
-        errors: extraction_issues.clone(),
         ..Default::default()
     };
 
@@ -562,8 +563,6 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
         record.insight_card_confidence = record.evidence_confidence;
         record.quality_gate_reason =
             "visual_metadata_fallback=clip_vector_without_pixel_vlm_semantics".to_string();
-    } else if !extraction_issues.is_empty() {
-        record.outcome = "vision_semantic_extraction_failed".to_string();
     }
 
     state

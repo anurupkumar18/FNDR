@@ -1,0 +1,70 @@
+@import "../../shared/theme/receipts.css";
+
+/* What FNDR seals and what it leaves to the Mac, side by side, so the claim
+   can be checked at a glance. Sealed items carry a tick; the rest carry an
+   open ring. */
+.encryption-status {
+    display: grid;
+    gap: 14px;
+    margin-block: var(--s-5);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--rc-line);
+    color: var(--rc-text);
+    font-family: var(--font-body);
+}
+.encryption-status h2 { margin: 0; font: 650 var(--t-h3)/1.15 var(--font-display); letter-spacing: -0.018em; }
+.encryption-status h3 { margin: 0 0 8px; font: 600 13.5px/1.3 var(--font-body); }
+.encryption-status [role="status"] { margin: 0; color: var(--rc-text-2); font-size: 13.5px; }
+
+.encryption-status-filevault {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0;
+    font: 600 14.5px/1.3 var(--font-body);
+}
+.encryption-status-filevault::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--rc-text-2);
+}
+.encryption-status-filevault[data-state="on"]::before { background: var(--rc-accent); }
+.encryption-status-filevault[data-state="off"]::before { background: var(--rc-clay-solid); }
+
+.encryption-status-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 18px 32px;
+}
+.encryption-status ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.encryption-status li {
+    position: relative;
+    padding-left: 22px;
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: var(--rc-text-2);
+}
+.encryption-status li::before {
+    content: "";
+    position: absolute;
+    left: 1px;
+    top: 0.42em;
+    width: 11px;
+    height: 11px;
+    box-sizing: border-box;
+}
+.encryption-status .is-sealed li::before {
+    border-right: 2px solid var(--rc-accent);
+    border-bottom: 2px solid var(--rc-accent);
+    width: 6px;
+    height: 11px;
+    left: 4px;
+    top: 0.2em;
+    transform: rotate(40deg);
+}
+.encryption-status .is-open li::before {
+    border: 1.5px solid var(--rc-line-strong);
+    border-radius: 50%;
+}

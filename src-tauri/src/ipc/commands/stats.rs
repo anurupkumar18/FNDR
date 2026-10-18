@@ -65,6 +65,7 @@ pub struct CaptureStatus {
     pub ai_model_available: bool,
     pub ai_model_loaded: bool,
     pub loaded_model_id: Option<String>,
+    pub last_text_backend: String,
     pub embedding_backend: String,
     pub embedding_degraded: bool,
     pub embedding_detail: String,
@@ -94,6 +95,7 @@ pub fn build_capture_status(state: &AppState) -> CaptureStatus {
         ai_model_available: state.ai_model_available(),
         ai_model_loaded: state.ai_model_loaded(),
         loaded_model_id: state.loaded_model_id(),
+        last_text_backend: state.last_text_backend(),
         embedding_backend: embed_status.backend,
         embedding_degraded: embed_status.degraded,
         embedding_detail: embed_status.detail,
@@ -109,6 +111,7 @@ pub fn build_capture_status(state: &AppState) -> CaptureStatus {
 pub fn emit_capture_status(state: &AppState) {
     let handle = state.app_handle.read().clone();
     if let Some(handle) = handle {
+        crate::privacy::recording::refresh_indicator(&handle, state);
         let _ = handle.emit("capture://status", build_capture_status(state));
     }
 }
@@ -267,6 +270,16 @@ fn resume_capture_for_user(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn toggle_capture_for_user(state: &AppState) -> Result<bool, String> {
+    if state.is_user_capture_paused() {
+        resume_capture_for_user(state)?;
+        Ok(false)
+    } else {
+        set_capture_paused_for_user(state, true)?;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod capture_pause_persistence_tests {
     use super::*;
@@ -348,6 +361,16 @@ mod capture_pause_persistence_tests {
         let relaunched = fixture.app_state();
         assert!(!relaunched.is_paused.load(Ordering::SeqCst));
         assert!(relaunched.is_capturing());
+    }
+
+    #[test]
+    fn shortcut_toggle_persists_pause_and_resume() {
+        let fixture = StateFixture::new();
+        let state = fixture.app_state();
+        assert_eq!(toggle_capture_for_user(&state).unwrap(), true);
+        assert!(!fixture.app_state().is_capturing());
+        assert_eq!(toggle_capture_for_user(&state).unwrap(), false);
+        assert!(fixture.app_state().is_capturing());
     }
 
     #[test]
@@ -618,9 +641,15 @@ pub(crate) fn build_daily_activity_summary(records: &[SearchResult], day_label: 
 
 /// Daily summaries are another reader of persisted memories, so they must
 /// honor the same low-signal admission policy as Search, Vault, and Ask.
-pub(crate) fn surfaceable_daily_records(records: Vec<SearchResult>) -> Vec<SearchResult> {
+pub(crate) fn surfaceable_daily_records(
+    records: Vec<SearchResult>,
+    blocklist: &[String],
+) -> Vec<SearchResult> {
     let (mut surfaceable, _low_signal) =
         partition_surfaceable(strip_internal_fndr_results(records));
+    // An app or page blocked since the capture is hidden here as in Search.
+    surfaceable
+        .retain(|record| crate::context_runtime::retrieve::result_is_permitted(record, blocklist));
     // A notification banner or a login prompt is not an app the person used.
     surfaceable.retain(|record| !crate::tasks::suggest::is_system_surface(&record.app_name));
     surfaceable
@@ -932,7 +961,8 @@ pub async fn generate_daily_summary_for_date(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = surfaceable_daily_records(records);
+    let blocklist = state.config.read().blocklist.clone();
+    let records = surfaceable_daily_records(records, &blocklist);
 
     if records.is_empty() {
         return Ok("No memories recorded for this date.".to_string());
@@ -975,7 +1005,8 @@ pub async fn get_daily_summary_overview(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = surfaceable_daily_records(records);
+    let blocklist = state.config.read().blocklist.clone();
+    let records = surfaceable_daily_records(records, &blocklist);
     if records.is_empty() {
         return Ok(String::new());
     }
@@ -1122,7 +1153,11 @@ pub async fn get_weekly_wrapped(
         .get_search_results_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
-    let records = strip_internal_fndr_results(records);
+    // Usage names apps, sites and documents: the blocklist applies here too.
+    let blocklist = state.config.read().blocklist.clone();
+    let mut records = strip_internal_fndr_results(records);
+    records
+        .retain(|record| crate::context_runtime::retrieve::result_is_permitted(record, &blocklist));
 
     let mut app_groups: HashMap<String, Vec<i64>> = HashMap::new();
     let mut website_groups: HashMap<String, Vec<i64>> = HashMap::new();
@@ -1314,6 +1349,11 @@ pub async fn get_time_tracking(
         .get_memories_in_range(today_start_ms, now_ms)
         .await
         .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    let records = records
+        .into_iter()
+        .filter(|record| crate::context_runtime::retrieve::memory_is_permitted(record, &blocklist))
+        .collect::<Vec<_>>();
 
     // Group timestamps by app_name
     let mut app_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
@@ -1470,6 +1510,7 @@ pub fn current_runtime_snapshot(
 pub async fn get_runtime_metrics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::telemetry::runtime_metrics::RuntimeMetricsSnapshot, String> {
+    crate::telemetry::system_metrics::note_display_read();
     Ok(current_runtime_snapshot(state.inner()))
 }
 
@@ -1534,21 +1575,48 @@ mod daily_summary_wording_tests {
     }
 
     #[test]
+    fn an_app_blocked_since_the_capture_is_left_out_of_the_day() {
+        let day = || {
+            vec![
+                capture(
+                    "Messages",
+                    "Riya",
+                    "Agreed to the airport pickup at six.",
+                    0,
+                ),
+                capture(
+                    "Mail",
+                    "Inbox - Lab 4 report",
+                    "Replied to the lab report thread with the draft.",
+                    1,
+                ),
+            ]
+        };
+        assert_eq!(surfaceable_daily_records(day(), &[]).len(), 2);
+        let kept = surfaceable_daily_records(day(), &["Messages".to_string()]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].app_name, "Mail");
+    }
+
+    #[test]
     fn system_processes_are_left_out_of_the_day() {
-        let kept = surfaceable_daily_records(vec![
-            capture(
-                "UserNotificationCenter",
-                "Notification",
-                "A banner about a calendar event appeared.",
-                0,
-            ),
-            capture(
-                "Mail",
-                "Inbox - Lab 4 report",
-                "Replied to the lab report thread with the draft.",
-                1,
-            ),
-        ]);
+        let kept = surfaceable_daily_records(
+            vec![
+                capture(
+                    "UserNotificationCenter",
+                    "Notification",
+                    "A banner about a calendar event appeared.",
+                    0,
+                ),
+                capture(
+                    "Mail",
+                    "Inbox - Lab 4 report",
+                    "Replied to the lab report thread with the draft.",
+                    1,
+                ),
+            ],
+            &[],
+        );
         assert_eq!(
             kept.iter()
                 .map(|record| record.app_name.as_str())
