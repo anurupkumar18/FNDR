@@ -11,7 +11,7 @@ import {
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
-import { getAppleModelStatus, setAppleModelEnabled } from "@/shared/ipc/onboarding";
+import { downloadModel, getAppleModelStatus, listAvailableModels, setAppleModelEnabled } from "@/shared/ipc/onboarding";
 
 const checkUpdateMock = vi.fn();
 
@@ -472,6 +472,38 @@ describe("ControlPanel", () => {
         openTab("Capture");
         openTab("Privacy");
         expect(screen.getByRole("textbox", { name: /app or website/i })).toHaveValue("bank.example");
+    });
+
+    it("lets people download an optional model from Settings", async () => {
+        vi.mocked(listAvailableModels).mockResolvedValueOnce([{
+            id: "qwen3-vl-2b",
+            name: "Qwen3-VL 2B",
+            description: "Adds richer visual understanding to search.",
+            size_bytes: 1_600_000_000,
+            size_label: "1.6 GB",
+            quality_label: "Higher visual detail",
+            speed_label: "Fast",
+            ram_gb: 4,
+            recommended: false,
+            required: false,
+            filename: "qwen3-vl-2b.gguf",
+            download_url: "https://models.example.test/qwen3-vl-2b.gguf",
+        }]);
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+
+        const model = await screen.findByText("Qwen3-VL 2B");
+        const option = model.closest(".model-download-option");
+        expect(option).not.toBeNull();
+        fireEvent.click(within(option as HTMLElement).getByRole("button", { name: "Get it" }));
+
+        await waitFor(() => expect(downloadModel).toHaveBeenCalledWith(
+            "qwen3-vl-2b",
+            "https://models.example.test/qwen3-vl-2b.gguf",
+            "qwen3-vl-2b.gguf",
+        ));
+        expect(await screen.findByRole("status")).toHaveTextContent(/is downloading/i);
     });
 
     it("shows a read-only warning when capture cannot use its embedding model", async () => {

@@ -661,15 +661,21 @@ pub async fn download_model(
     download_url: String,
     filename: String,
 ) -> Result<(), String> {
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
+    if let Some(definition) = models::model_by_id(&model_id) {
+        let available = available_disk_bytes(&app_data_dir)?;
+        let required = definition.size_bytes.saturating_add(definition.size_bytes / 10);
+        if available < required {
+            return Err(format!(
+                "Not enough free disk space for {}. Free up at least {} more before downloading.",
+                definition.name,
+                required.saturating_sub(available),
+            ));
+        }
+    }
     if DOWNLOAD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("A download is already in progress".into());
     }
-
-    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| {
-        // Reset the flag so future downloads are not permanently blocked
-        DOWNLOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
-        e.to_string()
-    })?;
     let dest_path = models::models_dir(app_data_dir.as_path()).join(&filename);
     let temp_path = models::partial_model_path(app_data_dir.as_path(), &filename);
 
@@ -706,6 +712,26 @@ pub async fn download_model(
     });
 
     Ok(())
+}
+
+fn available_disk_bytes(path: &std::path::Path) -> Result<u64, String> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+            return Err(format!("Could not check free disk space: {}", std::io::Error::last_os_error()));
+        }
+        Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(u64::MAX)
+    }
 }
 
 /// Download every file a model needs: pinned extra files first (they are
@@ -1100,7 +1126,13 @@ pub async fn delete_ai_model(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_biometric_helper_output, system_settings_url};
+    use super::{available_disk_bytes, parse_biometric_helper_output, system_settings_url};
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_available_disk_space_before_model_downloads() {
+        assert!(available_disk_bytes(&std::env::temp_dir()).unwrap() > 0);
+    }
 
     #[test]
     fn resolves_voice_permission_settings_panes() {

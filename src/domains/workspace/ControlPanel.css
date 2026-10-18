@@ -904,6 +904,21 @@
     display: block;
 }
 
+.model-download-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.4;
+}
+
+.model-download-option .ui-action-btn {
+    flex: 0 0 auto;
+}
+
 /* ========== Model Management ========== */
 .model-row {
     border: 1px solid rgba(62, 39, 35, 0.08);
