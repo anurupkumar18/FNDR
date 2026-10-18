@@ -95,3 +95,5 @@ fastlane/test_output/
 
 # Local browser-audit artifacts
 .playwright-cli/
+playwright-report/
+test-results/
