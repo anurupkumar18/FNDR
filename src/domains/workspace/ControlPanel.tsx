@@ -25,6 +25,7 @@ import {
     getAppleModelStatus,
     getOnboardingState,
     listAvailableModels,
+    downloadModel,
     saveOnboardingState,
     setAppleModelEnabled,
 } from "@/shared/ipc/onboarding";
@@ -195,6 +196,7 @@ export function ControlPanel({
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMessage, setProfileMessage] = useState<string | null>(null);
     const [models, setModels] = useState<ModelInfo[]>([]);
+    const [modelsMessage, setModelsMessage] = useState<string | null>(null);
     const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
     const [appleModelBusy, setAppleModelBusy] = useState(false);
     const [appleModelError, setAppleModelError] = useState<string | null>(null);
@@ -503,6 +505,16 @@ export function ControlPanel({
     const settingsTabs = SETTINGS_TABS.map((tab) =>
         tab.id === "privacy" ? { ...tab, badge: privacyAlertCount } : tab,
     );
+
+    const handleGetModel = async (model: ModelInfo) => {
+        setModelsMessage(null);
+        try {
+            await downloadModel(model.id, model.download_url, model.filename);
+            setModelsMessage(`${model.name} is downloading and will be ready in Settings when it finishes.`);
+        } catch {
+            setModelsMessage(`FNDR could not start ${model.name}. Check free disk space and try again.`);
+        }
+    };
 
     const stored = status?.pipeline.stored_total ?? qualityStatus?.stored_count ?? 0;
     const skipped = status?.pipeline.skipped_total ?? qualityStatus?.dropped_count ?? 0;
@@ -907,6 +919,15 @@ export function ControlPanel({
                                             <li>No local models are ready. Finish model setup to enable AI features.</li>
                                         )}
                                     </ul>
+                                    {models.filter((model) => !model.required && model.download_url !== "already_downloaded").map((model) => (
+                                        <div key={model.id} className="model-download-option">
+                                            <span><strong>{model.name}</strong> · {model.size_label} · {model.description}</span>
+                                            <button type="button" className="ui-action-btn btn-secondary" onClick={() => void handleGetModel(model)}>
+                                                Get it
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {modelsMessage && <p className="section-hint" role="status">{modelsMessage}</p>}
                                 </section>
                                 <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
                                     <h3 id="settings-updates-title">Updates</h3>

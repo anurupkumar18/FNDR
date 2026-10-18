@@ -39,10 +39,13 @@ export async function requestBiometricAuth(reason: string): Promise<boolean> {
 
 // ── Permissions ───────────────────────────────────────────────────────────
 
+export type PermissionState = "not_determined" | "restricted" | "denied" | "granted";
+
 export interface PermissionsStatus {
-    screen_recording: boolean;
-    accessibility: boolean;
-    microphone: boolean;
+    screen_recording: PermissionState;
+    accessibility: PermissionState;
+    microphone: PermissionState;
+    speech_recognition: PermissionState;
 }
 
 export async function checkPermissions(): Promise<PermissionsStatus> {

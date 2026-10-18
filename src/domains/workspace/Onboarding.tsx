@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
+    type PermissionState,
     OnboardingState,
     OnboardingStep,
     ModelInfo,
@@ -232,7 +233,12 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
 
 // ── Step 4: Permissions ───────────────────────────────────────────────────
 function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
-    const [perms, setPerms] = useState({ screen_recording: false, accessibility: false, microphone: false });
+    const [perms, setPerms] = useState<Record<"screen_recording" | "accessibility" | "microphone" | "speech_recognition", PermissionState>>({
+        screen_recording: "not_determined",
+        accessibility: "not_determined",
+        microphone: "not_determined",
+        speech_recognition: "not_determined",
+    });
     const [permissionActivity, setPermissionActivity] = useState<ActivityTraceSnapshot | null>(null);
 
     const refresh = useCallback(async (isMounted: () => boolean = () => true) => {
@@ -258,16 +264,16 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             if (!isMounted()) return;
             setPerms(p);
             const finishedAtMs = Date.now();
-            const granted = Object.values(p).filter(Boolean).length;
+            const granted = Object.values(p).filter((permission) => permission === "granted").length;
             setPermissionActivity(recordActivityStep(startedTrace, {
                 id: "permission-check",
                 label: "macOS permission status checked",
                 actor: "macOS permission service",
-                status: granted === 3 ? "completed" : "degraded",
+                status: granted === 4 ? "completed" : "degraded",
                 evidence: "result-metadata",
                 atMs: finishedAtMs,
                 durationMs: finishedAtMs - startedAtMs,
-                detail: `${granted} of 3 permissions granted`,
+                detail: `${granted} of 4 permissions granted`,
             }));
         } catch {
             if (!isMounted()) return;
@@ -285,6 +291,12 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
     }, []);
 
     usePolling(refresh, 2500);
+
+    useEffect(() => {
+        const refreshAfterSettings = () => void refresh();
+        window.addEventListener("focus", refreshAfterSettings);
+        return () => window.removeEventListener("focus", refreshAfterSettings);
+    }, [refresh]);
 
     async function openSettings(pane: Parameters<typeof openSystemSettings>[0]) {
         const startedAtMs = Date.now();
@@ -333,12 +345,12 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
         onSave({
             ...state,
             step: "bring_past",
-            screen_permission: perms.screen_recording,
-            accessibility_permission: perms.accessibility,
+            screen_permission: perms.screen_recording === "granted",
+            accessibility_permission: perms.accessibility === "granted",
         });
     }
 
-    const canContinue = perms.screen_recording;
+    const canContinue = perms.screen_recording === "granted";
 
     return (
         <>
@@ -377,8 +389,15 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                     desc: "Optional — for meeting transcription, voice search, and voice control",
                     pane: "microphone" as const,
                 },
+                {
+                    key: "speech_recognition" as const,
+                    icon: "mic" as IconName,
+                    label: "Speech Recognition",
+                    desc: "Optional — turns spoken requests into text on this Mac",
+                    pane: "speech-recognition" as const,
+                },
             ].map(({ key, icon, label, desc, pane }) => (
-                <div className={`ob-permission-row ${perms[key] ? "granted" : ""}`} key={key}>
+                <div className={`ob-permission-row ${perms[key] === "granted" ? "granted" : ""}`} key={key}>
                     <div className="ob-permission-left">
                         <span className="ob-permission-icon"><Icon name={icon} size={18} /></span>
                         <div>
@@ -386,16 +405,21 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                             <div className="ob-permission-desc">{desc}</div>
                         </div>
                     </div>
-                    {perms[key] ? (
-                        <span className="ob-permission-badge" aria-label="Granted"><Icon name="check-circle" size={18} /></span>
+                    {perms[key] === "granted" ? (
+                        <span className="ob-permission-badge" aria-label={`${label}: Granted`}><Icon name="check-circle" size={18} /></span>
                     ) : (
-                        <button
-                            id={`ob-perm-${pane}`}
-                            className="ob-permission-btn"
-                            onClick={() => openSettings(pane)}
-                        >
-                            Grant
-                        </button>
+                        <div>
+                            <span className="ob-permission-status" aria-label={`${label}: ${perms[key] === "denied" ? "Denied" : perms[key] === "restricted" ? "Restricted" : "Not granted yet"}`}>
+                                {perms[key] === "denied" ? "Denied" : perms[key] === "restricted" ? "Restricted" : "Not granted"}
+                            </span>
+                            <button
+                                id={`ob-perm-${pane}`}
+                                className="ob-permission-btn"
+                                onClick={() => openSettings(pane)}
+                            >
+                                Open Settings
+                            </button>
+                        </div>
                     )}
                 </div>
             ))}
