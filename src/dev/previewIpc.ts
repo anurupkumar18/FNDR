@@ -902,6 +902,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         model_id: "qwen3-vl-2b",
         display_name: "Anurup",
     };
+    let previewVoiceSession: string | null = null;
+    let previewVoiceSessionCount = 0;
     let previewBlocklist = ["1Password", "bank.example"];
     const importKinds = ["browser", "file", "calendar", "mail", "slack", "git"];
     const importConsent = new Set<string>();
@@ -1088,6 +1090,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "get_status":
                 return { ...previewCaptureStatus, pipeline: { ...previewCaptureStatus.pipeline } };
+            case "voice_start": {
+                if (previewVoiceSession) throw new Error("A preview voice session is already active.");
+                const args = payloadRecord(payload);
+                if (typeof args?.surface !== "string" || typeof args?.mode !== "string") {
+                    throw new Error("Preview voice_start requires a surface and mode.");
+                }
+                previewVoiceSession = `preview-voice-${++previewVoiceSessionCount}`;
+                return { sessionId: previewVoiceSession };
+            }
+            case "voice_stop":
+                if (payloadRecord(payload)?.sessionId !== previewVoiceSession) {
+                    throw new Error("Preview voice_stop requires the active session.");
+                }
+                previewVoiceSession = null;
+                return undefined;
+            case "voice_cancel":
+                if (payloadRecord(payload)?.sessionId === previewVoiceSession) previewVoiceSession = null;
+                return undefined;
             case "pause_capture":
                 previewCaptureStatus = { ...previewCaptureStatus, is_paused: true };
                 await emitPreviewEventIfAvailable(CAPTURE_STATUS_EVENT, previewCaptureStatus);
@@ -1185,6 +1205,20 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return "Always allowed.";
             case "mcp_connect_status":
                 return previewMcpStatus();
+            case "mcp_connect_preview": {
+                const client = previewMcpStatus().clients.find(
+                    (entry) => entry.id === payloadRecord(payload)?.clientId,
+                );
+                if (!client) throw new Error("Preview connection setup requires a known client.");
+                const text = JSON.stringify({ mcpServers: { fndr: { url: previewMcpStatus().endpoint } } }, null, 2);
+                return {
+                    title: `Connect ${client.name} to FNDR`,
+                    path: client.configPath,
+                    text,
+                    maskedText: text,
+                    command: null,
+                };
+            }
             case "resolve_action_approval":
                 throw new Error("No action is waiting for approval in preview.");
             case "get_action_settings":
