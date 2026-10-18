@@ -1,6 +1,6 @@
 # Test audit
 
-Measured 2026-10-18 on the current `origin/main` worktree. The ticket says 55 frontend files; the repository now has 115. There are 23 top-level Rust integration files. Frontend runtime is elapsed time per file from one passing Vitest JSON run (909 tests, 115 files); parallel file times do not sum to wall time. Rust runtime is elapsed time from cached integration binaries built against this code line, excluding compilation, with two test threads. `capture_fixtures.rs` required an unsandboxed rerun because macOS CoreVideo could not create a pixel buffer in the sandbox. Runtimes vary with machine load.
+Measured 2026-10-18 on the current `origin/main` worktree. The ticket says 55 frontend files; the repository now has 116, including the new QT-03 journey file. There are 23 top-level Rust integration files. Frontend runtime is elapsed time per file from one passing Vitest JSON run (907 tests, 115 files), plus a focused six-test run for the new journey file. Parallel file times do not sum to wall time. Rust runtime is elapsed time from cached integration binaries built against this code line, excluding compilation, with two test threads. `capture_fixtures.rs` required an unsandboxed rerun because macOS CoreVideo could not create a pixel buffer in the sandbox. Runtimes vary with machine load.
 
 Mount labels: **Main** is reachable in the primary app, **Aux** in a separate app window, **Conditional** behind a feature toggle or dev view, **Dev** in preview or engineering checks, **Shared** used by mounted surfaces, and **No** has no production mount found. A mounted label is reachability, not proof that the test itself drives the full surface.
 
@@ -94,6 +94,7 @@ Mount labels: **Main** is reachable in the primary app, **Aux** in a separate ap
 | `src/domains/workspace/StatsPanel.test.tsx` | People can inspect capture and usage statistics | Main | 295 ms |
 | `src/domains/workspace/TodoPanel.test.tsx` | People can inspect and manage tasks | Main | 385 ms |
 | `src/features/graph/__tests__/graph.test.ts` | Implementation detail: 3D graph geometry and layout remain valid | Conditional | 4 ms |
+| `src/journeys.test.tsx` | Six journeys across onboarding, search, capture, agent setup, voice, and briefing | Main | 633 ms |
 | `src/shared/activity/activityTrace.test.ts` | Implementation detail: activity trace state transitions stay valid | Shared | 2 ms |
 | `src/shared/activity/activityTraceBoundaries.test.ts` | Activity traces report real producer events | Shared | 9 ms |
 | `src/shared/activity/voiceActivityTrace.test.ts` | Implementation detail: voice trace state transitions stay valid | Shared | 3 ms |
@@ -163,4 +164,4 @@ Mount labels: **Main** is reachable in the primary app, **Aux** in a separate ap
 
 ## Gaps that drive QT-03
 
-The current suite relies heavily on component-level mocks. It lacks one test that crosses the real shell, preview IPC, search, memory detail, settings persistence, and voice event wiring. QT-03 adds six outcome-named journeys through the real `AppShell`.
+The baseline suite relied heavily on component-level mocks. QT-03 adds six outcome-named journeys through the real `AppShell` and preview IPC, crossing search, memory detail, settings persistence, and voice event wiring. The complete suite now passes 913 tests in 116 files.
