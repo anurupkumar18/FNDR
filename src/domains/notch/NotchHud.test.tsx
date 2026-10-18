@@ -54,6 +54,14 @@ vi.mock("@tauri-apps/api/core", () => coreMocks);
 vi.mock("@/shared/ipc/onboarding", () => onboardingMocks);
 vi.mock("@/shared/utils/openExternalUrl", () => ({ openExternalUrl: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/shared/ipc/tauri", () => ipcMocks);
+// These tests cover state transitions, not elapsed wall time. The production
+// timing values are asserted in doRun.test.ts.
+vi.mock("./doRun", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./doRun")>()),
+    ENDPOINT_MS: 20,
+    HEARD_MS: 20,
+    AUTO_START_MS: 20,
+}));
 // The app has one speech registry per window. Each test gets its own, so a voice
 // that failed, cooled down or spoke in one test cannot change the next.
 const voices = vi.hoisted(() => ({ registry: null as unknown, create: null as unknown as () => unknown }));
@@ -450,9 +458,7 @@ describe("NotchHud", () => {
     describe("Do mode: spoken computer use", () => {
         const REQUEST = "open Spotify, play Blinding Lights, then open the browser and look up looped transformers";
 
-        // A spoken request shows for a beat before it is sent, so waits are longer here.
-        beforeEach(() => configure({ asyncUtilTimeout: 3000 }));
-        afterEach(() => configure({ asyncUtilTimeout: 1000 }));
+        beforeEach(() => configure({ asyncUtilTimeout: 1000 }));
 
         /** What the native voice owner emits for the session it last started.
          *  Terminal states are followed by idle, as `emit_terminal` does. */
@@ -602,9 +608,7 @@ describe("NotchHud", () => {
             voice({ kind: "listening", level: 0.2 });
             voice({ kind: "partial", text: "open Spotify play" });
             expect(await screen.findByText("open Spotify play")).toBeInTheDocument();
-            await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_stop", { sessionId: "v1" }), {
-                timeout: 2500,
-            });
+            await waitFor(() => expect(coreMocks.invoke).toHaveBeenCalledWith("voice_stop", { sessionId: "v1" }));
 
             voice({ kind: "final", text: REQUEST });
             await waitFor(() => expect(ipcMocks.computerUsePlan).toHaveBeenCalledWith(REQUEST));
@@ -613,7 +617,7 @@ describe("NotchHud", () => {
             expect(plan).toHaveTextContent("Open Spotify");
             expect(plan).toHaveTextContent("Search looped transformers");
             expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
-            await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"), { timeout: 2500 });
+            await waitFor(() => expect(ipcMocks.computerUseStart).toHaveBeenCalledWith("r1"));
 
             emit("computer-use://event", { kind: "stepStarted", runId: "r1", index: 1, attempt: 1 });
             expect(screen.getByText("Play Blinding Lights").closest("li")).toHaveAttribute("aria-current", "step");
@@ -631,7 +635,7 @@ describe("NotchHud", () => {
             expect(ipcMocks.computerUsePlan).not.toHaveBeenCalled();
 
             fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-            await new Promise((resolve) => setTimeout(resolve, 1500));
+            await new Promise((resolve) => setTimeout(resolve, 100));
             expect(ipcMocks.computerUsePlan).not.toHaveBeenCalled();
         });
 
@@ -642,7 +646,7 @@ describe("NotchHud", () => {
             planned(false);
             expect(await screen.findByText(/Ready\. Press Start/)).toBeInTheDocument();
             expect(screen.getByRole("button", { name: "Start" })).toHaveFocus();
-            await new Promise((resolve) => setTimeout(resolve, 1800));
+            await new Promise((resolve) => setTimeout(resolve, 100));
             expect(ipcMocks.computerUseStart).not.toHaveBeenCalled();
 
             fireEvent.click(screen.getByRole("button", { name: "Start" }));

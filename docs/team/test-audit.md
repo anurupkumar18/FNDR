@@ -165,3 +165,11 @@ Mount labels: **Main** is reachable in the primary app, **Aux** in a separate ap
 ## Gaps that drive QT-03
 
 The baseline suite relied heavily on component-level mocks. QT-03 adds six outcome-named journeys through the real `AppShell` and preview IPC, crossing search, memory detail, settings persistence, and voice event wiring. The complete suite now passes 913 tests in 116 files.
+
+## QT-02 consolidation, 2026-10-18
+
+On the same M1, a complete `npm test -- --reporter=dot` run took **33.18 s** (915 tests, 116 files) before consolidation and **10.28 s** (910 tests, 114 files) afterward. The longest test file, `NotchHud.test.tsx`, now runs in 2.02 s in a focused run. Its state-transition tests use short delays while `doRun.test.ts` checks the production endpoint, heard-request, and auto-start timings (1,200, 1,200, and 1,500 ms). This preserves behavior coverage without making the whole suite wait for the real countdowns. Timings are single wall-clock samples and will vary with machine load.
+
+Deleted `CompanionDevicesPanel.test.tsx` because the panel has no production mount, and `AppShell.test.tsx` because it only asserted that two mocked elements rendered. The real `AppShell` is exercised by `journeys.test.tsx`. The conditional graph tests and `MotionWallpaper.test.tsx` remain: the graph is reachable and the wallpaper test is the only reduced-motion check. The command registry test also remains because the interaction test does not assert its complete ID contract.
+
+Mounted destinations retain direct coverage: Home (`HomeHero.test.tsx`), Memory Vault (`MemoryCardsPanel.test.tsx`), Search and Ask (`SearchBar.test.tsx`, `AskPanel.test.tsx`), To-dos (`TodoPanel.test.tsx`), Settings (`ControlPanel.test.tsx`), and auxiliary Notch and Quick Find (`NotchHud.test.tsx`, `OmnibarApp.test.tsx`). The six real-shell journeys also cross the main destinations.

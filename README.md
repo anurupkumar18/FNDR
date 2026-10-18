@@ -222,6 +222,13 @@ make test
 
 The default gate runs Python script tests, TypeScript typecheck, frontend tests, the production frontend build, and Rust tests. GitHub Actions runs the repository checks in separate workflows.
 
+The preview browser journeys run separately. Install Chromium once after `npm install`, then run the command below. It starts Vite, clicks through six synthetic journeys in light and dark themes, includes keyboard-only variants, and saves screenshots under the ignored `test-results/e2e/` directory.
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
 Retrieval changes also use the seeded synthetic-persona gate:
 
 ```bash

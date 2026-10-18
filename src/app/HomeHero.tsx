@@ -136,7 +136,7 @@ export function HomeHero({
     const voice = useVoice({
         surface: "home_search",
         mode: "toggle",
-        onPartial: updateVoiceDraft,
+        onPartial: setDraft,
         onFinal: updateVoiceDraft,
     });
 

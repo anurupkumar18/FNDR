@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+    AUTO_START_MS,
     CUE_MS,
     CUE_REPEAT_MS,
+    ENDPOINT_MS,
+    HEARD_MS,
     classifyUtterance,
     doRunReducer,
     initialDoState,
@@ -15,6 +18,12 @@ import {
     type DoState,
     type TurnState,
 } from "./doRun";
+
+it("keeps the spoken request and plan visible long enough to inspect", () => {
+    expect(ENDPOINT_MS).toBe(1200);
+    expect(HEARD_MS).toBe(1200);
+    expect(AUTO_START_MS).toBe(1500);
+});
 import type { ComputerUseEvent, WorkItem, WorkSet } from "@/shared/ipc/tauri";
 
 const CANVAS: WorkItem = { memoryId: "canvas", label: "Assignment 3", kind: "url", reopenRank: 4, appName: "Google Chrome", host: "canvas.utah.edu", capturedAt: 3 };
