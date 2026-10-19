@@ -268,14 +268,19 @@ impl Searcher {
                 (file, score)
             })
             .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-
         let mut word_rank: HashMap<i64, (usize, i64, Option<String>)> = HashMap::new();
         for (rank, (file, segment, snippet)) in words.into_iter().enumerate() {
             word_rank
                 .entry(file)
                 .or_insert((rank + 1, segment, snippet));
         }
+        // Equal scores go to the better word match (a definition over its callers), then the older file.
+        let rank_of = |file: &i64| word_rank.get(file).map_or(usize::MAX, |rank| rank.0);
+        scored.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then(rank_of(&a.0).cmp(&rank_of(&b.0)))
+                .then(a.0.cmp(&b.0))
+        });
         let mut hits = Vec::new();
         for (file, score) in scored.into_iter().take(options.limit) {
             let semantic = best.get(&file);
