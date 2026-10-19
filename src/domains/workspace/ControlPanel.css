@@ -31,7 +31,7 @@
     backdrop-filter: blur(24px) saturate(140%);
     -webkit-backdrop-filter: blur(24px) saturate(140%);
     border-left: 1px solid color-mix(in srgb, var(--cp-accent, var(--accent)) 35%, transparent);
-    box-shadow: -8px 0 40px color-mix(in srgb, var(--cp-accent, #3dff6a) 8%, transparent);
+    box-shadow: -8px 0 40px color-mix(in srgb, var(--cp-accent, var(--accent)) 8%, transparent);
     z-index: 1201;
     display: flex;
     flex-direction: column;
@@ -249,7 +249,7 @@
 .capture-toggle.is-paused {
     background: var(--accent);
     border-color: transparent;
-    color: #ffffff;
+    color: var(--on-accent);
 }
 
 /* Appearance */
@@ -291,6 +291,21 @@
 .palette-option:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
+}
+
+.palette-customization {
+    margin-top: 12px;
+}
+
+.palette-customization summary {
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.palette-customization[open] summary {
+    color: var(--text-primary);
 }
 
 .palette-swatch {
@@ -460,7 +475,7 @@
 }
 
 .settings-message--error {
-    color: var(--danger, #e97777);
+    color: var(--danger);
 }
 
 .theme-choice-row {
@@ -724,7 +739,7 @@
 
 .autofill-check input {
     margin-top: 2px;
-    accent-color: #ffb55c;
+    accent-color: var(--accent);
 }
 
 .autofill-help {
@@ -745,7 +760,7 @@
     top: 2px;
     right: 2px;
     background: var(--accent);
-    color: white;
+    color: var(--on-accent);
     font-size: 8px;
     font-weight: bold;
     width: 14px;
@@ -754,7 +769,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 2px solid #111;
+    border: 2px solid var(--bg);
     z-index: 2;
 }
 
