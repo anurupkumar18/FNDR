@@ -54,7 +54,8 @@
         "externalBin": [
             "binaries/fndr-speech",
             "binaries/fndr-auth",
-            "binaries/fndr-foundation"
+            "binaries/fndr-foundation",
+            "binaries/fndr-files-reader"
         ],
         "icon": [
             "icons/icon.png",

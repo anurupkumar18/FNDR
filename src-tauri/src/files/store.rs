@@ -367,6 +367,42 @@ impl FilesStore {
         Ok(out)
     }
 
+    /// What indexing learned about a file (pages, duration, how far a long one is read).
+    pub fn info(&self, file: i64) -> rusqlite::Result<serde_json::Value> {
+        let text: Option<String> = self
+            .db
+            .query_row("SELECT info FROM files WHERE id = ?", [file], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten();
+        Ok(text
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    /// Long files read part way: the rest is read after everything else.
+    pub fn partial(&self, limit: usize) -> rusqlite::Result<Vec<PendingFile>> {
+        let mut statement = self.db.prepare(
+            "SELECT id, path, kind FROM files WHERE state = 'partial' ORDER BY indexed_at LIMIT ?",
+        )?;
+        let rows = statement.query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, path, kind) = row?;
+            if let Some(kind) = FileKind::parse(&kind) {
+                out.push(PendingFile { id, path, kind });
+            }
+        }
+        Ok(out)
+    }
+
     pub fn counts(&self) -> rusqlite::Result<IndexCounts> {
         let mut counts = self.db.query_row(
             "SELECT count(*), coalesce(sum(state IN ('done', 'partial')), 0), coalesce(sum(state = 'pending'), 0),

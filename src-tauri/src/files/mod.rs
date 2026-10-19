@@ -17,6 +17,8 @@ pub mod extract;
 pub mod helper;
 pub mod indexer;
 pub mod model;
+pub mod process;
+pub mod reader;
 pub mod rules;
 pub mod search_text;
 pub mod searcher;
