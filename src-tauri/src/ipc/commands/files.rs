@@ -93,11 +93,13 @@ pub async fn files_settings_set(settings: FilesSettings) -> Result<FilesStatus, 
 }
 
 /// Files matching `query`. `kinds` narrows to some kinds (`pdf`, `image`, ...).
+/// `words_only` answers at once while typing; the full search follows on a pause.
 #[tauri::command]
 pub async fn files_search(
     query: String,
     kinds: Option<Vec<String>>,
     limit: Option<usize>,
+    words_only: Option<bool>,
 ) -> Result<FilesSearch, String> {
     let service = service()?;
     let kinds: Option<HashSet<FileKind>> = kinds.map(|kinds| {
@@ -107,7 +109,8 @@ pub async fn files_search(
             .collect()
     });
     let limit = limit.unwrap_or(20).clamp(1, 100);
-    tauri::async_runtime::spawn_blocking(move || service.search(&query, kinds, limit))
+    let words_only = words_only.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || service.search(&query, kinds, limit, words_only))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -208,6 +211,119 @@ pub async fn files_copy(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || reader()?.copy(&path))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Thumbnails Quick Look draws, as data URLs by path, from one reader and a
+/// small cache. A file it can't draw is left out; the row shows its kind.
+#[tauri::command]
+pub async fn files_thumbnails(
+    paths: Vec<String>,
+    pixels: Option<u32>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use base64::Engine;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, u32), String>>> = OnceLock::new();
+    const KEEP: usize = 400;
+    let pixels = pixels.unwrap_or(144).clamp(32, 512);
+
+    let paths: Vec<PathBuf> = paths
+        .iter()
+        .take(48)
+        .filter_map(|path| indexed(path).ok())
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CACHE.get_or_init(Default::default);
+        let mut found = HashMap::new();
+        let mut missing = Vec::new();
+        {
+            let cache = cache.lock().map_err(|_| "thumbnail cache poisoned")?;
+            for path in paths {
+                match cache.get(&(path.clone(), pixels)) {
+                    Some(url) => {
+                        found.insert(path.to_string_lossy().into_owned(), url.clone());
+                    }
+                    None => missing.push(path),
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(found);
+        }
+        let mut reader = reader()?;
+        let mut drawn = Vec::new();
+        for path in missing {
+            if let Ok(png) = reader.thumbnail(&path, pixels) {
+                let url = format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(png)
+                );
+                found.insert(path.to_string_lossy().into_owned(), url.clone());
+                drawn.push(((path, pixels), url));
+            }
+        }
+        let mut cache = cache.lock().map_err(|_| "thumbnail cache poisoned")?;
+        if cache.len() + drawn.len() > KEEP {
+            cache.clear();
+        }
+        cache.extend(drawn);
+        Ok(found)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Quick Find hands its search to Search and Ask: Quick Find hides, the main
+/// window comes forward and gets `files://open-search`.
+#[tauri::command]
+pub async fn files_open_in_window(
+    app: AppHandle,
+    query: String,
+    kinds: Option<Vec<String>>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(omnibar) = app.get_webview_window(super::omnibar::OMNIBAR_LABEL) {
+        let _ = omnibar.hide();
+    }
+    let main = app
+        .get_webview_window("main")
+        .ok_or("FNDR's window is not open.")?;
+    let _ = main.show();
+    let _ = main.set_focus();
+    app.emit_to(
+        "main",
+        "files://open-search",
+        serde_json::json!({ "query": query, "kinds": kinds }),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Quick Look for a found file, or closes the one showing.
+#[tauri::command]
+pub async fn files_quick_look(path: Option<String>) -> Result<bool, String> {
+    use std::sync::Mutex;
+    static SHOWING: Mutex<Option<std::process::Child>> = Mutex::new(None);
+    let path = path.map(|path| indexed(&path)).transpose()?;
+    let mut showing = SHOWING.lock().map_err(|_| "Quick Look state poisoned")?;
+    if let Some(mut child) = showing.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+        if path.is_none() {
+            return Ok(false);
+        }
+    }
+    let Some(path) = path else {
+        return Ok(false);
+    };
+    let child = std::process::Command::new("/usr/bin/qlmanage")
+        .arg("-p")
+        .arg(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Quick Look did not start: {error}"))?;
+    *showing = Some(child);
+    Ok(true)
 }
 
 /// A preview as a data URL: the picture, or the matched page or frame.

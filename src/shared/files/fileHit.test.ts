@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileHit } from "@/shared/ipc/files";
-import { clock, excerptParts, fileFolder, fileName, hitPlace, queryWords } from "./fileHit";
+import { clock, excerptParts, fileFolder, fileName, filesNote, hitPlace, openTitle, queryWords } from "./fileHit";
+import type { FilesStatus } from "@/shared/ipc/files";
 
 function hit(partial: Partial<FileHit>): FileHit {
     return {
@@ -54,5 +55,40 @@ describe("file hits", () => {
     it("take a PDF search's words from the query", () => {
         expect(queryWords("file: the clause about pets")).toEqual(["the", "clause", "about", "pets"]);
         expect(queryWords("ইলিশ মাছ")).toEqual(["ইলিশ", "মাছ"]);
+    });
+});
+
+function status(partial: Partial<FilesStatus>, done = 0, pending = 0): FilesStatus {
+    return {
+        state: "idle",
+        detail: null,
+        counts: { files: done + pending, done, pending, failed: 0, vectors: 0 },
+        model_ready: true,
+        helper_found: true,
+        reader_found: true,
+        ...partial,
+    };
+}
+
+describe("filesNote", () => {
+    it("says when results may be incomplete", () => {
+        expect(filesNote("words", null)).toBe("Matching words…");
+        expect(filesNote("words_only", status({ model_ready: false }))).toBe(
+            "Matching words only: the Files model isn’t downloaded",
+        );
+        expect(filesNote("meaning", status({ state: "indexing" }, 42, 58))).toBe(
+            "Still indexing (42%): some files aren’t in yet",
+        );
+        expect(filesNote("meaning", status({ state: "paused" }, 10, 1204))).toBe("1,204 files aren’t indexed yet");
+        expect(filesNote("meaning", status({}, 10, 0))).toBeNull();
+    });
+});
+
+describe("openTitle", () => {
+    it("names the place or the editor", () => {
+        expect(openTitle(hit({}))).toBe("Open at p. 3");
+        expect(openTitle(hit({ kind: "audio", segment: "audio", loc: 6 }))).toBe("Open at 0:06");
+        expect(openTitle(hit({ kind: "code", segment: "lines", loc: 4 }), "Cursor")).toBe("Open in Cursor");
+        expect(openTitle(hit({ kind: "doc", segment: "chunk" }))).toBe("Open");
     });
 });

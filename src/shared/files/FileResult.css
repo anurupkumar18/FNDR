@@ -116,3 +116,38 @@
         opacity: 0.5;
     }
 }
+
+.file-result[data-thumbnail] {
+    position: relative;
+    padding-left: 54px;
+}
+
+.file-result-thumbnail {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.file-group-heading {
+    padding: 6px 12px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+}
+
+.file-row-more,
+.file-row-weaker {
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.file-section-note {
+    margin-left: 8px;
+    font-weight: 400;
+    opacity: 0.75;
+}

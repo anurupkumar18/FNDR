@@ -301,11 +301,14 @@ impl FilesService {
     /// Files matching `query`, best first. `kinds` narrows to some kinds.
     /// `code: ...` searches the code index and nothing else; `file: ...` files only.
     /// Blocking: call it from a blocking thread.
+    /// `words_only` is the instant search while typing: no model, and the last
+    /// word matches as the start of longer ones (it is probably half typed).
     pub fn search(
         &self,
         query: &str,
         kinds: Option<HashSet<FileKind>>,
         limit: usize,
+        words_only: bool,
     ) -> Result<FilesSearch, String> {
         let nothing = || FilesSearch {
             hits: Vec::new(),
@@ -349,11 +352,15 @@ impl FilesService {
                 ));
             }
         }
-        let vector = self.query_vector(&mut side, text, code);
+        let vector = if words_only {
+            None
+        } else {
+            self.query_vector(&mut side, text, code)
+        };
         let options = SearchOptions {
             kinds,
             limit,
-            prefix_last: true,
+            prefix_last: words_only,
             code,
             word_weight: if code {
                 searcher::CODE_WORD_WEIGHT
@@ -721,7 +728,11 @@ mod tests {
         let folder = documents(dir.path());
         let (service, _) = service(dir.path(), None);
         wait_for(&service, FilesState::Off);
-        assert!(service.search("invoice", None, 10).unwrap().hits.is_empty());
+        assert!(service
+            .search("invoice", None, 10, false)
+            .unwrap()
+            .hits
+            .is_empty());
 
         service
             .set_settings(FilesSettings {
@@ -733,10 +744,11 @@ mod tests {
         wait_for(&service, FilesState::Idle);
         assert_eq!(service.status().counts.done, 2);
 
-        let found = service.search("K7Q2LM", None, 10).unwrap();
+        let found = service.search("K7Q2LM", None, 10, false).unwrap();
         assert!(found.meaning, "the query went through the helper");
         assert!(found.hits[0].path.ends_with("invoice.md"));
-        let found = service.search("file: invoi", None, 10).unwrap();
+        let found = service.search("file: invoi", None, 10, true).unwrap();
+        assert!(!found.meaning, "words only never asks the model");
         assert!(
             found.hits[0].path.ends_with("invoice.md"),
             "the prefix narrows, the last word is a prefix"
@@ -747,7 +759,7 @@ mod tests {
         service.poke(true);
         let started = Instant::now();
         while service
-            .search("lease cat", None, 10)
+            .search("lease cat", None, 10, false)
             .unwrap()
             .hits
             .is_empty()
@@ -768,7 +780,11 @@ mod tests {
             })
             .unwrap();
         wait_for(&service, FilesState::Idle);
-        assert!(service.search("invoice", None, 10).unwrap().hits.is_empty());
+        assert!(service
+            .search("invoice", None, 10, false)
+            .unwrap()
+            .hits
+            .is_empty());
         service.stop();
     }
 
@@ -793,13 +809,13 @@ mod tests {
             .unwrap();
         wait_for(&service, FilesState::Idle);
         let found = service
-            .search("code: refreshAccessToken", None, 10)
+            .search("code: refreshAccessToken", None, 10, false)
             .unwrap();
         assert!(found.hits[0].path.ends_with("auth.ts"), "{found:?}");
         assert_eq!(found.hits[0].focus, Some(1.0));
         assert!(
             service
-                .search("refreshAccessToken", None, 10)
+                .search("refreshAccessToken", None, 10, false)
                 .unwrap()
                 .hits
                 .is_empty(),

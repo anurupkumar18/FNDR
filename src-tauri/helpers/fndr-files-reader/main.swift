@@ -14,6 +14,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import PDFKit
+import QuickLookThumbnailing
 import UniformTypeIdentifiers
 import Vision
 
@@ -86,6 +87,21 @@ func write(_ image: CGImage, to url: URL, png: Bool) throws {
     let properties = png ? nil : [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary
     CGImageDestinationAddImage(destination, image, properties)
     guard CGImageDestinationFinalize(destination) else { throw ReadError("can't encode image") }
+}
+
+/// What Finder shows for the file, as a PNG: the picture, the page, the frame,
+/// or the app's icon for a kind Quick Look can't draw.
+func thumbnail(_ url: URL, pixels: Int) async throws -> Data {
+    let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: pixels, height: pixels), scale: 1,
+                                               representationTypes: .all)
+    let image = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).cgImage
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString,
+                                                             1, nil)
+    else { throw ReadError("can't encode thumbnail") }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { throw ReadError("can't encode thumbnail") }
+    return data as Data
 }
 
 // MARK: Text in pictures
@@ -624,6 +640,10 @@ func handle(_ request: [String: Any]) throws -> [String: Any] {
         let out = folder.appendingPathComponent(UUID().uuidString + ".jpg")
         try write(image, to: out, png: false)
         return ["path": out.path]
+    case "thumbnail":
+        let pixels = request["pixels"] as? Int ?? 144
+        let data = try runBlocking { try await thumbnail(url, pixels: pixels) }
+        return ["data": data.base64EncodedString()]
     case "preview_frame":
         let seconds = request["seconds"] as? Double ?? 0
         let pixels = request["pixels"] as? Int ?? 1200

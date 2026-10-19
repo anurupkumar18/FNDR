@@ -1,4 +1,4 @@
-import type { FileHit, FileKind } from "@/shared/ipc/files";
+import type { FileHit, FileKind, FilesStatus } from "@/shared/ipc/files";
 
 /** `file: ...` searches files only; `code: ...` the code index only (ADR 033). */
 export function isFileQuery(query: string): boolean {
@@ -95,4 +95,40 @@ export function queryWords(query: string): string[] {
         .replace(/^\s*(file|code):/i, "")
         .split(/[^\p{L}\p{M}\p{N}]+/u)
         .filter((word) => word.length >= 3);
+}
+
+/** "1,204 files" and "1 file". */
+function files(count: number): string {
+    return `${count.toLocaleString("en-US")} ${count === 1 ? "file" : "files"}`;
+}
+
+/**
+ * Why file results may be incomplete right now, or null: DigUp's status line.
+ * `phase` is the search's ("words" while typing, "words_only" when the full
+ * search had no model).
+ */
+export function filesNote(phase: "words" | "meaning" | "words_only" | null, status: FilesStatus | null): string | null {
+    if (phase === "words") return "Matching words…";
+    if (phase === "words_only") {
+        return status && !status.model_ready
+            ? "Matching words only: the Files model isn’t downloaded"
+            : "Words only: meaning search isn’t available";
+    }
+    if (!status) return null;
+    const { done, pending } = status.counts;
+    if (status.state === "indexing" && pending > 0) {
+        return `Still indexing (${Math.floor((done / (done + pending)) * 100)}%): some files aren’t in yet`;
+    }
+    if (pending > 0) return `${files(pending)} ${pending === 1 ? "isn’t" : "aren’t"} indexed yet`;
+    return null;
+}
+
+/** What Enter does with this hit: "Open at 0:06", "Open p. 3", "Open in Cursor". */
+export function openTitle(hit: FileHit, editor?: string | null): string {
+    if (hit.kind === "code") return editor ? `Open in ${editor}` : "Open";
+    const page = hitPage(hit);
+    if (page !== undefined) return `Open at p. ${page}`;
+    const moment = hitMoment(hit);
+    if (moment !== undefined) return `Open at ${clock(moment)}`;
+    return "Open";
 }

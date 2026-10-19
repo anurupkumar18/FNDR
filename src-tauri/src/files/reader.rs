@@ -198,6 +198,19 @@ impl FilesReader {
             .map(|out| out.how)
     }
 
+    /// What Finder shows for the file, a PNG `pixels` wide at most.
+    pub fn thumbnail(&mut self, path: &Path, pixels: u32) -> Result<Vec<u8>, String> {
+        use base64::Engine;
+        #[derive(Deserialize)]
+        struct Out {
+            data: String,
+        }
+        let out: Out = self.call(json!({ "op": "thumbnail", "path": path, "pixels": pixels }))?;
+        base64::engine::general_purpose::STANDARD
+            .decode(out.data)
+            .map_err(|error| format!("the Files reader answered oddly: {error}"))
+    }
+
     /// Puts the file itself on the pasteboard, to paste anywhere.
     pub fn copy(&mut self, path: &Path) -> Result<(), String> {
         self.process

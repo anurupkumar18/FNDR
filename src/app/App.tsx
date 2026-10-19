@@ -7,6 +7,7 @@ import { ResumeWork } from "./ResumeWork";
 import type { AppToast } from "./types";
 import { SearchBar } from "@/domains/search/SearchBar";
 import { FilesResults } from "@/domains/search/FilesResults";
+import { FILES_OPEN_SEARCH_EVENT, type FilesOpenSearch } from "@/shared/ipc/files";
 import { Timeline } from "@/domains/timeline/Timeline";
 import { ControlPanel } from "@/domains/workspace/ControlPanel";
 import { ModelDownloadBanner } from "@/domains/workspace/ModelDownloadBanner";
@@ -281,6 +282,17 @@ function App() {
     }, []);
 
     useTauriEvent<string>(OMNIBAR_OPEN_MEMORY_EVENT, handleOpenMemoryById);
+
+    // Quick Find's ⌘O: the same search here, with the Files section on its filter.
+    const [filesOpened, setFilesOpened] = useState<FilesOpenSearch | null>(null);
+    useTauriEvent<FilesOpenSearch>(FILES_OPEN_SEARCH_EVENT, (open) => {
+        const text = open.query.replace(/^\s*(file|code):\s*/i, "").trim();
+        setFilesOpened(open);
+        setActivePanel(null);
+        setShowCommandPalette(false);
+        setQueryDraft(text);
+        setQuery(text);
+    });
 
     const goHome = useCallback(() => {
         setActivePanel(null);
@@ -687,7 +699,7 @@ function App() {
                                 onSelectResult={setSelectedResult}
                                 evalUi={EVAL_UI}
                             />
-                            {!EVAL_UI && <FilesResults query={query} />}
+                            {!EVAL_UI && <FilesResults query={query} opened={filesOpened} />}
                         </section>
                     </div>
                 )}

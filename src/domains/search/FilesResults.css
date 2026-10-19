@@ -111,3 +111,24 @@
     font-size: 12px;
     opacity: 0.7;
 }
+
+.files-results:focus {
+    outline: none;
+}
+
+.files-results:focus-visible {
+    outline: 2px solid var(--accent, #4a7dff);
+    outline-offset: 4px;
+    border-radius: 8px;
+}
+
+.files-results-count {
+    margin-left: 6px;
+    opacity: 0.65;
+    font-variant-numeric: tabular-nums;
+}
+
+.files-results-tile[data-selected="true"] {
+    outline: 2px solid var(--accent, #4a7dff);
+    outline-offset: 1px;
+}

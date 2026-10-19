@@ -9,6 +9,8 @@ interface FileResultProps {
     selected: boolean;
     /** Ranked below the strong matches. */
     weaker?: boolean;
+    /** Quick Look's thumbnail, as a data URL; the kind shows until it comes. */
+    thumbnail?: string;
     onSelect: () => void;
     onOpen: () => void;
     /** Class names of the surface's own result rows, so a file row looks like its neighbours. */
@@ -16,7 +18,7 @@ interface FileResultProps {
 }
 
 /** One found file: its name, kind and place, the words that matched, where it lives. */
-export function FileResult({ hit, id, selected, weaker, onSelect, onOpen, className }: FileResultProps) {
+export function FileResult({ hit, id, selected, weaker, thumbnail, onSelect, onOpen, className }: FileResultProps) {
     const place = hitPlace(hit);
     return (
         <button
@@ -27,9 +29,13 @@ export function FileResult({ hit, id, selected, weaker, onSelect, onOpen, classN
             data-selected={selected}
             data-weaker={weaker || undefined}
             className={`file-result ${className ?? ""}`}
+            data-thumbnail={thumbnail !== undefined || undefined}
             onMouseEnter={onSelect}
             onClick={onOpen}
         >
+            {thumbnail !== undefined && (
+                <img className="file-result-thumbnail" src={thumbnail} alt="" aria-hidden draggable={false} />
+            )}
             <span className="file-result-title">
                 <span className="file-result-kind" data-kind={hit.kind}>
                     {kindLabel(hit.kind)}

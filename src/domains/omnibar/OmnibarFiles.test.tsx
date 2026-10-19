@@ -19,11 +19,17 @@ const fileMocks = vi.hoisted(() => ({
     filesReveal: vi.fn(),
     filesCopy: vi.fn(),
     filesPreview: vi.fn(),
+    filesStatus: vi.fn(),
+    filesSettingsGet: vi.fn(),
+    filesThumbnails: vi.fn(),
+    filesQuickLook: vi.fn(),
+    filesOpenInWindow: vi.fn(),
+    filesEditors: vi.fn(),
 }));
 
 vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: () => undefined }));
 vi.mock("@/shared/ipc/tauri", () => ({ ...ipcMocks, OMNIBAR_FOCUS_EVENT: "omnibar://focus" }));
-vi.mock("@/shared/ipc/files", () => fileMocks);
+vi.mock("@/shared/ipc/files", () => ({ ...fileMocks, FILES_STATUS_EVENT: "files://status" }));
 
 import { OmnibarApp } from "./OmnibarApp";
 
@@ -70,6 +76,19 @@ describe("Quick Find with Files search", () => {
         fileMocks.filesReveal.mockResolvedValue(undefined);
         fileMocks.filesCopy.mockResolvedValue(undefined);
         fileMocks.filesPreview.mockResolvedValue("data:image/jpeg;base64,AAAA");
+        fileMocks.filesStatus.mockResolvedValue({
+            state: "idle",
+            detail: null,
+            counts: { files: 1, done: 1, pending: 0, failed: 0, vectors: 1 },
+            model_ready: true,
+            helper_found: true,
+            reader_found: true,
+        });
+        fileMocks.filesSettingsGet.mockResolvedValue({ enabled: true, folders: ["/Users/a"], code_folders: [] });
+        fileMocks.filesThumbnails.mockResolvedValue({ "/Users/a/Documents/lease.pdf": "data:image/png;base64,AAAA" });
+        fileMocks.filesQuickLook.mockImplementation((path?: string) => Promise.resolve(Boolean(path)));
+        fileMocks.filesOpenInWindow.mockResolvedValue(undefined);
+        fileMocks.filesEditors.mockResolvedValue([]);
     });
 
     afterEach(() => cleanup());
@@ -88,6 +107,8 @@ describe("Quick Find with Files search", () => {
         fireEvent.keyDown(box, { key: "ArrowDown" });
         await waitFor(() => expect(file).toHaveAttribute("aria-selected", "true"));
         expect(screen.getByText("⇧↵ Finder")).toBeInTheDocument();
+        expect(screen.getByText("↵ open at p. 3")).toBeInTheDocument();
+        expect(file.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
         fireEvent.keyDown(box, { key: "Enter" });
         await waitFor(() =>
             expect(fileMocks.filesOpen).toHaveBeenCalledWith("/Users/a/Documents/lease.pdf", 3, undefined, ["pets", "lease"]),
@@ -124,5 +145,49 @@ describe("Quick Find with Files search", () => {
         await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenCalled());
         expect(screen.queryByText("Files")).not.toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("types words at once, then the full search on a pause", async () => {
+        render(<OmnibarApp />);
+        fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), { target: { value: "file: pets" } });
+        await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenCalledWith("file: pets", undefined, 40, true));
+        await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenCalledWith("file: pets", undefined, 40));
+    });
+
+    it("folds weaker matches, previews with Space once arrowed in, and closes the preview before Quick Find", async () => {
+        const weaker = { ...leasePage, path: "/Users/a/Documents/old-lease.pdf", segment_id: 8 };
+        fileMocks.filesSearch.mockResolvedValue({ hits: [leasePage, weaker], strong: 1, meaning: true });
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        fireEvent.change(box, { target: { value: "file: pets" } });
+        const fold = await screen.findByRole("option", { name: "Show 1 weaker match" });
+        expect(screen.queryByRole("option", { name: /old-lease\.pdf/ })).not.toBeInTheDocument();
+        expect(await screen.findByText("1 result · 1 weaker")).toBeInTheDocument();
+
+        fireEvent.keyDown(box, { key: "ArrowDown" });
+        await waitFor(() => expect(fold).toHaveAttribute("aria-selected", "true"));
+        fireEvent.keyDown(box, { key: "Enter" });
+        expect(await screen.findByRole("option", { name: /old-lease\.pdf/ })).toBeInTheDocument();
+        expect(fold).toHaveAttribute("aria-expanded", "true");
+
+        fireEvent.keyDown(box, { key: "ArrowUp" });
+        fireEvent.keyDown(box, { key: " " });
+        await waitFor(() => expect(fileMocks.filesQuickLook).toHaveBeenCalledWith("/Users/a/Documents/lease.pdf"));
+        fireEvent.keyDown(box, { key: "Escape" });
+        await waitFor(() => expect(fileMocks.filesQuickLook).toHaveBeenLastCalledWith(undefined));
+        expect(ipcMocks.dismissOmnibar).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(box, { key: "o", metaKey: true });
+        await waitFor(() => expect(fileMocks.filesOpenInWindow).toHaveBeenCalledWith("file: pets", undefined));
+    });
+
+    it("says why a files-only search found nothing", async () => {
+        fileMocks.filesSearch.mockResolvedValue({ hits: [], strong: 0, meaning: true });
+        fileMocks.filesSettingsGet.mockResolvedValue({ enabled: true, folders: [], code_folders: [] });
+        render(<OmnibarApp />);
+        fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), { target: { value: "file: pets" } });
+        expect(await screen.findByText(/No folders chosen yet/)).toBeInTheDocument();
+        fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), { target: { value: "code: retry" } });
+        expect(await screen.findByText(/Code search is off/)).toBeInTheDocument();
     });
 });

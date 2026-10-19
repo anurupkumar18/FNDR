@@ -8,6 +8,8 @@ const fileMocks = vi.hoisted(() => ({
     filesOpenCode: vi.fn(),
     filesReveal: vi.fn(),
     filesCopy: vi.fn(),
+    filesThumbnails: vi.fn(),
+    filesQuickLook: vi.fn(),
 }));
 vi.mock("@/shared/ipc/files", () => fileMocks);
 
@@ -32,6 +34,8 @@ describe("FilesResults", () => {
         fileMocks.filesOpen.mockResolvedValue("default");
         fileMocks.filesReveal.mockResolvedValue(undefined);
         fileMocks.filesCopy.mockResolvedValue(undefined);
+        fileMocks.filesThumbnails.mockResolvedValue({ "/p/dog_on_beach.jpg": "data:image/png;base64,AAAA" });
+        fileMocks.filesQuickLook.mockImplementation((path?: string) => Promise.resolve(Boolean(path)));
     });
 
     afterEach(() => cleanup());
@@ -51,8 +55,12 @@ describe("FilesResults", () => {
     it("filters by kind", async () => {
         render(<FilesResults query="lease" />);
         await screen.findByRole("option", { name: /lease\.pdf/ });
-        fireEvent.click(screen.getByRole("tab", { name: "PDFs" }));
+        expect(screen.getByRole("tab", { name: "PDFs 1" })).toBeInTheDocument();
+        expect(screen.queryByRole("tab", { name: /Videos/ })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("tab", { name: "PDFs 1" }));
         await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenLastCalledWith("lease", ["pdf"], 40));
+        fireEvent.keyDown(screen.getByRole("region", { name: "Files" }), { key: "8", metaKey: true });
+        await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenLastCalledWith("code: lease", undefined, 40));
     });
 
     it("adds nothing to a search that found no files", async () => {
@@ -60,5 +68,26 @@ describe("FilesResults", () => {
         const { container } = render(<FilesResults query="zebra" />);
         await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenCalled());
         expect(container).toBeEmptyDOMElement();
+    });
+
+    it("moves with the arrows and acts with the keys", async () => {
+        render(<FilesResults query="dog lease" />);
+        const region = await screen.findByRole("region", { name: "Files" });
+        await screen.findByRole("option", { name: /lease\.pdf/ });
+        const tile = screen.getByRole("option", { name: "dog_on_beach.jpg" });
+        expect(tile).toHaveAttribute("aria-selected", "true");
+        fireEvent.keyDown(region, { key: "ArrowDown" });
+        await waitFor(() => expect(screen.getByRole("option", { name: /lease\.pdf/ })).toHaveAttribute("aria-selected", "true"));
+        fireEvent.keyDown(region, { key: " " });
+        await waitFor(() => expect(fileMocks.filesQuickLook).toHaveBeenCalledWith("/d/lease.pdf"));
+        fireEvent.keyDown(region, { key: "Enter", metaKey: true });
+        await waitFor(() => expect(fileMocks.filesReveal).toHaveBeenCalledWith("/d/lease.pdf"));
+        fireEvent.keyDown(region, { key: "c", metaKey: true });
+        await waitFor(() => expect(fileMocks.filesCopy).toHaveBeenCalledWith("/d/lease.pdf"));
+    });
+
+    it("takes the filter Quick Find handed over", async () => {
+        render(<FilesResults query="lease" opened={{ query: "lease", kinds: ["pdf"] }} />);
+        await waitFor(() => expect(fileMocks.filesSearch).toHaveBeenCalledWith("lease", ["pdf"], 40));
     });
 });

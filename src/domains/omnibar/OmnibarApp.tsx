@@ -23,16 +23,21 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
-import type { FileHit } from "@/shared/ipc/files";
+import { filesOpenInWindow, filesQuickLook, type FileHit } from "@/shared/ipc/files";
 import { FilePreview, FileResult } from "@/shared/files/FileResult";
 import { copyFileHit, openFileHit, revealFileHit } from "@/shared/files/fileActions";
-import { isFileQuery } from "@/shared/files/fileHit";
+import { filesNote, isFileQuery, openTitle } from "@/shared/files/fileHit";
+import { fileRows, kindPlural } from "@/shared/files/fileRows";
+import { useEditorName } from "@/shared/files/useEditorName";
 import { useFileSearch } from "@/shared/files/useFileSearch";
+import { useFilesStatus } from "@/shared/files/useFilesStatus";
+import { useThumbnails } from "@/shared/files/useThumbnails";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const CLIP_DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
-const FILE_LIMIT = 8;
+/** Enough to group by kind with "Show all"; the weaker ones stay folded. */
+const FILE_LIMIT = 40;
 const CLIP_LIMIT = 30;
 const COPIED_FLASH_MS = 550;
 
@@ -135,6 +140,10 @@ export function OmnibarApp() {
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
     const [previewHit, setPreviewHit] = useState<FileHit | null>(null);
+    const [showWeaker, setShowWeaker] = useState(false);
+    const [quickLook, setQuickLook] = useState(false);
+    // Arrowed into the results: Space then previews instead of typing.
+    const [navigated, setNavigated] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const searchSeq = useRef(0);
@@ -594,9 +603,25 @@ export function OmnibarApp() {
     const doText = skill ? skill.name : typingSearch ? requestToDo(query) : null;
     const actionRows = doText ? 1 : 0;
     const files = useFileSearch(query, typingSearch, FILE_LIMIT);
+    const filesState = useFilesStatus(typingSearch);
+    const rows = fileRows(files.hits, files.strong, showWeaker);
     const fileStart = actionRows + results.length;
-    const selectedFile: FileHit | undefined =
-        surface === "memory" && selectedIndex >= fileStart ? files.hits[selectedIndex - fileStart] : undefined;
+    const selectedRow = surface === "memory" && selectedIndex >= fileStart ? rows[selectedIndex - fileStart] : undefined;
+    const selectedFile: FileHit | undefined = selectedRow?.type === "hit" ? selectedRow.hit : undefined;
+    const shownHits = rows.flatMap((row) => (row.type === "hit" ? [row.hit] : []));
+    const thumbnails = useThumbnails(shownHits.map((hit) => hit.path));
+    const editorName = useEditorName(
+        shownHits.some((hit) => hit.kind === "code"),
+        filesState.settings,
+    );
+    const fileNote = filesNote(files.phase, filesState.status);
+    const codeQuery = /^\s*code:/i.test(query);
+
+    // A new search folds the weaker matches again and types into the field.
+    useEffect(() => {
+        setShowWeaker(false);
+        setNavigated(false);
+    }, [query]);
 
     const openFile = useCallback(
         (hit: FileHit) => {
@@ -628,10 +653,39 @@ export function OmnibarApp() {
             .catch(() => actionSeq.current === seq && setFeedback({ kind: "error", message: failed }));
     }, []);
 
+    const toggleQuickLook = useCallback((hit: FileHit | undefined) => {
+        void filesQuickLook(quickLook ? undefined : hit?.path)
+            .then(setQuickLook)
+            .catch(() => setQuickLook(false));
+    }, [quickLook]);
+
+    // Quick Look shows the file that is selected, as it follows the arrows.
+    useEffect(() => {
+        if (quickLook && selectedFile) {
+            void filesQuickLook(selectedFile.path).catch(() => setQuickLook(false));
+        }
+        // Only a new selection moves it; opening and closing go through toggleQuickLook.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedFile?.path]);
+
+    const openInWindow = useCallback(
+        (kinds?: FileHit["kind"][]) => {
+            void filesOpenInWindow(query.trim(), kinds)
+                .then(reset)
+                .catch(() => setFeedback({ kind: "error", message: "Couldn’t open FNDR’s window. Try again." }));
+        },
+        [query, reset],
+    );
+
     const handleKeyDown = (event: React.KeyboardEvent) => {
         if (event.key === "Escape") {
             event.preventDefault();
-            if (mode.kind === "answer" || mode.kind === "asking") {
+            // A preview closes first, as Quick Look does; the next Esc closes Quick Find.
+            if (quickLook) {
+                toggleQuickLook(undefined);
+            } else if (previewHit) {
+                setPreviewHit(null);
+            } else if (mode.kind === "answer" || mode.kind === "asking") {
                 setMode({ kind: "search" });
                 inputRef.current?.focus();
             } else {
@@ -648,7 +702,18 @@ export function OmnibarApp() {
             return;
         }
         const listLength =
-            surface === "memory" ? results.length + actionRows + files.hits.length : clips.length;
+            surface === "memory" ? results.length + actionRows + rows.length : clips.length;
+        if (surface === "memory" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o") {
+            event.preventDefault();
+            if (query.trim()) openInWindow();
+            return;
+        }
+        if (event.key === " " && navigated && selectedRow && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            if (selectedRow.type === "weaker") setShowWeaker((open) => !open);
+            else if (selectedRow.type === "hit") toggleQuickLook(selectedRow.hit);
+            return;
+        }
         if (selectedFile && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
             event.preventDefault();
             setPreviewHit((current) => (current?.path === selectedFile.path ? null : selectedFile));
@@ -666,11 +731,13 @@ export function OmnibarApp() {
         }
         if (event.key === "ArrowDown") {
             event.preventDefault();
+            setNavigated(true);
             if (listLength > 0) {
                 setSelectedIndex((i) => Math.min(i + 1, listLength - 1));
             }
         } else if (event.key === "ArrowUp") {
             event.preventDefault();
+            setNavigated(true);
             setSelectedIndex((i) => Math.max(i - 1, 0));
         } else if (event.key === "Enter") {
             event.preventDefault();
@@ -688,6 +755,10 @@ export function OmnibarApp() {
             }
             if (event.metaKey || event.ctrlKey) {
                 ask();
+            } else if (selectedRow?.type === "weaker") {
+                setShowWeaker((open) => !open);
+            } else if (selectedRow?.type === "more") {
+                openInWindow([selectedRow.kind]);
             } else if (selectedFile && event.shiftKey) {
                 fileAction(revealFileHit(selectedFile), "Shown in Finder.", "Couldn’t show that file in Finder.");
             } else if (selectedFile) {
@@ -724,7 +795,7 @@ export function OmnibarApp() {
                     aria-controls={`omnibar-${surface}-results`}
                     aria-activedescendant={
                         mode.kind === "search" &&
-                        (surface === "memory" ? results.length + actionRows + files.hits.length : clips.length)
+                        (surface === "memory" ? results.length + actionRows + rows.length : clips.length)
                             ? `omnibar-${surface}-result-${selectedIndex}`
                             : undefined
                     }
@@ -740,6 +811,7 @@ export function OmnibarApp() {
                         setQuery(e.target.value);
                         setFeedback(null);
                     }}
+                    onMouseDown={() => setNavigated(false)}
                     placeholder={
                         surface === "memory"
                             ? "Search your memory…"
@@ -827,26 +899,69 @@ export function OmnibarApp() {
                             </span>
                         </button>
                     ))}
-                    {files.hits.length > 0 && (
+                    {(files.hits.length > 0 || (isFileQuery(query) && fileNote)) && (
                         <div className="omnibar-section" role="presentation">
-                            Files
+                            <span>Files</span>
+                            {(fileNote || files.hits.length > 0) && (
+                                <span className="file-section-note">
+                                    {fileNote ??
+                                        `${files.strong} ${files.strong === 1 ? "result" : "results"}` +
+                                            (files.hits.length > files.strong
+                                                ? ` · ${files.hits.length - files.strong} weaker`
+                                                : "")}
+                                </span>
+                            )}
                         </div>
                     )}
-                    {files.hits.map((hit, index) => (
-                        <FileResult
-                            key={`${hit.path}-${hit.segment_id}`}
-                            id={`omnibar-memory-result-${fileStart + index}`}
-                            hit={hit}
-                            className="omnibar-result"
-                            selected={fileStart + index === selectedIndex}
-                            weaker={index >= files.strong}
-                            onSelect={() => setSelectedIndex(fileStart + index)}
-                            onOpen={() => openFile(hit)}
-                        />
-                    ))}
+                    {rows.map((row, index) => {
+                        const id = `omnibar-memory-result-${fileStart + index}`;
+                        const selected = fileStart + index === selectedIndex;
+                        const select = () => setSelectedIndex(fileStart + index);
+                        if (row.type === "hit") {
+                            return (
+                                <div key={`${row.hit.path}-${row.hit.segment_id}`} role="presentation">
+                                    {row.heading && (
+                                        <div className="file-group-heading" role="presentation">
+                                            {row.heading}
+                                        </div>
+                                    )}
+                                    <FileResult
+                                        id={id}
+                                        hit={row.hit}
+                                        className="omnibar-result"
+                                        selected={selected}
+                                        weaker={row.weaker}
+                                        thumbnail={thumbnails[row.hit.path]}
+                                        onSelect={select}
+                                        onOpen={() => openFile(row.hit)}
+                                    />
+                                </div>
+                            );
+                        }
+                        return (
+                            <button
+                                key={row.type === "more" ? `more-${row.kind}` : "weaker"}
+                                id={id}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                aria-expanded={row.type === "weaker" ? row.open : undefined}
+                                data-selected={selected}
+                                className={`omnibar-result ${row.type === "more" ? "file-row-more" : "file-row-weaker"}`}
+                                onMouseEnter={select}
+                                onClick={() =>
+                                    row.type === "more" ? openInWindow([row.kind]) : setShowWeaker((open) => !open)
+                                }
+                            >
+                                {row.type === "more"
+                                    ? `Show all ${row.count} ${kindPlural(row.kind)}`
+                                    : `${row.open ? "Hide" : "Show"} ${row.count} weaker ${row.count === 1 ? "match" : "matches"}`}
+                            </button>
+                        );
+                    })}
                     {!results.length && !files.hits.length && query.trim() && !searching && !files.searching && !feedback && (
                         <div className="omnibar-empty">
-                            {isFileQuery(query) ? "No file matches this search." : "No memory matches this search."}
+                            {isFileQuery(query) ? fileEmpty(codeQuery, filesState.settings) : "No memory matches this search."}
                         </div>
                     )}
                     {!query.trim() && !searching && !feedback && (
@@ -956,10 +1071,17 @@ export function OmnibarApp() {
                 <span>↑↓ navigate</span>
                 {surface === "memory" && selectedFile ? (
                     <>
-                        <span>↵ open</span>
+                        <span>↵ {openTitle(selectedFile, editorName).toLowerCase()}</span>
                         <span>⇧↵ Finder</span>
+                        <span>␣ Quick Look</span>
                         <span>⌘Y preview</span>
                         <span>⌘C copy file</span>
+                        <span>⌘O window</span>
+                    </>
+                ) : surface === "memory" && selectedRow ? (
+                    <>
+                        <span>↵ {selectedRow.type === "more" ? "show all" : selectedRow.type === "weaker" && selectedRow.open ? "hide" : "show"}</span>
+                        <span>⌘O window</span>
                     </>
                 ) : surface === "memory" ? (
                     <>
@@ -976,4 +1098,18 @@ export function OmnibarApp() {
             </div>
         </div>
     );
+}
+
+/** Why a files-only search found nothing, and what to do about it. */
+function fileEmpty(code: boolean, settings: { enabled: boolean; folders: string[]; code_folders: string[] } | null): string {
+    if (settings && !settings.enabled) return "Files search is off. Turn it on in Settings, AI.";
+    if (code && settings && !settings.code_folders.length) {
+        return "Code search is off. Add a code folder in Settings, AI.";
+    }
+    if (!code && settings && !settings.folders.length) {
+        return "No folders chosen yet. Files search only looks in the folders you pick: choose them in Settings, AI.";
+    }
+    return code
+        ? "No good matches in your code. Try saying what the code does, or a name that’s in it."
+        : "No good matches. Try what you’d see or hear in it, or words you remember from it.";
 }

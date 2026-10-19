@@ -93,6 +93,8 @@ export interface FilesDownloadProgress {
 
 export const FILES_STATUS_EVENT = "files://status";
 export const FILES_DOWNLOAD_EVENT = "files://download";
+/** Quick Find handing a search to Search and Ask. */
+export const FILES_OPEN_SEARCH_EVENT = "files://open-search";
 
 export function filesStatus(): Promise<FilesStatus> {
     return invoke("files_status");
@@ -106,8 +108,34 @@ export function filesSettingsSet(settings: FilesSettings): Promise<FilesStatus> 
     return invoke("files_settings_set", { settings });
 }
 
-export function filesSearch(query: string, kinds?: FileKind[], limit?: number): Promise<FilesSearchResult> {
-    return invoke("files_search", { query, kinds, limit });
+/** `wordsOnly` answers at once while typing; the full search follows on a pause. */
+export function filesSearch(
+    query: string,
+    kinds?: FileKind[],
+    limit?: number,
+    wordsOnly?: boolean,
+): Promise<FilesSearchResult> {
+    return invoke("files_search", { query, kinds, limit, wordsOnly });
+}
+
+/** Quick Look's thumbnails as data URLs by path, `pixels` wide at most; a file it can't draw is left out. */
+export function filesThumbnails(paths: string[], pixels?: number): Promise<Record<string, string>> {
+    return invoke("files_thumbnails", { paths, pixels });
+}
+
+/** Quick Look for a found file, or closes the one showing (no path). True when it shows. */
+export function filesQuickLook(path?: string): Promise<boolean> {
+    return invoke("files_quick_look", { path });
+}
+
+/** The same search in Search and Ask's Files section, for a bigger look. */
+export function filesOpenInWindow(query: string, kinds?: FileKind[]): Promise<void> {
+    return invoke("files_open_in_window", { query, kinds });
+}
+
+export interface FilesOpenSearch {
+    query: string;
+    kinds: FileKind[] | null;
 }
 
 export function filesModelDownload(): Promise<void> {
