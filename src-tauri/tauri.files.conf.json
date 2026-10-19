@@ -1,0 +1,11 @@
+{
+    "bundle": {
+        "externalBin": [
+            "binaries/fndr-speech",
+            "binaries/fndr-auth",
+            "binaries/fndr-foundation",
+            "binaries/fndr-files-reader",
+            "binaries/fndr-files-helper"
+        ]
+    }
+}

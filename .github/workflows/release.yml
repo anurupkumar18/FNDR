@@ -83,6 +83,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Files search's model helper links its own pinned llama.cpp (ADR 033);
+      # tauri.files.conf.json adds it to the bundle's external binaries.
+      - name: Build the Files search helper
+        run: make files-helper
+
       - name: Build, sign, notarize and publish (Developer ID)
         if: env.HAS_APPLE_SIGNING == 'true'
         uses: tauri-apps/tauri-action@v0
@@ -113,6 +118,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          args: --config src-tauri/tauri.files.conf.json
 
       - name: Build and publish (ad-hoc signed)
         if: env.HAS_APPLE_SIGNING != 'true'
@@ -135,6 +141,7 @@ jobs:
             3. Follow onboarding: it asks for Screen Recording and downloads
                its on-device search model (~90 MB).
           releaseDraft: false
+          args: --config src-tauri/tauri.files.conf.json
           # Stays a full release: the updater reads releases/latest, which
           # GitHub never points at a pre-release.
           prerelease: false

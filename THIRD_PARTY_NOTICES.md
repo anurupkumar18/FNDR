@@ -72,7 +72,81 @@ piece. The pronunciation dictionaries `us_gold.json`, `us_silver.json`,
 unmodified with the model, and 68 entries of `us_gold.json` are copied into a
 test in `src-tauri/src/tts/lexicon.rs`.
 
-### Apache License, Version 2.0 (Kokoro-82M, its ONNX export, misaki)
+## DigUp (Files search)
+
+Files search (ADR 033) is a port of DigUp (<https://github.com/ARahim3/DigUp>,
+commit `7db9537712995d14e50e0e44baa00f721b98f1c6`): `src-tauri/src/files/`
+ports its rules, text normalization, index, searcher, crawler, document,
+code and estimate logic to Rust; `src-tauri/helpers/fndr-files/` ports its
+llama.cpp embedder and image sizing to Rust; and
+`src-tauri/helpers/fndr-files-reader/main.swift` adapts its macOS readers,
+openers and editor list. `scripts/files/llama.cpp-no-logits.patch` and the
+reference vectors and inputs in `src-tauri/helpers/fndr-files/reference/`
+are DigUp's, unmodified.
+
+MIT License
+
+Copyright (c) 2026 Abdur Rahim
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## llama.cpp (Files search's model helper)
+
+`fndr-files-helper` links llama.cpp (<https://github.com/ggml-org/llama.cpp>),
+tag `b11461`, commit `4d756bc72bf00a4aacf410ae15a2d315f3db400d`, with the
+one-line patch above, built by `scripts/files/build-llama.sh`.
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## EmbeddingGemma 2 (Files search model, downloaded on demand)
+
+Files search downloads, after the person turns it on, ggml-org's Q8_0 GGUF
+conversion of Google DeepMind's EmbeddingGemma 2
+(<https://huggingface.co/ggml-org/embeddinggemma-2-GGUF>, revision
+`bfcd298762cc34d0357ece5ebdd31791a3a374d8`, files
+`embeddinggemma-2-Q8_0.gguf` and `mmproj-embeddinggemma-2-Q8_0.gguf`), made
+from <https://huggingface.co/google/embeddinggemma-2>, whose model card states
+the Apache License, Version 2.0 (text below). The files are checked by
+SHA-256 and not modified; FNDR does not redistribute them inside the app.
+Gemma is a trademark of Google LLC.
+
+### Apache License, Version 2.0 (Kokoro-82M, its ONNX export, misaki, EmbeddingGemma 2)
 
 ```text
                                  Apache License
