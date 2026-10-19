@@ -35,6 +35,9 @@ const BATCH: usize = 4;
 const QUIET: Duration = Duration::from_secs(3);
 /// How often an idle worker looks around anyway.
 const TICK: Duration = Duration::from_secs(60);
+/// How soon a worker held by FNDR (its model busy, memory short) looks again:
+/// those holds pass in seconds.
+const HOLD_RETRY: Duration = Duration::from_secs(5);
 /// Search's model and vectors go after this long unused.
 const SEARCH_IDLE: Duration = Duration::from_secs(5 * 60);
 /// A backlog bigger than this waits for the indexing hours and for power; a
@@ -515,16 +518,19 @@ impl FilesService {
         let mut tools: Option<(FilesHelper, Option<FilesReader>)> = None;
         loop {
             {
+                let held = self.status.read().state == FilesState::Held;
                 let mut signal = self.signal.lock();
                 if !signal.wake && !signal.stop {
-                    self.wakeup.wait_for(&mut signal, TICK);
+                    self.wakeup
+                        .wait_for(&mut signal, if held { HOLD_RETRY } else { TICK });
                 }
                 if signal.stop {
                     return;
                 }
-                // Let a burst of changes settle before syncing.
+                // Let a burst of changes settle before syncing; the wake stays, so the
+                // sync follows the quiet at once instead of the next tick.
                 if signal.changed_at.is_some_and(|at| at.elapsed() < QUIET) {
-                    signal.wake = false;
+                    signal.wake = true;
                     drop(signal);
                     std::thread::sleep(QUIET);
                     continue;
@@ -768,6 +774,15 @@ impl FilesService {
             changed
         };
         if changed {
+            // States and counts only: a file name never goes to the log.
+            tracing::info!(
+                state = ?status.state,
+                detail = status.detail.as_deref().unwrap_or(""),
+                done = status.counts.done,
+                pending = status.counts.pending,
+                failed = status.counts.failed,
+                "Files search"
+            );
             (self.hooks.emit)(&status);
         }
     }
@@ -890,6 +905,22 @@ mod tests {
             assert!(
                 started.elapsed() < Duration::from_secs(20),
                 "the new file never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // A deleted file leaves on the watcher alone, after the quiet, not the next tick.
+        std::fs::remove_file(folder.join("lease.md")).unwrap();
+        let started = Instant::now();
+        while !service
+            .search("lease cat", None, 10, false)
+            .unwrap()
+            .hits
+            .is_empty()
+        {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the deleted file stayed in the index"
             );
             std::thread::sleep(Duration::from_millis(100));
         }

@@ -27,13 +27,29 @@ impl LineProcess {
         program: &Path,
         args: &[&std::ffi::OsStr],
     ) -> Result<(Self, Value), String> {
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| format!("can't start {}: {error}", program.display()))?;
+        let spawn = || {
+            Command::new(program)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+        };
+        // "Text file busy": the program was just written (an update, or a test's
+        // stand-in) and another process's fork still holds it open for a moment.
+        const TEXT_FILE_BUSY: i32 = 26;
+        let mut child = spawn();
+        for _ in 0..20 {
+            match &child {
+                Err(error) if error.raw_os_error() == Some(TEXT_FILE_BUSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    child = spawn();
+                }
+                _ => break,
+            }
+        }
+        let mut child =
+            child.map_err(|error| format!("can't start {}: {error}", program.display()))?;
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
         let mut line = String::new();
