@@ -77,6 +77,7 @@ These carry an "Accepted" status line and still shape the code. They predate the
 
 | Item | State | Where |
 |---|---|---|
+| PD-14 activation and onboarding target | Draft; team comment window and agreement not yet recorded | [ADR 033](../decisions/033-activation-and-onboarding-target.md) |
 | Team charter: decision rights, disagreements, handoff when away | Draft, pending owner approval and each teammate's acknowledgement | PD-17, `docs/team/TEAM.md` section "Team charter" |
 | Beta date Wed Oct 21 and Final week of Dec 14 | Assumed; confirm with instructors | Master plan D-4, month plan section 12 row 8 |
 | Companion parked until after Final | Assumed | Master plan D-2 |
