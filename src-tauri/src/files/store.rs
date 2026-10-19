@@ -79,6 +79,14 @@ pub struct IndexCounts {
     pub vectors: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct FolderCounts {
+    pub files: i64,
+    pub done: i64,
+    /// Files by kind ("pdf": 12).
+    pub kinds: std::collections::BTreeMap<String, i64>,
+}
+
 pub struct FilesStore {
     pub(crate) db: Connection,
 }
@@ -411,6 +419,31 @@ impl FilesStore {
         Ok(out)
     }
 
+    /// Files under `root` by kind, and how many of them are read: Settings'
+    /// "1,204 of 1,310 read" per folder.
+    pub fn folder_counts(&self, root: &str) -> rusqlite::Result<FolderCounts> {
+        let root = root.trim_end_matches('/');
+        let mut statement = self.db.prepare(
+            "SELECT kind, count(*), coalesce(sum(state IN ('done', 'partial')), 0) FROM files
+             WHERE path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/' GROUP BY kind",
+        )?;
+        let mut counts = FolderCounts::default();
+        let rows = statement.query_map([root], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (kind, files, done) = row?;
+            counts.files += files;
+            counts.done += done;
+            counts.kinds.insert(kind, files);
+        }
+        Ok(counts)
+    }
+
     pub fn counts(&self) -> rusqlite::Result<IndexCounts> {
         let mut counts = self.db.query_row(
             "SELECT count(*), coalesce(sum(state IN ('done', 'partial')), 0), coalesce(sum(state = 'pending'), 0),
@@ -479,6 +512,31 @@ mod tests {
         let mut vector = vec![0.0; DIMENSION];
         vector[index] = 1.0;
         vector
+    }
+
+    #[test]
+    fn folder_counts_cover_the_folder_and_nothing_beside_it() {
+        let store = FilesStore::open_in_memory().unwrap();
+        let (read, _) = store
+            .upsert_file(&facts("/d/Docs/a.md", 1, 1.0, 1))
+            .unwrap();
+        store
+            .upsert_file(&facts("/d/Docs/sub/b.md", 1, 1.0, 2))
+            .unwrap();
+        store
+            .upsert_file(&FileFacts {
+                kind: FileKind::Pdf,
+                ..facts("/d/Docs/c.pdf", 1, 1.0, 3)
+            })
+            .unwrap();
+        store
+            .upsert_file(&facts("/d/Docs2/d.md", 1, 1.0, 4))
+            .unwrap();
+        store.set_state(read, FileState::Done, None, None).unwrap();
+        let counts = store.folder_counts("/d/Docs/").unwrap();
+        assert_eq!((counts.files, counts.done), (3, 1));
+        assert_eq!(counts.kinds.get("doc"), Some(&2));
+        assert_eq!(counts.kinds.get("pdf"), Some(&1));
     }
 
     #[test]

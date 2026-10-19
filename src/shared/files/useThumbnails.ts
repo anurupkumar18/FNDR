@@ -22,7 +22,6 @@ export function useThumbnails(paths: string[], pixels?: number): Record<string, 
             live = false;
         };
         // `key` stands for `paths`: a new array with the same paths asks nothing.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [key]);
     return thumbnails;
 }

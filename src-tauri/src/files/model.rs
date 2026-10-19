@@ -52,6 +52,32 @@ pub fn dir(app_data_dir: &Path) -> PathBuf {
     crate::models::models_dir(app_data_dir).join("embeddinggemma-2")
 }
 
+/// Files the person downloaded themselves (a network that blocks Hugging
+/// Face): each one that matches a pinned file by size and SHA-256 is copied
+/// into `dir`. Returns the names it took; anything else is refused by name.
+pub fn import(dir: &Path, paths: &[PathBuf]) -> Result<Vec<&'static str>, String> {
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let mut taken = Vec::new();
+    for path in paths {
+        let size = std::fs::metadata(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?
+            .len();
+        let Some(file) = ALL.into_iter().find(|file| file.bytes == size) else {
+            return Err(format!(
+                "{} is not one of the two EmbeddingGemma 2 files",
+                path.display()
+            ));
+        };
+        crate::models::verify_file_sha256(path, file.sha256)
+            .map_err(|_| format!("{} is not the pinned {}", path.display(), file.name))?;
+        let part = dir.join(format!("{}.part", file.name));
+        std::fs::copy(path, &part).map_err(|error| error.to_string())?;
+        std::fs::rename(&part, dir.join(file.name)).map_err(|error| error.to_string())?;
+        taken.push(file.name);
+    }
+    Ok(taken)
+}
+
 /// The files not in `dir` yet. Only verified files get their final name, so being there is enough.
 pub fn missing(dir: &Path) -> Vec<ModelFile> {
     ALL.into_iter()
@@ -154,6 +180,16 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_refuses_a_file_that_is_not_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let stray = dir.path().join("embeddinggemma-2-Q8_0.gguf");
+        std::fs::write(&stray, b"not the model").unwrap();
+        let error = import(&dir.path().join("models"), &[stray]).unwrap_err();
+        assert!(error.contains("not one of the two"), "{error}");
+        assert!(missing(&dir.path().join("models")).len() == 2);
+    }
 
     #[test]
     fn files_are_pinned() {

@@ -63,6 +63,8 @@ function status(partial: Partial<FilesStatus>, done = 0, pending = 0): FilesStat
         state: "idle",
         detail: null,
         counts: { files: done + pending, done, pending, failed: 0, vectors: 0 },
+        code_counts: { files: 0, done: 0, pending: 0, failed: 0, vectors: 0 },
+        code_bytes: 0,
         model_ready: true,
         helper_found: true,
         reader_found: true,

@@ -5,7 +5,7 @@
 
 use crate::files::model;
 use crate::files::reader::FilesReader;
-use crate::files::service::{FilesSearch, FilesService, FilesStatus, Hooks, Programs};
+use crate::files::service::{FilesSearch, FilesService, FilesStatus, Hooks, Power, Programs};
 use crate::files::settings::FilesSettings;
 use crate::files::FileKind;
 use crate::AppState;
@@ -35,7 +35,11 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
             }
             None
         }),
-        hour: Box::new(|| chrono::Local::now().hour() as u8),
+        minute: Box::new(|| {
+            let now = chrono::Local::now();
+            (now.hour() * 60 + now.minute()) as u16
+        }),
+        power: Box::new(mac_power),
         emit: Box::new(move |status: &FilesStatus| {
             let _ = emitter.emit("files://status", status);
         }),
@@ -48,6 +52,34 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
         }
     };
     let _ = SERVICE.set(FilesService::start(app_data_dir, Programs::locate(), hooks));
+}
+
+/// Low Power Mode and the thermal state from Foundation; the power source
+/// from `pmset`, as `system_resources` reads it. A Mac with no battery is on AC.
+#[cfg(target_os = "macos")]
+fn mac_power() -> Power {
+    use objc2_foundation::{NSProcessInfo, NSProcessInfoThermalState};
+    #[allow(unused_unsafe)]
+    let (low_power_mode, thermal) = unsafe {
+        let info = NSProcessInfo::processInfo();
+        (info.isLowPowerModeEnabled(), info.thermalState())
+    };
+    let on_battery = std::process::Command::new("/usr/bin/pmset")
+        .args(["-g", "batt"])
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains("'Battery Power'"))
+        .unwrap_or(false);
+    Power {
+        low_power_mode,
+        warm: thermal == NSProcessInfoThermalState::Serious
+            || thermal == NSProcessInfoThermalState::Critical,
+        on_battery,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_power() -> Power {
+    Power::default()
 }
 
 fn service() -> Result<&'static Arc<FilesService>, String> {
@@ -440,4 +472,90 @@ pub async fn files_estimate(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// The chosen folders as Settings shows them: can each be read, and how far along it is.
+#[tauri::command]
+pub async fn files_folders() -> Result<Vec<crate::files::service::FolderInfo>, String> {
+    let service = service()?;
+    tauri::async_runtime::spawn_blocking(move || service.folders())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// The folders one level inside a chosen folder, to tick off one by one.
+#[tauri::command]
+pub async fn files_subfolders(folder: String) -> Result<Vec<String>, String> {
+    let settings = service()?.settings();
+    if !settings.folders.contains(&folder) {
+        return Err("That folder is not in Files search.".into());
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("No home folder")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::files::folders::subfolders(Path::new(&folder), &home)
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Folders that hold code, for code search to offer before the person picks their own.
+#[tauri::command]
+pub async fn files_suggested_code_folders(searched: Vec<String>) -> Result<Vec<String>, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("No home folder")?;
+    let searched: Vec<PathBuf> = searched.iter().map(PathBuf::from).collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::files::folders::code_candidates(&home, &searched)
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// The model's two download links, for a network that blocks the download here.
+#[tauri::command]
+pub async fn files_model_links() -> Result<Vec<String>, String> {
+    Ok(model::ALL.iter().map(|file| file.url()).collect())
+}
+
+/// The model files the person downloaded elsewhere: they pick them, each is
+/// checked against the pinned size and SHA-256, then copied in place.
+#[tauri::command]
+pub async fn files_model_import() -> Result<Vec<String>, String> {
+    let service = service()?;
+    let dir = model::dir(service.app_data_dir());
+    let taken = tauri::async_runtime::spawn_blocking(move || {
+        let Some(paths) = rfd::FileDialog::new()
+            .set_title("Choose the two EmbeddingGemma 2 files")
+            .add_filter("GGUF", &["gguf"])
+            .pick_files()
+        else {
+            return Ok(Vec::new());
+        };
+        model::import(&dir, &paths)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    if !taken.is_empty() {
+        service.models_changed();
+    }
+    Ok(taken.into_iter().map(str::to_string).collect())
+}
+
+/// System Settings at Full Disk Access, for a folder macOS keeps FNDR out of.
+#[tauri::command]
+pub async fn files_open_privacy_settings() -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .status()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }

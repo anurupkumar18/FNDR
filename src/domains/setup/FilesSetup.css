@@ -113,3 +113,48 @@
     text-decoration: underline;
     text-underline-offset: 2px;
 }
+
+.files-setup-folder-row {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 0;
+}
+.files-setup-folder-row small {
+    color: var(--rc-text-2);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.files-setup-reach {
+    display: inline-flex;
+    gap: 8px;
+    color: var(--rc-clay) !important;
+}
+.files-setup-subfolders {
+    list-style: none;
+    margin: 0 0 10px;
+    padding: 0 0 0 16px;
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+}
+.files-setup-subfolders label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 0;
+}
+.files-setup-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 0 0 10px;
+    font-size: 13px;
+}
+.files-setup-field input[type="time"] {
+    width: 7.5em;
+}

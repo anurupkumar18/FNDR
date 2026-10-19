@@ -49,12 +49,18 @@ export interface FilesCounts {
 export interface FilesStatus {
     state: FilesState;
     detail: string | null;
+    /** Files and code together. */
     counts: FilesCounts;
+    /** Code alone. */
+    code_counts: FilesCounts;
+    /** The code index on disk. */
+    code_bytes: number;
     model_ready: boolean;
     helper_found: boolean;
     reader_found: boolean;
 }
 
+/** `start` and `end` in minutes after midnight; a range may wrap midnight. */
 export type IndexHours = { kind: "always" } | { kind: "between"; start: number; end: number };
 
 export interface FilesSettings {
@@ -68,6 +74,18 @@ export interface FilesSettings {
     include_datasets: boolean;
     paused: boolean;
     hours: IndexHours;
+    /** Big catch-ups run on battery too; off, they wait for power. */
+    index_on_battery: boolean;
+}
+
+export type FolderReach = "ok" | "not_connected" | "missing" | "no_access";
+
+export interface FolderInfo {
+    folder: string;
+    reach: FolderReach;
+    files: number;
+    done: number;
+    kinds: Partial<Record<FileKind, number>>;
 }
 
 export interface FolderEstimate {
@@ -187,4 +205,34 @@ export function filesPickFolder(): Promise<string | null> {
 
 export function filesEstimate(folders: string[]): Promise<FilesEstimate> {
     return invoke("files_estimate", { folders });
+}
+
+/** The chosen folders: whether each can be read, its files by kind, how many are read. */
+export function filesFolders(): Promise<FolderInfo[]> {
+    return invoke("files_folders");
+}
+
+/** The folders one level inside a chosen folder. */
+export function filesSubfolders(folder: string): Promise<string[]> {
+    return invoke("files_subfolders", { folder });
+}
+
+/** Folders holding code, to offer for code search. */
+export function filesSuggestedCodeFolders(searched: string[]): Promise<string[]> {
+    return invoke("files_suggested_code_folders", { searched });
+}
+
+/** The model's two download links, for a network that blocks the download. */
+export function filesModelLinks(): Promise<string[]> {
+    return invoke("files_model_links");
+}
+
+/** The person picks model files downloaded elsewhere; returns the names taken. */
+export function filesModelImport(): Promise<string[]> {
+    return invoke("files_model_import");
+}
+
+/** System Settings at Full Disk Access. */
+export function filesOpenPrivacySettings(): Promise<void> {
+    return invoke("files_open_privacy_settings");
 }

@@ -16,6 +16,7 @@ pub mod code;
 pub mod crawl;
 pub mod estimate;
 pub mod extract;
+pub mod folders;
 pub mod helper;
 pub mod indexer;
 pub mod model;

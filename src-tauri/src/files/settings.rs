@@ -25,6 +25,8 @@ pub struct FilesSettings {
     pub paused: bool,
     /// When the first pass and big catch-ups may run; new files are always read.
     pub hours: IndexHours,
+    /// Big catch-ups run on battery too (DigUp's default). Off: they wait for power.
+    pub index_on_battery: bool,
 }
 
 impl Default for FilesSettings {
@@ -39,29 +41,43 @@ impl Default for FilesSettings {
             include_datasets: false,
             paused: false,
             hours: IndexHours::Always,
+            index_on_battery: true,
         }
     }
 }
 
-/// When heavy indexing may run, by local hour.
+/// When heavy indexing may run, by local time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IndexHours {
     Always,
-    /// From `start` to `end` (0 to 23); a range that wraps midnight is fine (22 to 7).
+    /// From `start` to `end`, in minutes after midnight (0 to 1439); a range
+    /// that wraps midnight is fine (22:00 to 07:00). The same start and end
+    /// mean all day.
     Between {
-        start: u8,
-        end: u8,
+        start: u16,
+        end: u16,
     },
 }
 
 impl IndexHours {
-    pub fn allows(self, hour: u8) -> bool {
+    /// Whether heavy indexing may run at `minute` after midnight.
+    pub fn allows(self, minute: u16) -> bool {
         match self {
             IndexHours::Always => true,
             IndexHours::Between { start, end } if start == end => true,
-            IndexHours::Between { start, end } if start < end => (start..end).contains(&hour),
-            IndexHours::Between { start, end } => hour >= start || hour < end,
+            IndexHours::Between { start, end } if start < end => (start..end).contains(&minute),
+            IndexHours::Between { start, end } => minute >= start || minute < end,
+        }
+    }
+
+    /// "22:00": when indexing may start again, while it waits for the hours.
+    pub fn resumes_at(self) -> Option<String> {
+        match self {
+            IndexHours::Between { start, end } if start != end => {
+                Some(format!("{:02}:{:02}", start / 60 % 24, start % 60))
+            }
+            _ => None,
         }
     }
 }
@@ -109,13 +125,32 @@ mod tests {
 
     #[test]
     fn hours_wrap_midnight() {
-        let night = IndexHours::Between { start: 22, end: 7 };
-        assert!(night.allows(23) && night.allows(0) && night.allows(6));
-        assert!(!night.allows(7) && !night.allows(12));
-        let day = IndexHours::Between { start: 9, end: 17 };
-        assert!(day.allows(9) && !day.allows(17));
-        assert!(IndexHours::Between { start: 5, end: 5 }.allows(13));
-        assert!(IndexHours::Always.allows(3));
+        let night = IndexHours::Between {
+            start: 22 * 60,
+            end: 7 * 60,
+        };
+        assert!(night.allows(23 * 60) && night.allows(0) && night.allows(6 * 60 + 59));
+        assert!(!night.allows(7 * 60) && !night.allows(12 * 60));
+        assert_eq!(night.resumes_at().as_deref(), Some("22:00"));
+        let day = IndexHours::Between {
+            start: 9 * 60 + 30,
+            end: 17 * 60,
+        };
+        assert!(!day.allows(9 * 60 + 29) && day.allows(9 * 60 + 30) && !day.allows(17 * 60));
+        assert_eq!(day.resumes_at().as_deref(), Some("09:30"));
+        assert!(IndexHours::Between {
+            start: 300,
+            end: 300
+        }
+        .allows(13 * 60));
+        assert!(IndexHours::Always.allows(3 * 60));
+        assert_eq!(IndexHours::Always.resumes_at(), None);
+    }
+
+    #[test]
+    fn older_settings_index_on_battery() {
+        let settings: FilesSettings = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert!(settings.index_on_battery);
     }
 
     #[test]

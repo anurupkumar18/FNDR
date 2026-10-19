@@ -37,16 +37,44 @@ const QUIET: Duration = Duration::from_secs(3);
 const TICK: Duration = Duration::from_secs(60);
 /// Search's model and vectors go after this long unused.
 const SEARCH_IDLE: Duration = Duration::from_secs(5 * 60);
-/// A backlog bigger than this waits for the indexing hours.
+/// A backlog bigger than this waits for the indexing hours and for power; a
+/// few new files are read at once, they take seconds.
 const BIG_BACKLOG: i64 = 50;
 
-/// What the app supplies: FNDR's own reasons to wait, a clock, a status sink.
+/// What the app supplies: FNDR's own reasons to wait, a clock, the Mac's
+/// power, a status sink.
 pub struct Hooks {
     /// Why reading must wait now, or `None`.
     pub hold: Box<dyn Fn() -> Option<String> + Send + Sync>,
-    /// The local hour, 0 to 23.
-    pub hour: Box<dyn Fn() -> u8 + Send + Sync>,
+    /// Local time, in minutes after midnight.
+    pub minute: Box<dyn Fn() -> u16 + Send + Sync>,
+    pub power: Box<dyn Fn() -> Power + Send + Sync>,
     pub emit: Box<dyn Fn(&FilesStatus) + Send + Sync>,
+}
+
+/// The Mac's power, for DigUp's power policy: a big catch-up waits in Low
+/// Power Mode, while the Mac is warm, and on battery when the person said so.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Power {
+    pub low_power_mode: bool,
+    /// Thermal state serious or critical.
+    pub warm: bool,
+    pub on_battery: bool,
+}
+
+impl Power {
+    /// Why a big catch-up waits, or `None`.
+    pub fn blocker(self, index_on_battery: bool) -> Option<&'static str> {
+        if self.low_power_mode {
+            Some("waiting while Low Power Mode is on")
+        } else if self.warm {
+            Some("waiting while the Mac is warm")
+        } else if self.on_battery && !index_on_battery {
+            Some("waiting for power: on battery")
+        } else {
+            None
+        }
+    }
 }
 
 /// The helper programs, found once at start.
@@ -83,10 +111,24 @@ pub struct FilesStatus {
     pub state: FilesState,
     /// Why it holds or failed, in a few words. Never a file name.
     pub detail: Option<String>,
+    /// Files and code together.
     pub counts: IndexCounts,
+    /// Code alone, for its own status line.
+    pub code_counts: IndexCounts,
+    /// The code index on disk, for "turning code search off deletes N MB".
+    pub code_bytes: u64,
     pub model_ready: bool,
     pub helper_found: bool,
     pub reader_found: bool,
+}
+
+/// A chosen folder as Settings shows it.
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderInfo {
+    pub folder: String,
+    pub reach: super::folders::Reach,
+    #[serde(flatten)]
+    pub counts: super::store::FolderCounts,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,6 +195,8 @@ impl FilesService {
                 state: FilesState::Off,
                 detail: None,
                 counts: IndexCounts::default(),
+                code_counts: IndexCounts::default(),
+                code_bytes: 0,
                 model_ready: model::missing(&model::dir(&app_data_dir)).is_empty(),
                 helper_found: programs.helper.is_some(),
                 reader_found: programs.reader.is_some(),
@@ -177,6 +221,28 @@ impl FilesService {
             .spawn(move || worker.run())
             .expect("spawn the Files worker");
         service
+    }
+
+    /// The chosen folders: whether each can be read, its files by kind, and how many are read.
+    pub fn folders(&self) -> Vec<FolderInfo> {
+        let settings = self.settings.read().clone();
+        let store = self
+            .index_file()
+            .exists()
+            .then(|| FilesStore::open(&self.index_file()).ok())
+            .flatten();
+        settings
+            .folders
+            .iter()
+            .map(|folder| FolderInfo {
+                folder: folder.clone(),
+                reach: super::folders::reach(Path::new(folder)),
+                counts: store
+                    .as_ref()
+                    .and_then(|store| store.folder_counts(folder).ok())
+                    .unwrap_or_default(),
+            })
+            .collect()
     }
 
     pub fn settings(&self) -> FilesSettings {
@@ -515,9 +581,19 @@ impl FilesService {
             self.set_status(FilesState::NeedsModel, None);
             return Ok(false);
         }
-        if counts.pending > BIG_BACKLOG && !settings.hours.allows((self.hooks.hour)()) {
-            self.set_status(FilesState::WaitingForHours, None);
-            return Ok(false);
+        if counts.pending > BIG_BACKLOG {
+            if !settings.hours.allows((self.hooks.minute)()) {
+                let from = settings
+                    .hours
+                    .resumes_at()
+                    .map(|time| format!("from {time}"));
+                self.set_status(FilesState::WaitingForHours, from);
+                return Ok(false);
+            }
+            if let Some(why) = (self.hooks.power)().blocker(settings.index_on_battery) {
+                self.set_status(FilesState::Held, Some(why.to_string()));
+                return Ok(false);
+            }
         }
         if let Some(why) = (self.hooks.hold)() {
             self.set_status(FilesState::Held, Some(why));
@@ -627,21 +703,35 @@ impl FilesService {
     }
 
     fn set_status(&self, state: FilesState, detail: Option<String>) {
-        let counts = [self.index_file(), self.code_index_file()]
+        let read = |file: PathBuf| -> IndexCounts {
+            if !file.exists() {
+                return IndexCounts::default();
+            }
+            FilesStore::open(&file)
+                .and_then(|store| store.counts())
+                .unwrap_or_default()
+        };
+        let (files, code) = (read(self.index_file()), read(self.code_index_file()));
+        let counts = IndexCounts {
+            files: files.files + code.files,
+            done: files.done + code.done,
+            pending: files.pending + code.pending,
+            failed: files.failed + code.failed,
+            vectors: files.vectors + code.vectors,
+        };
+        let code_bytes = ["", "-wal"]
             .iter()
-            .filter(|file| file.exists())
-            .filter_map(|file| FilesStore::open(file).and_then(|store| store.counts()).ok())
-            .fold(IndexCounts::default(), |sum, counts| IndexCounts {
-                files: sum.files + counts.files,
-                done: sum.done + counts.done,
-                pending: sum.pending + counts.pending,
-                failed: sum.failed + counts.failed,
-                vectors: sum.vectors + counts.vectors,
-            });
+            .filter_map(|suffix| {
+                std::fs::metadata(format!("{}{suffix}", self.code_index_file().display())).ok()
+            })
+            .map(|meta| meta.len())
+            .sum();
         let status = FilesStatus {
             state,
             detail,
             counts,
+            code_counts: code,
+            code_bytes,
             model_ready: self.model_ready(),
             helper_found: self.programs.helper.is_some(),
             reader_found: self.programs.reader.is_some(),
@@ -663,7 +753,7 @@ impl FilesService {
 #[cfg(all(test, unix))]
 mod tests {
     use super::super::process::tests::fake;
-    use super::super::settings::FilesSettings;
+    use super::super::settings::{FilesSettings, IndexHours};
     use super::*;
 
     const HELPER_READY: &str = r#"{"ready": True, "dimension": 768, "vector_version": 1, "llama": "b11461", "media": True, "load_seconds": 0.1}"#;
@@ -675,6 +765,15 @@ mod tests {
     fn service(
         dir: &Path,
         hold: Option<&'static str>,
+    ) -> (Arc<FilesService>, Arc<Mutex<Vec<FilesState>>>) {
+        service_at(dir, hold, 12 * 60, Power::default())
+    }
+
+    fn service_at(
+        dir: &Path,
+        hold: Option<&'static str>,
+        minute: u16,
+        power: Power,
     ) -> (Arc<FilesService>, Arc<Mutex<Vec<FilesState>>>) {
         let model_dir = model::dir(dir);
         std::fs::create_dir_all(&model_dir).unwrap();
@@ -689,7 +788,8 @@ mod tests {
         let log = Arc::clone(&seen);
         let hooks = Hooks {
             hold: Box::new(move || hold.map(str::to_string)),
-            hour: Box::new(|| 12),
+            minute: Box::new(move || minute),
+            power: Box::new(move || power),
             emit: Box::new(move |status| log.lock().push(status.state)),
         };
         (
@@ -853,6 +953,62 @@ mod tests {
             .unwrap();
         wait_for(&service, FilesState::Paused);
         service.stop();
+    }
+
+    #[test]
+    fn a_big_catch_up_waits_for_power_and_hours_and_says_until_when() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Notes");
+        std::fs::create_dir_all(&folder).unwrap();
+        for index in 0..(BIG_BACKLOG + 5) {
+            std::fs::write(folder.join(format!("note-{index}.md")), "a note").unwrap();
+        }
+        let on_battery = Power {
+            on_battery: true,
+            ..Power::default()
+        };
+        let settings = FilesSettings {
+            enabled: true,
+            folders: vec![folder.to_string_lossy().into()],
+            index_on_battery: false,
+            ..FilesSettings::default()
+        };
+        let (service, _) = service_at(dir.path(), None, 12 * 60, on_battery);
+        service.set_settings(settings.clone()).unwrap();
+        wait_for(&service, FilesState::Held);
+        assert_eq!(
+            service.status().detail.as_deref(),
+            Some("waiting for power: on battery")
+        );
+        service.stop();
+
+        let night = FilesSettings {
+            index_on_battery: true,
+            hours: IndexHours::Between {
+                start: 22 * 60,
+                end: 7 * 60,
+            },
+            ..settings
+        };
+        let (service, _) = service_at(dir.path(), None, 12 * 60, on_battery);
+        service.set_settings(night).unwrap();
+        wait_for(&service, FilesState::WaitingForHours);
+        assert_eq!(service.status().detail.as_deref(), Some("from 22:00"));
+        service.stop();
+
+        assert_eq!(
+            Power {
+                low_power_mode: true,
+                ..Power::default()
+            }
+            .blocker(true),
+            Some("waiting while Low Power Mode is on")
+        );
+        assert_eq!(
+            on_battery.blocker(true),
+            None,
+            "on battery is fine by default"
+        );
     }
 
     #[test]
