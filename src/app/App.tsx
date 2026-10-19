@@ -6,6 +6,7 @@ import { HomeHero } from "./HomeHero";
 import { ResumeWork } from "./ResumeWork";
 import type { AppToast } from "./types";
 import { SearchBar } from "@/domains/search/SearchBar";
+import { FilesResults } from "@/domains/search/FilesResults";
 import { Timeline } from "@/domains/timeline/Timeline";
 import { ControlPanel } from "@/domains/workspace/ControlPanel";
 import { ModelDownloadBanner } from "@/domains/workspace/ModelDownloadBanner";
@@ -686,6 +687,7 @@ function App() {
                                 onSelectResult={setSelectedResult}
                                 evalUi={EVAL_UI}
                             />
+                            {!EVAL_UI && <FilesResults query={query} />}
                         </section>
                     </div>
                 )}

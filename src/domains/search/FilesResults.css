@@ -1,0 +1,113 @@
+.files-results {
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.files-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.files-results-header h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.files-results-filters {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.files-results-filter {
+    border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+    background: transparent;
+    color: inherit;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.files-results-filter[aria-selected="true"] {
+    background: var(--fg-1, #222);
+    color: var(--bg-1, #fff);
+}
+
+.files-results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+}
+
+.files-results-tile {
+    aspect-ratio: 1;
+    border: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    padding: 0;
+    cursor: pointer;
+    background: var(--bg-2, rgba(127, 127, 127, 0.12));
+    color: inherit;
+}
+
+.files-results-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.files-results-tile-name {
+    display: block;
+    padding: 6px;
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.files-results-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.files-results-list .file-result {
+    text-align: left;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.files-results-list .file-result[data-selected="true"] {
+    background: var(--bg-2, rgba(127, 127, 127, 0.12));
+}
+
+.files-results-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+}
+
+.files-results-actions button {
+    border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+    background: transparent;
+    color: inherit;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+
+.files-results-empty {
+    margin: 0;
+    font-size: 12px;
+    opacity: 0.7;
+}
