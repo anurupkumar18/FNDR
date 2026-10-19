@@ -269,6 +269,41 @@ pub async fn files_forget(model: bool) -> Result<FilesStatus, String> {
     Ok(service.status())
 }
 
+/// The usual folders that exist here, for setup to offer: Documents, Desktop,
+/// Downloads, Pictures, Movies and Music.
+#[tauri::command]
+pub async fn files_suggested_folders() -> Result<Vec<String>, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("No home folder")?;
+    Ok([
+        "Documents",
+        "Desktop",
+        "Downloads",
+        "Pictures",
+        "Movies",
+        "Music",
+    ]
+    .iter()
+    .map(|name| home.join(name))
+    .filter(|folder| folder.is_dir())
+    .map(|folder| folder.to_string_lossy().to_string())
+    .collect())
+}
+
+/// A folder the person picks, or nothing when they cancel.
+#[tauri::command]
+pub async fn files_pick_folder() -> Result<Option<String>, String> {
+    let folder = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose a folder for Files search")
+            .pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(folder.map(|folder| folder.to_string_lossy().to_string()))
+}
+
 /// How many files a folder holds of each kind, by metadata only: setup shows
 /// what a first pass involves before anything is read.
 #[tauri::command]

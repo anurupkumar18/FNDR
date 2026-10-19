@@ -324,7 +324,7 @@ describe("Onboarding model step", () => {
 });
 
 describe("Onboarding persistence", () => {
-    it("offers imports after permissions and allows skipping them", async () => {
+    it("offers imports after permissions, then Files search, and allows skipping both", async () => {
         getOnboardingState.mockResolvedValue({
             step: "permissions", biometric_enabled: false, screen_permission: false,
             accessibility_permission: false, model_downloaded: true, model_id: "minilm-l6-v2", display_name: null,
@@ -335,6 +335,10 @@ describe("Onboarding persistence", () => {
         expect(await screen.findByRole("button", { name: "Skip imports" })).toBeInTheDocument();
         expect(onComplete).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole("button", { name: "Skip imports" }));
+        // Files search is optional: offered, or when it cannot load, passed with Continue.
+        expect(await screen.findByRole("heading", { name: "Search your files" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
+        fireEvent.click(await screen.findByRole("button", { name: /^(Not now|Continue)$/ }));
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
     });
 

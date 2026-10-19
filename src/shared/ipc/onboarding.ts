@@ -10,6 +10,7 @@ export type OnboardingStep =
     | "permissions"
     | "model_download"
     | "bring_past"
+    | "search_files"
     | "indexing_started"
     | "complete";
 

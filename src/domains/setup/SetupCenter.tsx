@@ -11,6 +11,7 @@ import { openExternalUrl } from "@/shared/utils/openExternalUrl";
 import { OperatorPermissions } from "@/domains/screen-guide/OperatorPermissions";
 import { CalendarMeetingPrep } from "./CalendarMeetingPrep";
 import { ImportSources } from "./ImportSources";
+import { FilesSetup } from "./FilesSetup";
 import { McpConnectCards } from "./McpConnectCards";
 import "./SetupCenter.css";
 
@@ -148,6 +149,7 @@ export function SetupCenter({ embedded = false }: { embedded?: boolean }) {
             <OperatorPermissions />
             <CalendarMeetingPrep />
             <ImportSources mode="settings" />
+            <FilesSetup mode="settings" />
 
             {error ? (
                 <p className="sg-diagnostics-error" role="alert">

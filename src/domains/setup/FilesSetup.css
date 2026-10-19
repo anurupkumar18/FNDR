@@ -1,0 +1,115 @@
+@import "../../shared/theme/receipts.css";
+
+.files-setup {
+    display: grid;
+    gap: var(--s-4, 12px);
+    max-width: 620px;
+    color: var(--rc-text);
+    font-family: var(--font-body);
+}
+.files-setup h2,
+.files-setup h3,
+.files-setup h4,
+.files-setup p { margin: 0; }
+.files-setup h2 {
+    font: 650 var(--t-h2)/1.1 var(--font-display);
+    letter-spacing: -0.022em;
+}
+.files-setup h4 {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--rc-text-2);
+}
+.files-setup-lede,
+.files-setup-note {
+    max-width: 56ch;
+    color: var(--rc-text-2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+.files-setup-note { font-size: 13px; }
+.files-setup-error { color: var(--rc-clay); font-size: 13px; }
+.files-setup-status { color: var(--rc-text-2); font-size: 13px; }
+
+.files-setup-folders {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--rc-line);
+}
+.files-setup-folders li {
+    border-bottom: 1px solid var(--rc-line);
+}
+.files-setup-folders label {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 0;
+    cursor: pointer;
+}
+.files-setup-folder-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+}
+.files-setup-folders small {
+    color: var(--rc-text-2);
+    font-size: 12px;
+}
+
+.files-setup-switch,
+.files-setup-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+.files-setup-field input,
+.files-setup-field select {
+    font: inherit;
+    padding: 4px 8px;
+    border: 1px solid var(--rc-line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+}
+
+.files-setup-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.files-setup-primary,
+.files-setup-secondary,
+.files-setup-link {
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    justify-self: start;
+}
+.files-setup-primary {
+    padding: 8px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--rc-accent);
+    color: var(--rc-on-accent);
+}
+.files-setup-primary:disabled { opacity: 0.5; cursor: default; }
+.files-setup-secondary {
+    padding: 6px 12px;
+    border: 1px solid var(--rc-line);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+}
+.files-setup-link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--rc-text-2);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}

@@ -148,6 +148,15 @@ export function filesForget(model: boolean): Promise<FilesStatus> {
     return invoke("files_forget", { model });
 }
 
+/** Documents, Desktop, Downloads, Pictures, Movies and Music, where they exist. */
+export function filesSuggestedFolders(): Promise<string[]> {
+    return invoke("files_suggested_folders");
+}
+
+export function filesPickFolder(): Promise<string | null> {
+    return invoke("files_pick_folder");
+}
+
 export function filesEstimate(folders: string[]): Promise<FilesEstimate> {
     return invoke("files_estimate", { folders });
 }
