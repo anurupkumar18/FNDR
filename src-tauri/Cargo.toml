@@ -84,10 +84,7 @@ crossbeam-channel = "0.5"
 parking_lot = "0.12"
 
 # AI Inference (llama-cpp-2)
-llama-cpp-2 = { version = "0.1.160", features = ["metal", "mtmd"] } # Metal + multimodal (Qwen3-VL import)
-# Raw bindings for Files search's EmbeddingGemma 2 embedder (files::gemma): one
-# llama_process call per input. Must stay the same version as llama-cpp-2.
-llama-cpp-sys-2 = { version = "0.1.160", features = ["mtmd"] }
+llama-cpp-2 = { version = "0.1", features = ["metal", "mtmd"] } # Metal + multimodal (Qwen3-VL import)
 # Add reqwest for model downloading if not already present
 reqwest = { version = "0.11", features = ["blocking", "json", "stream"] }
 futures-util = "0.3"

@@ -1,6 +1,6 @@
 //! EmbeddingGemma 2 on llama.cpp: the image and audio encoders (mtmd) feed the
 //! text model, whose mean-pooled, L2-normalized output is the vector. A port
-//! of DigUp's `LlamaEmbedder`, directly on `llama-cpp-sys-2`.
+//! of DigUp's `LlamaEmbedder` (MIT), on llama.cpp's C API.
 //!
 //! Inputs are framed as the reference frames them: `<bos> text <eos>`, and
 //! `<bos> <|image> soft tokens <image|> <eos>` (the same for audio). The model
@@ -8,12 +8,12 @@
 //! rows together) goes through one `llama_process` call. Running the pieces as
 //! separate decodes (`mtmd_helper_eval_chunks`) would pool each piece apart.
 //!
-//! Runs only in the Files helper process (`fndr files-helper`), never beside
-//! Qwen in the app: it initializes the llama.cpp backend itself. One thread at
-//! a time.
+//! Runs only in the Files helper (`fndr-files-helper`), never beside Qwen in
+//! the app: it links its own llama.cpp (scripts/files/build-llama.sh) and
+//! initializes the backend itself. One thread at a time.
 
-use super::image_sizing;
-use llama_cpp_sys_2 as sys;
+use crate::image_sizing;
+use crate::sys;
 use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -117,7 +117,7 @@ impl GemmaEmbedder {
         };
         // The first calls build the Metal pipelines: pay that now.
         for _ in 0..2 {
-            embedder.embed_texts(&[super::prompts::query("warm up")])?;
+            embedder.embed_texts(&["task: search result | query: warm up".to_string()])?;
         }
         Ok(embedder)
     }
@@ -420,12 +420,6 @@ impl Drop for GemmaEmbedder {
             sys::llama_free(self.context.as_ptr());
             sys::llama_model_free(self.model.as_ptr());
         }
-    }
-}
-
-impl super::indexer::Embedder for GemmaEmbedder {
-    fn embed_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        GemmaEmbedder::embed_texts(self, texts)
     }
 }
 

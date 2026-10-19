@@ -22,6 +22,18 @@ test: scripts-test
 	npm run build
 	cd src-tauri && cargo test
 
+# Files search's EmbeddingGemma 2 helper (ADR 033): pinned llama.cpp, then the
+# helper, staged in src-tauri/binaries. `files-check` needs the model files.
+.PHONY: files-helper files-check
+files-helper:
+	scripts/files/build-helper.sh
+
+files-check: files-helper
+	src-tauri/helpers/fndr-files/target/release/fndr-files-helper \
+		--check src-tauri/helpers/fndr-files/reference \
+		--text "$(FILES_MODELS)/embeddinggemma-2-Q8_0.gguf" \
+		--media "$(FILES_MODELS)/mmproj-embeddinggemma-2-Q8_0.gguf"
+
 # The Python tests for the audit, team, model, bench and bootstrap scripts.
 # They take a few seconds and nothing else runs them.
 .PHONY: scripts-test

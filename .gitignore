@@ -68,6 +68,7 @@ build/
 src-tauri/binaries/fndr-speech-*
 src-tauri/binaries/fndr-auth-*
 src-tauri/binaries/fndr-foundation-*
+src-tauri/binaries/fndr-files-helper-*
 src-tauri/binaries/FNDR Speech Helper.app/
 
 # iOS / Xcode
