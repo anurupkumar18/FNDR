@@ -1,0 +1,26 @@
+{
+  "about": "Files search eval (ADR 033): queries over scripts/files/make-testbed.sh's synthetic files and the file each should find first. Meaning queries are paraphrases with few shared words; lookups are exact codes; two cross languages.",
+  "thresholds": { "recall_at_1": 0.8, "recall_at_5": 0.95 },
+  "queries": [
+    { "query": "can I have a dog in the flat", "expect": "lease-notes.md" },
+    { "query": "how much is the deposit", "expect": "lease-notes.md" },
+    { "query": "trip to Japan", "expect": "tokyo-trip.txt" },
+    { "query": "HX7Q2L", "expect": "tokyo-trip.txt" },
+    { "query": "baking bread", "expect": "sourdough.md" },
+    { "query": "team away day plan", "expect": "offsite-agenda.txt" },
+    { "query": "growing vegetables", "expect": "garden.md" },
+    { "query": "K7Q2LM", "expect": "invoice-studio.txt" },
+    { "query": "running a long race", "expect": "marathon.md" },
+    { "query": "steamed hilsa fish with mustard", "expect": "bengali-recipe.txt" },
+    { "query": "when does the library close", "expect": "arabic-library.txt" },
+    { "query": "cracked windshield cover", "expect": "insurance-policy.docx" },
+    { "query": "how plants make sugar from light", "expect": "photosynthesis.pdf", "page": 1 },
+    { "query": "why leaves are green", "expect": "photosynthesis.pdf", "page": 2 },
+    { "query": "how much notice before quitting", "expect": "employment-contract.pdf", "page": 2 },
+    { "query": "E4027", "expect": "Screenshot payment error.png" },
+    { "query": "externally-managed-environment", "expect": "Screenshot build failure.png" },
+    { "query": "where they talk about sleep", "expect": "sleep-podcast.m4a" },
+    { "query": "risotto instructions", "expect": "cooking-voice-note.m4a" },
+    { "query": "how to get to the house", "expect": "directions.m4a" }
+  ]
+}

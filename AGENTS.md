@@ -23,6 +23,7 @@ Gates that answer "did quality regress" with pass or fail. Run the one your chan
 | Search, ranking, embedding text | `make qa-retrieval-check PERSONA=<knowledge-worker, office-pm or software-engineer>` | Reseeds a synthetic profile first. `QA_SKIP_SEED=1` is refused when the profile was seeded on an earlier day, because its "yesterday" queries would miss. |
 | Summaries, voice, labels, repair tools, the strong-match rule | `make qa-vault` | Scores a copy of the owner's vault against `scripts/audit/vault-quality-thresholds.json`. Counts only. Tighten a threshold when a number improves and stays there. |
 | Task suggestions | `cd src-tauri && cargo test --test task_suggestions` and `cargo run --example task_suggestion_eval` | 30 labeled screens. |
+| Files search: readers, ranking, the model helper, llama.cpp for it (ADR 033) | `make files-check FILES_MODELS=<dir>` and `make files-eval FILES_MODELS=<dir>` | A Mac with the two EmbeddingGemma 2 files. The check holds DigUp's reference vectors to cosine 0.999; the eval builds a synthetic testbed and gates R@1 and R@5 on `evals/files/queries.json`. |
 
 A failing check is reported as failing, with its output. A test that fails in another lane is named, not hidden and not fixed in passing.
 
