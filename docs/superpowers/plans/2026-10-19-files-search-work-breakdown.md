@@ -2,6 +2,8 @@
 
 Decision: [ADR 033](../../decisions/033-files-search-from-digup.md). Branch: `feat/files-search`. Everything ships behind the `files_search_enabled` setting, off until part 9.
 
+Status on 2026-10-19: parts 1 to 10 are built on the branch. Parts 1, 2 and the readers of parts 3 to 5 have run on a Mac (see ADR 033, Measured); the eval (part 10) and the surfaces in the running app have not yet.
+
 Each part is one vertical slice with its own gate. A part is done when its gate passes and a check against the real program (the model, Finder, QuickTime, an editor) has run once on a Mac where it depends on one.
 
 ## DigUp capability map
@@ -36,7 +38,7 @@ Every DigUp capability, and the part that brings it into FNDR.
 | Open code in the chosen editor at the line | `CodeEditors.swift` | 8 |
 | Onboarding: folder choice with time per folder while the model downloads | `Onboarding.swift`, `FolderChoices.swift`, `AddFolders.swift` | 9 |
 | Settings: folders, skipped folders and types, code, hours | `SettingsWindow.swift` | 9 |
-| Status in the menu bar, pause | `StatusMenu.swift` | 9 (FNDR status item and Trust and Settings) |
+| Status in the menu bar, pause | `StatusMenu.swift` | 9 (status and pause in the Setup Center; the menu bar item is not ported) |
 | CLI for indexing, search and evals | `digup/main.swift` | 10 (`cargo run --example files_eval`) |
 | Not ported: Sparkle and DigUp's update feed (FNDR's updater covers it), Windows and Linux shell | `Updates.swift`, `shell/` | none |
 
@@ -50,7 +52,7 @@ Gate: `cargo test --lib files::` covers the never-read rules, project and datase
 
 ### 2. EmbeddingGemma 2 helper
 
-llama.cpp bump with the no-logits patch, `FilesEmbedder` over `llama-cpp-2` (text, image, audio), the helper subcommand of the FNDR binary with a line protocol, the pinned download, reference vectors from DigUp's `Reference/vectors.json`.
+`fndr-files-helper` (`src-tauri/helpers/fndr-files`), a separate executable with its own llama.cpp b11461 and the no-logits patch (`scripts/files/build-llama.sh`), answering JSON lines (text, image, audio); `files::helper` and `files::process` drive it; `files::model` pins and downloads the two files; `--check` holds DigUp's reference vectors.
 
 Gate: reference vectors match within DigUp's tolerance on the Mac; Qwen3-VL extraction suite unchanged on the bumped build.
 
@@ -64,14 +66,18 @@ Page text through PDFKit (macOS) with the glyph-order and lost-letter checks, a 
 
 ### 6. Live index: watcher, hours, pressure gate, estimates
 
+`files::service`, `files::settings`, `files::estimate`; the app's hold is memory pressure and Qwen's model lock.
+
 ### 7. Surfaces: Quick Find, notch, Search and Ask, previews, open at place
 
 Gate: `ipcDrift.test.ts` green with the new commands; Quick Find test for merged memory and file rows; a native check of open at page and at moment.
 
 ### 8. Code search
 
-### 9. Onboarding and Settings, setting on by default for new installs if the gates hold
+### 9. Onboarding and Settings
+
+An opt-in onboarding step after imports, and a Files section in the Setup Center. Files search stays off until the person turns it on.
 
 ### 10. Evals
 
-DigUp's eval method (R@1 over labeled queries) as `files_eval`, on a synthetic testbed built by a script (no real files in the repo), and a row in the AGENTS.md gate table.
+DigUp's eval method (R@1 over labeled queries) as `files_eval`, on a synthetic testbed built by `scripts/files/make-testbed.sh` (no real files in the repo), queries in `evals/files/queries.json`, `make files-eval`, and a row in the AGENTS.md gate table.

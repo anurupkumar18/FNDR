@@ -46,9 +46,17 @@ DigUp searches the files on a computer by what is in them: pictures by what they
 - **Surfaces.** Quick Find, the notch and Search and Ask gain a file result type and file actions. `ipcDrift.test.ts` covers the new commands; `memoryReadDrift.test.ts` is unaffected because files are not memories.
 - **Cost.** The first pass is the heavy part and runs under FNDR's existing pressure gate, paused while capture extraction holds the model lock, and within the indexing hours the person picks.
 
+## Measured
+
+On Kunj's Mac (macOS 27.2, Apple Silicon, 16 GB), 2026-10-19:
+
+- `make files-check`: all nine DigUp reference vectors (three queries in English, Bengali and Arabic, two documents, a screenshot at 280 tokens, a photo at 140 and 70, 30 s of speech) and a batched-texts row agree at cosine 1.00000 with llama.cpp b11461 on Metal.
+- A query takes about 9 ms. Loading the text model takes 0.6 s; text plus media encoders 9 s.
+- Peak physical footprint: 178 MB for the text-only helper that answers searches, 858 MB for the full helper that runs only while indexing.
+- `cargo test --lib files::` in the app crate passes (73 tests at that commit), and `fndr-files-reader` reads real PDFs, pictures and recordings.
+
 ## Open before acceptance
 
-1. **License: settled 2026-10-19.** The `google/embeddinggemma-2` model card says `license: apache-2.0`, ungated (Hugging Face API read on the Mac, and confirmed by Kunj). Unlike EmbeddingGemma 300M, no Gemma Terms notice is owed. The card's license link points at a page named `gemma_4_license`; THIRD_PARTY_NOTICES.md carries the Apache 2.0 text when the model ships.
-2. **llama.cpp version: settled 2026-10-19.** The newest `llama-cpp-sys-2` (0.1.160) builds on the Mac but cannot load the model (`unknown model architecture: 'gemma-embedding2'`, run on Kunj's Mac). Its llama.cpp predates b11452, and it offers no way to point at another source. Hence the separate helper with its own llama.cpp in decision 1. Bumping the app's `llama-cpp-2` was rejected: it would not have loaded the model, and it would have changed Qwen's runtime two days before Beta.
-
-3. **MCP.** Whether outside agents may search files through MCP. Proposed default: no, until a separate decision.
+1. **License: settled 2026-10-19.** The `google/embeddinggemma-2` model card says `license: apache-2.0`, ungated (Hugging Face API read on the Mac, and confirmed by Kunj). Unlike EmbeddingGemma 300M, no Gemma Terms notice is owed. THIRD_PARTY_NOTICES.md names it.
+2. **llama.cpp version: settled 2026-10-19.** The newest `llama-cpp-sys-2` (0.1.160) builds on the Mac but cannot load the model (`unknown model architecture: 'gemma-embedding2'`). Its llama.cpp predates b11452, and it offers no way to point at another source. Hence the separate helper with its own llama.cpp in decision 1. Bumping the app's `llama-cpp-2` was rejected: it would not have loaded the model, and it would have changed Qwen's runtime two days before Beta.
+3. **MCP.** Whether outside agents may search files through MCP. Proposed default: no, until a separate decision. Files search registers no MCP tool.

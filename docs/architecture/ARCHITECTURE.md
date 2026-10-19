@@ -109,6 +109,20 @@ shortcut / panel -> text or local transcription -> privacy gate -> ephemeral cap
 
 The path reuses FNDR's capture, OCR, model lock, local inference, event, and hidden-window primitives, but it does not enter the capture-to-LanceDB pipeline. Raw pixels and guide turns remain ephemeral. Point cues must match normalized Apple Vision text-line centers supplied to the model; invented coordinates are discarded. The first implementation targets the primary display, while mixed-display capture and coordinate mapping remain an explicit follow-up rather than an implicit change to the stable capture loop. See ADR 014 and `docs/product/screen-guide.md`.
 
+## Files search
+
+Files search (ADR 033, ported from DigUp) finds files in folders the person chose by what is in them. It is apart from the memory pipeline: its own SQLite index (`files/index.sqlite`, and `files/code.sqlite` for code) under the app data, never `MemoryRecord`s.
+
+```text
+chosen folders -> files::crawl (rules: never keys, hidden folders, datasets) -> files::indexer
+               -> fndr-files-reader (Swift: PDFKit, ImageIO, Vision, AVFoundation)
+               -> fndr-files-helper (EmbeddingGemma 2 on its own llama.cpp, 768-d)
+               -> files::store (fp16 vectors + FTS5) -> files::searcher (per-modality z-scores + words)
+               -> Quick Find, the notch, Search and Ask
+```
+
+`files::service` runs the worker (watcher, pause, indexing hours, a hold while Qwen holds the model lock or memory is short) and answers searches with a text-only helper it lets go when idle. The two helpers are separate processes, so the model never shares a process or a llama.cpp build with Qwen.
+
 ## Stable vs Experimental
 
 The stable search path is OCR text plus local text embeddings. Screen captures and imported photos additionally write a 512-d CLIP `image_embedding`, exposed through `find_visually_similar_memories` for image-to-image retrieval over the same LanceDB column. Cross-modal text->image retrieval, meeting diarization, external graph services, and autonomous agent surfaces remain adjacent or experimental features unless wired through the core path above.
