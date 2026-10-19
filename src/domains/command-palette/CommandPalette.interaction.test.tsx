@@ -18,6 +18,7 @@ const baseContext = {
     onClearSearch: vi.fn(),
     onDeleteMemory: vi.fn(),
     onGoHome: vi.fn(),
+    onOpenSettings: vi.fn(),
 };
 
 afterEach(() => {
@@ -41,26 +42,40 @@ describe("CommandPalette interaction contract", () => {
         expect(screen.getByRole("textbox", { name: /search fndr commands/i })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /pause capture/i })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: /resume capture/i })).toBeNull();
-        expect(screen.getByRole("button", { name: /privacy activity/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /trust & settings/i })).toBeInTheDocument();
         expect(
             screen.getAllByRole("button").map((button) =>
                 button.querySelector(".cp-item-label")?.textContent,
             ),
         ).toEqual([
             "Home",
-            "Memory Vault",
             "Search & Ask FNDR",
-            "Daily Summary",
+            "Memory Vault",
+            "Daily Brief",
             "Daily outputs",
+            "Trust & Settings",
+            "Screen Guide",
+            "Hermes Agent",
             "Stats",
             "To-dos",
             "FNDR Wrapped",
-            "Hermes Agent",
-            "Screen Guide",
-            "Engine diagnostics",
             "Privacy Activity",
             "Pause capture",
         ]);
+
+        expect(screen.queryByRole("button", { name: /engine diagnostics/i })).toBeNull();
+
+        rerender(
+            <CommandPalette
+                isOpen
+                onClose={vi.fn()}
+                selectedMemory={null}
+                demoOnly
+                developerMode
+                context={{ ...baseContext, isCapturePaused: false }}
+            />,
+        );
+        expect(screen.getByRole("button", { name: /engine diagnostics/i })).toBeInTheDocument();
 
         rerender(
             <CommandPalette

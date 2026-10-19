@@ -62,6 +62,10 @@ interface ControlPanelProps {
     status: CaptureStatus | null;
     compact?: boolean;
     evalUi?: boolean;
+    isOpen?: boolean;
+    onOpenChange?: (isOpen: boolean) => void;
+    developerMode?: boolean;
+    onDeveloperModeChange?: (enabled: boolean) => void;
 }
 
 type QualityStatus = {
@@ -179,8 +183,17 @@ export function ControlPanel({
     status,
     compact: _compact = false,
     evalUi: _evalUi = false,
+    isOpen: controlledIsOpen,
+    onOpenChange,
+    developerMode = false,
+    onDeveloperModeChange,
 }: ControlPanelProps) {
-    const [isOpen, setIsOpen] = useState(false);
+    const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
+    const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+    const setIsOpen = useCallback((next: boolean) => {
+        if (controlledIsOpen === undefined) setUncontrolledIsOpen(next);
+        onOpenChange?.(next);
+    }, [controlledIsOpen, onOpenChange]);
     const homeSections = useHomeSections();
     const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
     const [tabDirection, setTabDirection] = useState<"forward" | "back">("forward");
@@ -713,6 +726,20 @@ export function ControlPanel({
                                         })}
                                     </div>
                                 </section>
+                                {onDeveloperModeChange && (
+                                    <section className="panel-section" aria-labelledby="settings-developer-mode-title">
+                                        <h3 id="settings-developer-mode-title">Developer Mode</h3>
+                                        <p className="section-hint">Show experimental diagnostics in Labs. Keep this off for normal use.</p>
+                                        <button
+                                            type="button"
+                                            className="ui-action-btn btn-secondary"
+                                            aria-pressed={developerMode}
+                                            onClick={() => onDeveloperModeChange(!developerMode)}
+                                        >
+                                            {developerMode ? "Developer Mode is on" : "Enable Developer Mode"}
+                                        </button>
+                                    </section>
+                                )}
                             </SettingsTabPanel>
                             <SettingsTabPanel idPrefix={TABS_ID} id="capture" active={settingsTab === "capture"} direction={tabDirection}>
                                 <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
