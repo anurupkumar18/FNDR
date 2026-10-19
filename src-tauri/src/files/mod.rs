@@ -14,7 +14,9 @@
 
 pub mod crawl;
 pub mod extract;
+pub mod helper;
 pub mod indexer;
+pub mod model;
 pub mod rules;
 pub mod search_text;
 pub mod searcher;
