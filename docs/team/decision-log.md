@@ -59,6 +59,7 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-15 | CI keeps main's OpenSSL 3 fix (one fresh cache) over PR #55's per-run clean of llama-cpp-sys-2. | Take #55's script; combine them | Owner, in the 2026-10-15 Q&A | `.github/workflows/test.yml` |
 | 2026-10-14 | Skills are listed and managed in Settings > AI, next to the newest runs, which can be rated there after the notch has closed. | In the notch; not yet | Owner, in the second 2026-10-14 Q&A | `src/domains/notch/NotchDoSettings.tsx` |
 | 2026-10-14 | Notch Do's next step type is paste into the focused app: the exact text shown before one tap, checked by reading the field, never retried. | Reminders; run a Shortcut; reveal a file | Owner, in the second 2026-10-14 Q&A | `operator::plan::StepAction::Paste`, `scripts/operator/notch-do-policy-cases.json` |
+| 2026-10-19 | Files search is Kunj's rank 3 feature. Only Kunj writes its code; teammates test, critique and comment on the UI, workings, experience and speed. | The usual lane rule (others may change it after asking) | Kunj, as the feature's owner, 2026-10-19. The lead's agreement is not recorded. | [ADR 033](../decisions/033-files-search-from-digup.md), `docs/team/files-search-feedback.md` |
 
 ## Earlier accepted ADRs (background, before this log)
 

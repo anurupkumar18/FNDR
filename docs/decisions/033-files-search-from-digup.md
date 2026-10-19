@@ -7,6 +7,15 @@ Proposed 2026-10-19. The four choices below were made in a 2026-10-19 session Q&
 - Parts and gates: [work breakdown](../superpowers/plans/2026-10-19-files-search-work-breakdown.md)
 - Source: [ARahim3/DigUp](https://github.com/ARahim3/DigUp) (MIT), read at its default branch on 2026-10-19.
 
+## Ownership
+
+Files search is Kunj's rank 3 feature (owner's rule, 2026-10-19). Only Kunj writes its code. Teammates test it, critique it and comment on anything: the UI, how it works, the experience, speed, results. They do that through `docs/team/files-search-feedback.md`, issues or merge request comments, not commits. A teammate who finds a bug reports it with steps; Kunj fixes it. Paths this covers:
+
+- `src-tauri/src/files/`, `src-tauri/src/ipc/commands/files.rs`, the `SearchFiles` step in `src-tauri/src/ipc/onboarding.rs`
+- `src-tauri/helpers/fndr-files/`, `src-tauri/helpers/fndr-files-reader/`, `src-tauri/examples/files_eval.rs`, `src-tauri/tauri.files.conf.json`
+- `scripts/files/`, `evals/files/`, the `files-*` Makefile targets
+- `src/shared/files/`, `src/shared/ipc/files.ts`, `src/domains/setup/FilesSetup.*`, `src/domains/search/FilesResults.*`, and the file rows in `src/domains/omnibar/` and `src/domains/notch/`
+
 ## Question
 
 DigUp searches the files on a computer by what is in them: pictures by what they show, PDFs by page, recordings and videos by moment, documents, and code. It does this with EmbeddingGemma 2, one multimodal embedding model that puts text, images, audio and video in one 768-dimensional space, plus an exact-word index. How does every DigUp capability become a native FNDR feature, reachable from anywhere on the Mac and from the notch, without a second app?

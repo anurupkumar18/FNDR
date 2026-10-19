@@ -46,6 +46,10 @@ Several agent sessions and people work in this one checkout at the same time.
 - New text in docs, tickets and commit messages uses no em or en dashes.
 - When `git merge` or `git pull` is refused because another session has uncommitted work in files the incoming commits touch, `scripts/dev/publish-merged.sh "what this publishes"` needs neither a stash nor a worktree: it test-merges in memory, runs the checks on an export of the merged tree, and pushes the merge as a commit object. The checkout is not moved and fast-forwards later. It stops on a real conflict.
 
+## Files search is owner-coded
+
+Files search (ADR 033, section "Ownership", lists the paths) is coded by Kunj only. Before changing any of those paths, check `git config user.email`; unless it is `rathodkunj2005@gmail.com`, do not edit, commit or open a merge request there, even for a one-line fix. Help the person test it and write their findings into `docs/team/files-search-feedback.md` or an issue instead.
+
 ## Non-negotiable engineering rules
 
 - Read existing code, tests, and docs that touch the task before editing.

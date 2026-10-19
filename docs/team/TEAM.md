@@ -28,6 +28,8 @@ Boards, token setup, and the commands you and your agent use to move tickets: `d
 
 Ask the lane owner before changing their area. Ask the lead when two lanes disagree.
 
+**Files search is Kunj's alone to code** (rank 3 feature, [ADR 033](../decisions/033-files-search-from-digup.md), section "Ownership"). This is stricter than the lane rule above: nobody else commits to it, not even a small fix. Everyone is welcome to test it, critique it and comment on the UI, how it works, the experience and speed; `docs/team/files-search-feedback.md` says how.
+
 ## What do I do now?
 
 1. Open your board (Issues, Boards, then your name in the board menu; links in `docs/team/gitlab-agent-instructions.md`) and look at the Ready column.
