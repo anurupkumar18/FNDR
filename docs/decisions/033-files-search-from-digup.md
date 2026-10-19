@@ -63,6 +63,8 @@ On Kunj's Mac (macOS 27.2, Apple Silicon, 16 GB), 2026-10-19:
 - A query takes about 9 ms. Loading the text model takes 0.6 s; text plus media encoders 9 s.
 - Peak physical footprint: 178 MB for the text-only helper that answers searches, 858 MB for the full helper that runs only while indexing.
 - `cargo test --lib files::` in the app crate passes (73 tests at that commit), and `fndr-files-reader` reads real PDFs, pictures and recordings.
+- `files_eval` on the synthetic testbed (42 files: documents, a docx, PDFs, screenshots, recordings, Bengali and Arabic) at `d8b7eb2`: R@1 1.00, R@5 1.00, MRR 1.000 over 20 queries; indexed in 9.2 s with the model warm. The first run scored R@1 0.90: Vision read the testbed's transparent PNG screenshots as black on black, so they are now flattened on white before OCR.
+- At the same commit, `cargo check` of the whole app crate is clean and `cargo test --lib files::` passes 85 tests.
 
 ## Open before acceptance
 
