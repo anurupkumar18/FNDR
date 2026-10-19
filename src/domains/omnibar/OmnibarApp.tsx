@@ -1018,7 +1018,7 @@ export function OmnibarApp() {
             )}
 
             {surface === "memory" && mode.kind === "search" && previewHit && (
-                <FilePreview hit={previewHit} onClose={() => setPreviewHit(null)} />
+                <FilePreview hit={previewHit} query={query} onClose={() => setPreviewHit(null)} />
             )}
 
             {surface === "memory" && mode.kind === "asking" && (

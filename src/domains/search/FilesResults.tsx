@@ -294,7 +294,7 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
                 </div>
             )}
 
-            {preview && <FilePreview hit={preview} onClose={() => setPreview(null)} />}
+            {preview && <FilePreview hit={preview} query={query} onClose={() => setPreview(null)} />}
         </section>
     );
 }

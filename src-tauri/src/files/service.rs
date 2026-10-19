@@ -354,6 +354,29 @@ impl FilesService {
             })
     }
 
+    /// The text a hit matched in (a page, a stretch of a document, the lines
+    /// of code), when segment `segment` is the file at `path`'s.
+    pub fn passage(&self, path: &str, segment: i64) -> Option<String> {
+        [self.index_file(), self.code_index_file()]
+            .iter()
+            .filter(|file| file.exists())
+            .filter_map(|file| FilesStore::open(file).ok())
+            .find_map(|store| {
+                let owner: Option<String> = store
+                    .db
+                    .query_row(
+                        "SELECT f.path FROM segments s JOIN files f ON f.id = s.file WHERE s.id = ?",
+                        [segment],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if owner.as_deref() != Some(path) {
+                    return None;
+                }
+                searcher::segment_text(&store, segment).ok().flatten()
+            })
+    }
+
     pub fn app_data_dir(&self) -> &Path {
         &self.app_data_dir
     }
@@ -952,6 +975,29 @@ mod tests {
             })
             .unwrap();
         wait_for(&service, FilesState::Paused);
+        service.stop();
+    }
+
+    #[test]
+    fn a_passage_is_given_only_for_the_file_it_belongs_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = documents(dir.path());
+        let (service, _) = service(dir.path(), None);
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                folders: vec![folder.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Idle);
+        let hit = service.search("K7Q2LM", None, 10, false).unwrap().hits[0].clone();
+        let text = service.passage(&hit.path, hit.segment_id).unwrap();
+        assert!(text.contains("K7Q2LM"), "{text}");
+        assert_eq!(
+            service.passage("/elsewhere/invoice.md", hit.segment_id),
+            None
+        );
         service.stop();
     }
 

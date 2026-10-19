@@ -132,3 +132,91 @@ export function openTitle(hit: FileHit, editor?: string | null): string {
     if (moment !== undefined) return `Open at ${clock(moment)}`;
     return "Open";
 }
+
+/** The z-score above which a hit matched by meaning, as the searcher gates it. */
+const MEANING_GATE = 2;
+
+/** Why the hit is here, DigUp's line under the preview: "Matches the frame at 0:06", "Has your words". */
+export function matchReason(hit: FileHit): string {
+    const meaning = hit.z !== null && hit.z >= MEANING_GATE;
+    if (!meaning) return hit.keyword_rank !== null ? "Has your words" : "Matches its name";
+    const place = hit.loc !== null ? clock(hit.loc) : "";
+    const page = hit.loc !== null ? `page ${Math.round(hit.loc)}` : "a page";
+    switch (hit.segment) {
+        case "image":
+            return hit.kind === "screenshot" ? "Matches what’s on screen" : "Matches the picture";
+        case "ocr":
+            return "Matches the text in it";
+        case "frame":
+            return `Matches the frame at ${place}`;
+        case "audio":
+            return hit.kind === "video" ? `Matches the sound at ${place}` : `Matches what’s heard at ${place}`;
+        case "page":
+            return `Matches the text on ${page}`;
+        case "page_image":
+            return `Matches ${page}`;
+        case "chunk":
+            return "Matches its text";
+        case "name":
+            return "Matches its name";
+        case "lines":
+        case "cells":
+            return hitPlace(hit) ? `Matches ${hitPlace(hit)}` : "Matches the code";
+    }
+}
+
+const LANGUAGES: Record<string, string> = {
+    py: "Python", ts: "TypeScript", tsx: "TypeScript", js: "JavaScript", jsx: "JavaScript", rs: "Rust", go: "Go",
+    swift: "Swift", java: "Java", kt: "Kotlin", rb: "Ruby", c: "C", h: "C", cpp: "C++", cc: "C++", hpp: "C++",
+    cs: "C#", php: "PHP", sh: "Shell", sql: "SQL", ipynb: "Notebook", m: "Objective-C", scala: "Scala", lua: "Lua",
+};
+
+function bytes(size: number): string {
+    if (size < 1000) return `${size} bytes`;
+    if (size < 1_000_000) return `${Math.round(size / 1000)} KB`;
+    if (size < 1_000_000_000) return `${(size / 1_000_000).toFixed(1).replace(/\.0$/, "")} MB`;
+    return `${(size / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} GB`;
+}
+
+function count(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * "Screenshot · Oct 1, 2026 · 1440 × 900 · 2.1 MB", "PDF · Oct 1, 2026 ·
+ * 463 pages, 120 read so far · 23 MB", "Python · 63 lines · Oct 1, 2026 · 2 KB".
+ */
+export function fileDetails(hit: FileHit): string {
+    const info = hit.info ?? {};
+    const date = new Date(hit.modified * 1000).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
+    const parts: string[] = [];
+    if (hit.kind === "code") {
+        const extension = hit.path.split(".").pop()?.toLowerCase() ?? "";
+        parts.push(LANGUAGES[extension] ?? "Code");
+        const cells = count(info.cells);
+        const lines = count(info.lines);
+        if (cells !== null) parts.push(cells === 1 ? "1 cell" : `${cells} cells`);
+        else if (lines !== null) parts.push(lines === 1 ? "1 line" : `${lines.toLocaleString("en-US")} lines`);
+        parts.push(date);
+    } else {
+        parts.push(kindLabel(hit.kind), date);
+        const width = count(info.width);
+        const height = count(info.height);
+        if (width !== null && height !== null) parts.push(`${width} × ${height}`);
+        const pages = count(info.pages);
+        const readTo = count(info.read_to);
+        if (pages !== null) {
+            parts.push((pages === 1 ? "1 page" : `${pages} pages`) + (readTo !== null ? `, ${readTo} read so far` : ""));
+        } else if (readTo !== null) {
+            parts.push("partly read so far");
+        }
+        const duration = count(info.duration);
+        if (duration !== null) parts.push(clock(duration));
+    }
+    if (hit.size > 0) parts.push(bytes(hit.size));
+    return parts.join(" · ");
+}

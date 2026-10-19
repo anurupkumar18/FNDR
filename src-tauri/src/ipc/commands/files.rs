@@ -559,3 +559,64 @@ pub async fn files_open_privacy_settings() -> Result<(), String> {
         .map(|_| ())
         .map_err(|error| error.to_string())
 }
+
+/// The text a hit matched in, for the preview: a page, a stretch of a document, lines of code.
+#[tauri::command]
+pub async fn files_passage(path: String, segment_id: i64) -> Result<Option<String>, String> {
+    let service = service()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        service.passage(&path, segment_id).map(|text| {
+            const MOST: usize = 6000;
+            match text.char_indices().nth(MOST) {
+                Some((cut, _)) => format!("{}…", &text[..cut]),
+                None => text,
+            }
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// A stretch of a found recording or video from the moment that matched, as a
+/// data URL to play in the preview: 30 s of sound, or 15 s of video.
+#[tauri::command]
+pub async fn files_clip(path: String, kind: String, seconds: f64) -> Result<String, String> {
+    use base64::Engine;
+    let path = indexed(&path)?;
+    let video = match kind.as_str() {
+        "audio" => false,
+        "video" => true,
+        _ => return Err("Only recordings and videos play.".into()),
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or_default();
+    let scratch = service()?
+        .app_data_dir()
+        .join("files")
+        .join("clips")
+        .join(stamp.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let made = reader()?.clip(
+            &path,
+            seconds,
+            if video { 15.0 } else { 30.0 },
+            video,
+            &scratch,
+        );
+        let bytes = made.and_then(|clip| std::fs::read(clip).map_err(|error| error.to_string()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let bytes = bytes?;
+        if bytes.len() > 12_000_000 {
+            return Err("This clip is too big to play here; open the file instead.".into());
+        }
+        let mime = if video { "video/mp4" } else { "audio/mp4" };
+        Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}

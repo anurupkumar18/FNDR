@@ -408,6 +408,23 @@ func previewFrame(_ url: URL, at seconds: Double, pixels: Int, out: URL) async t
     try write(image, to: out, png: false)
 }
 
+/// A stretch of a recording or video from `start`, to play in the preview at
+/// the moment that matched: sound as AAC, video at 960 × 540.
+func clip(_ url: URL, from start: Double, seconds: Double, video: Bool, out: URL) async throws {
+    let preset = video ? AVAssetExportPreset960x540 : AVAssetExportPresetAppleM4A
+    guard let session = AVAssetExportSession(asset: AVURLAsset(url: url), presetName: preset)
+    else { throw ReadError("can't cut a clip from this file") }
+    session.outputURL = out
+    session.outputFileType = video ? .mp4 : .m4a
+    session.timeRange = CMTimeRange(start: CMTime(seconds: max(0, start), preferredTimescale: 600),
+                                    duration: CMTime(seconds: seconds, preferredTimescale: 600))
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+        session.exportAsynchronously { done.resume() }
+    }
+    guard session.status == .completed
+    else { throw ReadError(session.error?.localizedDescription ?? "can't cut a clip from this file") }
+}
+
 // MARK: Opening at the place
 
 /// A word from page `page` (from 1) of a PDF that Preview will find there,
@@ -639,6 +656,13 @@ func handle(_ request: [String: Any]) throws -> [String: Any] {
         else { throw ReadError("no page \(number)") }
         let out = folder.appendingPathComponent(UUID().uuidString + ".jpg")
         try write(image, to: out, png: false)
+        return ["path": out.path]
+    case "clip":
+        let video = request["video"] as? Bool ?? false
+        let start = request["start"] as? Double ?? 0
+        let seconds = request["seconds"] as? Double ?? 30
+        let out = folder.appendingPathComponent(UUID().uuidString + (video ? ".mp4" : ".m4a"))
+        try runBlocking { try await clip(url, from: start, seconds: seconds, video: video, out: out) }
         return ["path": out.path]
     case "thumbnail":
         let pixels = request["pixels"] as? Int ?? 144

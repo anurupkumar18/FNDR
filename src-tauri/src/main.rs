@@ -944,6 +944,8 @@ fn main() {
             ipc::commands::files::files_model_links,
             ipc::commands::files::files_model_import,
             ipc::commands::files::files_open_privacy_settings,
+            ipc::commands::files::files_passage,
+            ipc::commands::files::files_clip,
             ipc::commands::get_app_names,
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,

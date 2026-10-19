@@ -198,6 +198,25 @@ impl FilesReader {
             .map(|out| out.how)
     }
 
+    /// `seconds` of a recording (M4A) or video (MP4) from `start`, under `out_dir`.
+    pub fn clip(
+        &mut self,
+        path: &Path,
+        start: f64,
+        seconds: f64,
+        video: bool,
+        out_dir: &Path,
+    ) -> Result<PathBuf, String> {
+        #[derive(Deserialize)]
+        struct Out {
+            path: PathBuf,
+        }
+        self.call::<Out>(json!({
+            "op": "clip", "path": path, "start": start, "seconds": seconds, "video": video, "out_dir": out_dir
+        }))
+        .map(|out| out.path)
+    }
+
     /// What Finder shows for the file, a PNG `pixels` wide at most.
     pub fn thumbnail(&mut self, path: &Path, pixels: u32) -> Result<Vec<u8>, String> {
         use base64::Engine;

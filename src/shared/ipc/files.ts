@@ -236,3 +236,13 @@ export function filesModelImport(): Promise<string[]> {
 export function filesOpenPrivacySettings(): Promise<void> {
     return invoke("files_open_privacy_settings");
 }
+
+/** The text a hit matched in: a page, a stretch of a document, the lines of code. */
+export function filesPassage(path: string, segmentId: number): Promise<string | null> {
+    return invoke("files_passage", { path, segmentId });
+}
+
+/** A stretch of a recording or video from `seconds`, as a data URL to play. */
+export function filesClip(path: string, kind: FileKind, seconds: number): Promise<string> {
+    return invoke("files_clip", { path, kind, seconds });
+}
