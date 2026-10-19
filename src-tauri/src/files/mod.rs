@@ -14,6 +14,8 @@
 
 pub mod crawl;
 pub mod extract;
+pub mod gemma;
+pub mod image_sizing;
 pub mod indexer;
 pub mod rules;
 pub mod search_text;
