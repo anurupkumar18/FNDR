@@ -88,12 +88,22 @@ fn main() {
         "media": embedder.has_media(),
         "load_seconds": (started.elapsed().as_secs_f64() * 100.0).round() / 100.0,
     });
-    if let Some(dir) = args.check {
-        eprintln!("{ready}");
-        std::process::exit(check(&mut embedder, &dir));
-    }
-    println!("{ready}");
-    serve(&mut embedder);
+    let code = match args.check {
+        Some(dir) => {
+            eprintln!("{ready}");
+            check(&mut embedder, &dir)
+        }
+        None => {
+            println!("{ready}");
+            serve(&mut embedder);
+            0
+        }
+    };
+    // The model and the Metal backend go before exit: ggml's static Metal device
+    // asserts at exit if a model still holds its buffers.
+    drop(embedder);
+    unsafe { sys::llama_backend_free() };
+    std::process::exit(code);
 }
 
 fn serve(embedder: &mut GemmaEmbedder) {
