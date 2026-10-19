@@ -620,3 +620,65 @@ pub async fn files_clip(path: String, kind: String, seconds: f64) -> Result<Stri
     .await
     .map_err(|error| error.to_string())?
 }
+
+/// Drags a found file out of FNDR into Finder, Mail or a chat, as DigUp's
+/// rows do. `icon` is the row's thumbnail (a PNG data URL); without one,
+/// Quick Look draws one. Only files in the Files index can be dragged.
+#[tauri::command]
+pub async fn files_drag(
+    app: AppHandle,
+    window: tauri::Window,
+    path: String,
+    icon: Option<String>,
+) -> Result<(), String> {
+    let path = indexed(&path)?;
+    drag_out(app, window, path, icon).await
+}
+
+#[cfg(target_os = "macos")]
+async fn drag_out(
+    app: AppHandle,
+    window: tauri::Window,
+    path: PathBuf,
+    icon: Option<String>,
+) -> Result<(), String> {
+    use base64::Engine;
+    let png = match icon
+        .as_deref()
+        .and_then(|url| url.strip_prefix("data:image/png;base64,"))
+    {
+        Some(data) => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|error| error.to_string())?,
+        None => {
+            let file = path.clone();
+            tauri::async_runtime::spawn_blocking(move || reader()?.thumbnail(&file, 64))
+                .await
+                .map_err(|error| error.to_string())??
+        }
+    };
+    let (done, result) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let started = drag::start_drag(
+            &window,
+            drag::DragItem::Files(vec![path]),
+            drag::Image::Raw(png),
+            |_, _| {},
+            drag::Options::default(),
+        )
+        .map_err(|error| error.to_string());
+        let _ = done.send(started);
+    })
+    .map_err(|error| error.to_string())?;
+    result.recv().map_err(|error| error.to_string())?
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn drag_out(
+    _app: AppHandle,
+    _window: tauri::Window,
+    _path: PathBuf,
+    _icon: Option<String>,
+) -> Result<(), String> {
+    Err("Dragging files out works on macOS only.".into())
+}

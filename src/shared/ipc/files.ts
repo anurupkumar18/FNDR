@@ -246,3 +246,8 @@ export function filesPassage(path: string, segmentId: number): Promise<string | 
 export function filesClip(path: string, kind: FileKind, seconds: number): Promise<string> {
     return invoke("files_clip", { path, kind, seconds });
 }
+
+/** Drags a found file out to Finder, Mail or a chat; `icon` is its thumbnail as a PNG data URL. */
+export function filesDrag(path: string, icon?: string): Promise<void> {
+    return invoke("files_drag", { path, icon });
+}

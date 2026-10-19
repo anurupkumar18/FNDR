@@ -15,6 +15,7 @@ import {
     matchReason,
     queryWords,
 } from "./fileHit";
+import { dragOutHandlers } from "./dragOut";
 import "./FileResult.css";
 
 interface FileResultProps {
@@ -46,6 +47,7 @@ export function FileResult({ hit, id, selected, weaker, thumbnail, onSelect, onO
             data-thumbnail={thumbnail !== undefined || undefined}
             onMouseEnter={onSelect}
             onClick={onOpen}
+            {...dragOutHandlers(hit.path, thumbnail)}
         >
             {thumbnail !== undefined && (
                 <img className="file-result-thumbnail" src={thumbnail} alt="" aria-hidden draggable={false} />

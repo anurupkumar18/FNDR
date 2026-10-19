@@ -124,6 +124,8 @@ objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread", "NSURL", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "NSScreen", "libc"] }
 block2 = "0.5"
+# Files search: drag a found file out to Finder, Mail or a chat (ADR 033).
+drag = "2.1.1"
 
 [dev-dependencies]
 serial_test = "3"

@@ -4,6 +4,7 @@ import { FilePreview, FileResult } from "@/shared/files/FileResult";
 import { copyFileHit, openFileHit, revealFileHit } from "@/shared/files/fileActions";
 import { fileName, hitPlace } from "@/shared/files/fileHit";
 import { useThumbnails } from "@/shared/files/useThumbnails";
+import { dragOutHandlers } from "@/shared/files/dragOut";
 import "./FilesResults.css";
 
 const LIMIT = 40;
@@ -236,6 +237,7 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
                             title={fileName(hit.path)}
                             onMouseEnter={() => setSelected(index)}
                             onClick={() => open(hit)}
+                            {...dragOutHandlers(hit.path, tiles[hit.path])}
                             onContextMenu={(event) => {
                                 event.preventDefault();
                                 setPreview(hit);
