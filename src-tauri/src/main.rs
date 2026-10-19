@@ -1102,6 +1102,7 @@ fn main() {
             // Onboarding
             ipc::onboarding::get_onboarding_state,
             ipc::onboarding::save_onboarding_state,
+            ipc::onboarding_funnel::record_onboarding_funnel_event,
             ipc::onboarding::request_biometric_auth,
             ipc::onboarding::check_permissions,
             ipc::onboarding::open_system_settings,

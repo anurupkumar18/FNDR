@@ -12,6 +12,7 @@ const checkPermissions = vi.fn();
 const openSystemSettings = vi.fn();
 const refreshAiModels = vi.fn();
 const getAppleModelStatus = vi.fn();
+const recordOnboardingFunnelEvent = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState: (...args: unknown[]) => getOnboardingState(...args),
@@ -23,6 +24,7 @@ vi.mock("@/shared/ipc/onboarding", () => ({
     downloadModel: (...args: unknown[]) => downloadModel(...args),
     refreshAiModels: (...args: unknown[]) => refreshAiModels(...args),
     getAppleModelStatus: (...args: unknown[]) => getAppleModelStatus(...args),
+    recordOnboardingFunnelEvent: (...args: unknown[]) => recordOnboardingFunnelEvent(...args),
 }));
 
 const downloadStatusValue: ModelDownloadStatus & {
@@ -55,7 +57,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getEncryptionStatement: (...args: unknown[]) => getEncryptionStatement(...args),
 }));
 vi.mock("@/domains/privacy-proof/PrivacyProof", () => ({ PrivacyProof: () => <div>Privacy Proof</div> }));
-vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: () => void }) => <button onClick={onContinue}>Skip imports</button> }));
+vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: (skipped: boolean) => void }) => <button onClick={() => onContinue(true)}>Skip imports</button> }));
 
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
     useModelDownloadStatus: () => downloadStatusValue,
@@ -82,6 +84,7 @@ beforeEach(() => {
         speech_recognition: "not_determined",
     });
     saveOnboardingState.mockResolvedValue(undefined);
+    recordOnboardingFunnelEvent.mockResolvedValue(undefined);
     ttsStatus.mockResolvedValue({ state: "not_installed", downloadedBytes: 0, totalBytes: 330_000_000 });
     ttsInstall.mockResolvedValue({ state: "downloading", downloadedBytes: 0, totalBytes: 330_000_000 });
     refreshAiModels.mockResolvedValue({ ai_model_available: true });
@@ -326,6 +329,20 @@ describe("Onboarding model step", () => {
 });
 
 describe("Onboarding persistence", () => {
+    it("records a skipped step and a save error without any entered name", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: false, model_id: null, display_name: null,
+        });
+        saveOnboardingState.mockRejectedValueOnce(new Error("disk full"));
+        render(<Onboarding onComplete={() => {}} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+        await waitFor(() => expect(saveOnboardingState).toHaveBeenCalledWith(
+            expect.objectContaining({ step: "privacy_promise" }), true,
+        ));
+        await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("error", "welcome"));
+    });
+
     it("offers imports after permissions and allows skipping them", async () => {
         getOnboardingState.mockResolvedValue({
             step: "permissions", biometric_enabled: false, screen_permission: false,
