@@ -1,0 +1,735 @@
+//! Files search while FNDR runs (ADR 033 part 6): one worker thread keeps the
+//! index in step with the chosen folders, and searches are answered from the
+//! same index file.
+//!
+//! - A folder watcher marks the index dirty; the worker syncs (metadata only)
+//!   a few seconds after things go quiet, so a new file is searchable soon.
+//! - Reading waits while the person paused it, outside their indexing hours
+//!   for a big backlog, or while [`Hooks::hold`] says so (FNDR paused, memory
+//!   pressure, Qwen holding the model lock).
+//! - The model helper with its media encoders runs only while there is work
+//!   and quits when the work is done. Searches start a text-only helper (310
+//!   MB) that, with the loaded vectors, is let go after a few idle minutes.
+//!
+//! Status goes out through [`Hooks::emit`] as counts and a state, never file
+//! names or contents.
+
+use super::helper::FilesHelper;
+use super::indexer::{self, IndexRun, Tools};
+use super::reader::FilesReader;
+use super::searcher::{self, FileHit, SearchOptions, Searcher};
+use super::settings::FilesSettings;
+use super::store::{FilesStore, IndexCounts};
+use super::{model, rules, FileKind};
+use parking_lot::{Condvar, Mutex, RwLock};
+use serde::Serialize;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Files read per batch before the worker looks at holds and settings again.
+const BATCH: usize = 4;
+/// A sync this long after the last change the watcher saw.
+const QUIET: Duration = Duration::from_secs(3);
+/// How often an idle worker looks around anyway.
+const TICK: Duration = Duration::from_secs(60);
+/// Search's model and vectors go after this long unused.
+const SEARCH_IDLE: Duration = Duration::from_secs(5 * 60);
+/// A backlog bigger than this waits for the indexing hours.
+const BIG_BACKLOG: i64 = 50;
+
+/// What the app supplies: FNDR's own reasons to wait, a clock, a status sink.
+pub struct Hooks {
+    /// Why reading must wait now, or `None`.
+    pub hold: Box<dyn Fn() -> Option<String> + Send + Sync>,
+    /// The local hour, 0 to 23.
+    pub hour: Box<dyn Fn() -> u8 + Send + Sync>,
+    pub emit: Box<dyn Fn(&FilesStatus) + Send + Sync>,
+}
+
+/// The helper programs, found once at start.
+#[derive(Debug, Clone, Default)]
+pub struct Programs {
+    pub helper: Option<PathBuf>,
+    pub reader: Option<PathBuf>,
+}
+
+impl Programs {
+    pub fn locate() -> Self {
+        Self {
+            helper: super::helper::locate(),
+            reader: super::reader::locate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesState {
+    Off,
+    NeedsModel,
+    Indexing,
+    Paused,
+    WaitingForHours,
+    Held,
+    Idle,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilesStatus {
+    pub state: FilesState,
+    /// Why it holds or failed, in a few words. Never a file name.
+    pub detail: Option<String>,
+    pub counts: IndexCounts,
+    pub model_ready: bool,
+    pub helper_found: bool,
+    pub reader_found: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilesSearch {
+    pub hits: Vec<FileHit>,
+    /// The first `strong` hits are strong; the rest fold under "weaker matches".
+    pub strong: usize,
+    /// False when the search used words only (no model yet, or it would not start).
+    pub meaning: bool,
+}
+
+#[derive(Default)]
+struct Signal {
+    dirty: bool,
+    wake: bool,
+    stop: bool,
+    changed_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct SearchSide {
+    store: Option<FilesStore>,
+    searcher: Option<(Searcher, u64)>,
+    helper: Option<FilesHelper>,
+    last_used: Option<Instant>,
+}
+
+pub struct FilesService {
+    app_data_dir: PathBuf,
+    settings: RwLock<FilesSettings>,
+    status: RwLock<FilesStatus>,
+    signal: Mutex<Signal>,
+    wakeup: Condvar,
+    /// Bumped whenever the index changes, so search reloads its vectors.
+    generation: AtomicU64,
+    search_side: Mutex<SearchSide>,
+    watcher: Mutex<Option<(Vec<PathBuf>, notify::RecommendedWatcher)>>,
+    programs: Programs,
+    hooks: Hooks,
+}
+
+impl FilesService {
+    pub fn index_path(app_data_dir: &Path) -> PathBuf {
+        app_data_dir.join("files").join("index.sqlite")
+    }
+
+    /// Loads the settings and starts the worker thread.
+    pub fn start(app_data_dir: PathBuf, programs: Programs, hooks: Hooks) -> Arc<Self> {
+        let settings = FilesSettings::load(&app_data_dir);
+        let service = Arc::new(Self {
+            status: RwLock::new(FilesStatus {
+                state: FilesState::Off,
+                detail: None,
+                counts: IndexCounts::default(),
+                model_ready: model::missing(&model::dir(&app_data_dir)).is_empty(),
+                helper_found: programs.helper.is_some(),
+                reader_found: programs.reader.is_some(),
+            }),
+            app_data_dir,
+            settings: RwLock::new(settings),
+            signal: Mutex::new(Signal {
+                dirty: true,
+                wake: true,
+                ..Signal::default()
+            }),
+            wakeup: Condvar::new(),
+            generation: AtomicU64::new(0),
+            search_side: Mutex::new(SearchSide::default()),
+            watcher: Mutex::new(None),
+            programs,
+            hooks,
+        });
+        let worker = Arc::clone(&service);
+        std::thread::Builder::new()
+            .name("files-index".into())
+            .spawn(move || worker.run())
+            .expect("spawn the Files worker");
+        service
+    }
+
+    pub fn settings(&self) -> FilesSettings {
+        self.settings.read().clone()
+    }
+
+    /// Saves new settings and has the worker look again. Folders the person
+    /// stopped searching leave the index.
+    pub fn set_settings(&self, settings: FilesSettings) -> Result<(), String> {
+        settings
+            .save(&self.app_data_dir)
+            .map_err(|error| error.to_string())?;
+        let dropped: Vec<String> = {
+            let old = self.settings.read();
+            old.folders
+                .iter()
+                .filter(|folder| !settings.folders.contains(folder))
+                .cloned()
+                .collect()
+        };
+        *self.settings.write() = settings;
+        if !dropped.is_empty() {
+            let store = FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?;
+            for folder in dropped {
+                store
+                    .remove_folder(&folder)
+                    .map_err(|error| error.to_string())?;
+            }
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        self.poke(true);
+        Ok(())
+    }
+
+    pub fn status(&self) -> FilesStatus {
+        self.status.read().clone()
+    }
+
+    /// The model files are in place (after a download, say): look again.
+    pub fn models_changed(&self) {
+        self.poke(false);
+    }
+
+    /// Deletes the whole index (the person turned Files search off and asked to forget it).
+    pub fn forget(&self) -> Result<(), String> {
+        let mut side = self.search_side.lock();
+        *side = SearchSide::default();
+        for suffix in ["", "-wal", "-shm"] {
+            let path = PathBuf::from(format!("{}{suffix}", self.index_file().display()));
+            if path.exists() {
+                std::fs::remove_file(path).map_err(|error| error.to_string())?;
+            }
+        }
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.poke(true);
+        Ok(())
+    }
+
+    pub fn stop(&self) {
+        self.signal.lock().stop = true;
+        self.wakeup.notify_all();
+    }
+
+    fn poke(&self, dirty: bool) {
+        let mut signal = self.signal.lock();
+        signal.wake = true;
+        signal.dirty |= dirty;
+        self.wakeup.notify_all();
+    }
+
+    fn index_file(&self) -> PathBuf {
+        Self::index_path(&self.app_data_dir)
+    }
+
+    fn model_dir(&self) -> PathBuf {
+        model::dir(&self.app_data_dir)
+    }
+
+    fn model_ready(&self) -> bool {
+        model::missing(&self.model_dir()).is_empty()
+    }
+
+    // ── Search ──────────────────────────────────────────────────────────────
+
+    /// Files matching `query`, best first. `kinds` narrows to some kinds.
+    /// Blocking: call it from a blocking thread.
+    pub fn search(
+        &self,
+        query: &str,
+        kinds: Option<HashSet<FileKind>>,
+        limit: usize,
+    ) -> Result<FilesSearch, String> {
+        if !self.settings.read().enabled {
+            return Ok(FilesSearch {
+                hits: Vec::new(),
+                strong: 0,
+                meaning: false,
+            });
+        }
+        let text = super::file_query_text(query).unwrap_or(query).trim();
+        if text.is_empty() {
+            return Ok(FilesSearch {
+                hits: Vec::new(),
+                strong: 0,
+                meaning: false,
+            });
+        }
+        let mut side = self.search_side.lock();
+        side.last_used = Some(Instant::now());
+        if side.store.is_none() {
+            if !self.index_file().exists() {
+                return Ok(FilesSearch {
+                    hits: Vec::new(),
+                    strong: 0,
+                    meaning: false,
+                });
+            }
+            side.store =
+                Some(FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?);
+        }
+        let generation = self.generation.load(Ordering::SeqCst);
+        if side
+            .searcher
+            .as_ref()
+            .is_none_or(|(_, seen)| *seen != generation)
+        {
+            let store = side.store.as_ref().expect("opened above");
+            side.searcher = Some((
+                Searcher::load(store).map_err(|error| error.to_string())?,
+                generation,
+            ));
+        }
+        let vector = self.query_vector(&mut side, text);
+        let options = SearchOptions {
+            kinds,
+            limit,
+            prefix_last: true,
+            ..SearchOptions::default()
+        };
+        let side = &*side;
+        let (searcher, _) = side.searcher.as_ref().expect("loaded above");
+        let store = side.store.as_ref().expect("opened above");
+        let hits = searcher
+            .search(store, text, vector.as_deref(), &options)
+            .map_err(|error| error.to_string())?;
+        let strong = searcher::strong_count(&hits, 0.5);
+        Ok(FilesSearch {
+            hits,
+            strong,
+            meaning: vector.is_some(),
+        })
+    }
+
+    /// The query's vector from a text-only helper, started on first use. `None`
+    /// (words only) when the model or the helper is missing or fails.
+    fn query_vector(&self, side: &mut SearchSide, text: &str) -> Option<Vec<f32>> {
+        if side.helper.is_none() {
+            let program = self.programs.helper.as_ref()?;
+            let text_model = self.model_dir().join(model::TEXT.name);
+            if !text_model.is_file() {
+                return None;
+            }
+            match FilesHelper::start(program, &text_model, None) {
+                Ok(helper) => side.helper = Some(helper),
+                Err(error) => {
+                    tracing::warn!("Files search runs on words only: {error}");
+                    return None;
+                }
+            }
+        }
+        match side.helper.as_mut()?.embed_query(text, false) {
+            Ok(vector) => Some(vector),
+            Err(error) => {
+                tracing::warn!("Files search query embedding failed: {error}");
+                side.helper = None; // started again next time
+                None
+            }
+        }
+    }
+
+    fn release_idle_search(&self) {
+        let mut side = self.search_side.lock();
+        if side
+            .last_used
+            .is_some_and(|used| used.elapsed() > SEARCH_IDLE)
+        {
+            *side = SearchSide::default();
+        }
+    }
+
+    // ── The worker ──────────────────────────────────────────────────────────
+
+    fn run(self: Arc<Self>) {
+        let mut tools: Option<(FilesHelper, Option<FilesReader>)> = None;
+        loop {
+            {
+                let mut signal = self.signal.lock();
+                if !signal.wake && !signal.stop {
+                    self.wakeup.wait_for(&mut signal, TICK);
+                }
+                if signal.stop {
+                    return;
+                }
+                // Let a burst of changes settle before syncing.
+                if signal.changed_at.is_some_and(|at| at.elapsed() < QUIET) {
+                    signal.wake = false;
+                    drop(signal);
+                    std::thread::sleep(QUIET);
+                    continue;
+                }
+                signal.wake = false;
+            }
+            self.release_idle_search();
+            match self.pass(&mut tools) {
+                Ok(more) => {
+                    if more {
+                        self.signal.lock().wake = true;
+                    } else {
+                        tools = None; // the model quits when the work is done
+                    }
+                }
+                Err(error) => {
+                    tools = None;
+                    self.set_status(FilesState::Error, Some(error));
+                }
+            }
+        }
+    }
+
+    /// One look: sync if needed, then read one batch. `Ok(true)` when more work remains now.
+    fn pass(
+        self: &Arc<Self>,
+        tools: &mut Option<(FilesHelper, Option<FilesReader>)>,
+    ) -> Result<bool, String> {
+        let settings = self.settings.read().clone();
+        if !settings.enabled {
+            *self.watcher.lock() = None;
+            self.set_status(FilesState::Off, None);
+            return Ok(false);
+        }
+        self.watch(&settings.roots());
+        let store = FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?;
+        let options = settings.index_options();
+        if std::mem::take(&mut self.signal.lock().dirty) {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            indexer::sync(&store, &settings.roots(), &options, &home)
+                .map_err(|error| error.to_string())?;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        let counts = store.counts().map_err(|error| error.to_string())?;
+        let partial = store.partial(1).map_err(|error| error.to_string())?.len();
+        if counts.pending == 0 && partial == 0 {
+            self.set_status(FilesState::Idle, None);
+            return Ok(false);
+        }
+        if settings.paused {
+            self.set_status(FilesState::Paused, None);
+            return Ok(false);
+        }
+        if !self.model_ready() {
+            self.set_status(FilesState::NeedsModel, None);
+            return Ok(false);
+        }
+        if counts.pending > BIG_BACKLOG && !settings.hours.allows((self.hooks.hour)()) {
+            self.set_status(FilesState::WaitingForHours, None);
+            return Ok(false);
+        }
+        if let Some(why) = (self.hooks.hold)() {
+            self.set_status(FilesState::Held, Some(why));
+            return Ok(false);
+        }
+        let Some(helper_program) = self.programs.helper.as_ref() else {
+            self.set_status(
+                FilesState::Error,
+                Some("the Files helper is not installed".into()),
+            );
+            return Ok(false);
+        };
+        if tools.is_none() {
+            let dir = self.model_dir();
+            let helper = FilesHelper::start(
+                helper_program,
+                &dir.join(model::TEXT.name),
+                Some(&dir.join(model::MEDIA.name)),
+            )?;
+            let reader = match self
+                .programs
+                .reader
+                .as_ref()
+                .map(|program| FilesReader::start(program))
+            {
+                Some(Ok(reader)) => Some(reader),
+                Some(Err(error)) => {
+                    tracing::warn!("Files search reads documents only: {error}");
+                    None
+                }
+                None => None,
+            };
+            *tools = Some((helper, reader));
+        }
+        self.set_status(FilesState::Indexing, None);
+        let (helper, reader) = tools.as_mut().expect("started above");
+        let scratch = self.app_data_dir.join("files").join("scratch");
+        let mut parts = Tools {
+            embedder: helper,
+            reader: reader
+                .as_mut()
+                .map(|reader| reader as &mut dyn super::reader::Reader),
+            scratch: &scratch,
+        };
+        let run: IndexRun = if counts.pending > 0 {
+            indexer::index_pending(&store, &mut parts, &options, BATCH)
+        } else {
+            indexer::continue_long_files(&store, &mut parts, &options, 1)
+        }
+        .map_err(|error| error.to_string())?;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        // Kinds no reader here can open stay queued; when that is all that is left, stop.
+        let progressed = run.done + run.partial + run.skipped + run.failed > 0;
+        if !progressed {
+            self.set_status(
+                FilesState::Idle,
+                Some("some files need macOS's readers".into()),
+            );
+        }
+        Ok(progressed)
+    }
+
+    /// Watches the chosen folders; a change where the walk goes marks the index dirty.
+    fn watch(self: &Arc<Self>, roots: &[PathBuf]) {
+        use notify::{RecursiveMode, Watcher};
+        let mut current = self.watcher.lock();
+        if current
+            .as_ref()
+            .is_some_and(|(watched, _)| watched == roots)
+        {
+            return;
+        }
+        *current = None;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let excluded = self.settings.read().excluded_folders.clone();
+        let watched_roots = roots.to_vec();
+        // The watcher holds the service weakly, so dropping the service stops it.
+        let service = Arc::downgrade(self);
+        let mark_dirty = move || {
+            let Some(service) = service.upgrade() else {
+                return;
+            };
+            let mut signal = service.signal.lock();
+            signal.dirty = true;
+            signal.wake = true;
+            signal.changed_at = Some(Instant::now());
+            service.wakeup.notify_all();
+        };
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else { return };
+            let relevant = event.paths.iter().any(|path| {
+                watched_roots
+                    .iter()
+                    .any(|root| rules::is_walked(path, root, &home, &excluded))
+            });
+            if relevant {
+                mark_dirty();
+            }
+        });
+        let Ok(mut watcher) = watcher else { return };
+        for root in roots {
+            let _ = watcher.watch(root, RecursiveMode::Recursive);
+        }
+        *current = Some((roots.to_vec(), watcher));
+    }
+
+    fn set_status(&self, state: FilesState, detail: Option<String>) {
+        let counts = FilesStore::open(&self.index_file())
+            .and_then(|store| store.counts())
+            .unwrap_or_default();
+        let status = FilesStatus {
+            state,
+            detail,
+            counts,
+            model_ready: self.model_ready(),
+            helper_found: self.programs.helper.is_some(),
+            reader_found: self.programs.reader.is_some(),
+        };
+        let changed = {
+            let mut current = self.status.write();
+            let changed = current.state != status.state
+                || current.counts != status.counts
+                || current.detail != status.detail;
+            *current = status.clone();
+            changed
+        };
+        if changed {
+            (self.hooks.emit)(&status);
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::super::process::tests::fake;
+    use super::super::settings::FilesSettings;
+    use super::*;
+
+    const HELPER_READY: &str = r#"{"ready": True, "dimension": 768, "vector_version": 1, "llama": "b11461", "media": True, "load_seconds": 0.1}"#;
+    /// Every text and picture becomes the same direction: meaning cannot
+    /// separate files here, so these tests exercise words and the worker.
+    const HELPER_ANSWER: &str =
+        r#"{"ok": True, "vectors": [[1.0] + [0.0] * 767 for _ in request.get("texts", [0])]}"#;
+
+    fn service(
+        dir: &Path,
+        hold: Option<&'static str>,
+    ) -> (Arc<FilesService>, Arc<Mutex<Vec<FilesState>>>) {
+        let model_dir = model::dir(dir);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for file in model::ALL {
+            std::fs::write(model_dir.join(file.name), b"stand-in").unwrap();
+        }
+        let programs = Programs {
+            helper: Some(fake(dir, "helper", HELPER_READY, HELPER_ANSWER)),
+            reader: None,
+        };
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let hooks = Hooks {
+            hold: Box::new(move || hold.map(str::to_string)),
+            hour: Box::new(|| 12),
+            emit: Box::new(move |status| log.lock().push(status.state)),
+        };
+        (
+            FilesService::start(dir.to_path_buf(), programs, hooks),
+            seen,
+        )
+    }
+
+    fn wait_for(service: &FilesService, state: FilesState) {
+        let started = Instant::now();
+        while service.status().state != state {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "stuck at {:?}",
+                service.status()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn documents(dir: &Path) -> PathBuf {
+        let folder = dir.join("Documents");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("invoice.md"),
+            "Invoice K7Q2LM for the studio rent in March.",
+        )
+        .unwrap();
+        std::fs::write(folder.join("notes.md"), "Planning notes for the offsite.").unwrap();
+        folder
+    }
+
+    #[test]
+    fn off_until_turned_on_then_indexes_and_searches() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = documents(dir.path());
+        let (service, _) = service(dir.path(), None);
+        wait_for(&service, FilesState::Off);
+        assert!(service.search("invoice", None, 10).unwrap().hits.is_empty());
+
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                folders: vec![folder.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Idle);
+        assert_eq!(service.status().counts.done, 2);
+
+        let found = service.search("K7Q2LM", None, 10).unwrap();
+        assert!(found.meaning, "the query went through the helper");
+        assert!(found.hits[0].path.ends_with("invoice.md"));
+        let found = service.search("file: invoi", None, 10).unwrap();
+        assert!(
+            found.hits[0].path.ends_with("invoice.md"),
+            "the prefix narrows, the last word is a prefix"
+        );
+
+        // A new file is picked up by the watcher or the next look.
+        std::fs::write(folder.join("lease.md"), "The lease allows one cat.").unwrap();
+        service.poke(true);
+        let started = Instant::now();
+        while service
+            .search("lease cat", None, 10)
+            .unwrap()
+            .hits
+            .is_empty()
+        {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "the new file never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // Dropping the folder drops its files.
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                folders: vec![],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Idle);
+        assert!(service.search("invoice", None, 10).unwrap().hits.is_empty());
+        service.stop();
+    }
+
+    #[test]
+    fn a_hold_or_a_pause_keeps_files_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = documents(dir.path());
+        let (service, _) = service(dir.path(), Some("FNDR is paused"));
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                folders: vec![folder.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Held);
+        let status = service.status();
+        assert_eq!(
+            (status.counts.pending, status.detail.as_deref()),
+            (2, Some("FNDR is paused"))
+        );
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                paused: true,
+                folders: vec![folder.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Paused);
+        service.stop();
+    }
+
+    #[test]
+    fn without_the_model_it_asks_for_it_and_searches_words_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = documents(dir.path());
+        let (service, _) = service(dir.path(), None);
+        std::fs::remove_file(model::dir(dir.path()).join(model::MEDIA.name)).unwrap();
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                folders: vec![folder.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::NeedsModel);
+        service.stop();
+    }
+}

@@ -22,6 +22,8 @@ pub mod reader;
 pub mod rules;
 pub mod search_text;
 pub mod searcher;
+pub mod service;
+pub mod settings;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
