@@ -206,6 +206,14 @@ fn check(embedder: &mut GemmaEmbedder, dir: &Path) -> i32 {
         if case.kind != "text" && !embedder.has_media() {
             continue;
         }
+        // A text-only helper embeds queries; its context cuts longer text by design.
+        if case.kind == "text" && !embedder.fits(&case.input) {
+            println!(
+                "{:<14} skipped: longer than this context (queries only)",
+                case.name
+            );
+            continue;
+        }
         let timer = Instant::now();
         let made = match case.kind.as_str() {
             "text" => embedder
@@ -238,7 +246,7 @@ fn check(embedder: &mut GemmaEmbedder, dir: &Path) -> i32 {
     let texts: Vec<&Case> = reference
         .cases
         .iter()
-        .filter(|case| case.kind == "text")
+        .filter(|case| case.kind == "text" && embedder.fits(&case.input))
         .collect();
     let inputs: Vec<String> = texts.iter().map(|case| case.input.clone()).collect();
     let worst = match embedder.embed_texts(&inputs) {

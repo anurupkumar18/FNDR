@@ -130,6 +130,13 @@ impl GemmaEmbedder {
         self.media.is_some()
     }
 
+    /// Whether `text` fits this context whole. A text-only context holds 512
+    /// tokens (queries); longer text is cut, as the reference cuts it.
+    pub fn fits(&self, text: &str) -> bool {
+        self.tokenize(text)
+            .is_ok_and(|tokens| tokens.len() < self.max_tokens)
+    }
+
     pub fn embed_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         self.reset();
         let mut vectors = Vec::with_capacity(texts.len());
