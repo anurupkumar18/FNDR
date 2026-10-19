@@ -374,6 +374,91 @@ func previewFrame(_ url: URL, at seconds: Double, pixels: Int, out: URL) async t
     try write(image, to: out, png: false)
 }
 
+// MARK: Opening at the place
+
+/// A word from page `page` (from 1) of a PDF that Preview will find there,
+/// spelled as the page spells it, preferring one no earlier page has: a PDF
+/// opens with it in Preview's search, which lists matches by page. Nil for
+/// page 1 or when none of the words is on the page.
+func landmark(_ document: PDFDocument, page: Int, words: [String]) -> String? {
+    guard page > 1, document.pageCount >= page, let target = document.page(at: page - 1)?.string else { return nil }
+    let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+    let before = (0..<(page - 1)).map { document.page(at: $0)?.string ?? "" }
+    let onPage = words.filter { $0.count >= 3 }.compactMap { word in
+        target.range(of: word, options: options).map { String(target[$0]) }
+    }
+    return onPage.first { word in !before.contains { $0.range(of: word, options: options) != nil } } ?? onPage.first
+}
+
+/// The Open Documents event with text to search for (keyAESearchText), as Spotlight opens documents.
+func openEvent(_ url: URL, searching text: String) -> NSAppleEventDescriptor {
+    let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenDocuments),
+                                       targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                       transactionID: AETransactionID(kAnyTransactionID))
+    let files = NSAppleEventDescriptor.list()
+    files.insert(NSAppleEventDescriptor(fileURL: url), at: 0)
+    event.setParam(files, forKeyword: keyDirectObject)
+    event.setParam(NSAppleEventDescriptor(string: text), forKeyword: AEKeyword(keyAESearchText))
+    return event
+}
+
+let quickTime = "com.apple.QuickTimePlayerX"
+let iina = "com.colliderli.iina"
+
+/// Opens a file in its app: a PDF page with a word from it in Preview's
+/// search, a moment in QuickTime Player (macOS asks once whether FNDR may
+/// control it) or IINA, anything else plainly. Returns how it opened.
+func open(_ url: URL, page: Int?, seconds: Double?, words: [String]) -> String {
+    guard let app = NSWorkspace.shared.urlForApplication(toOpen: url) else {
+        NSWorkspace.shared.open(url)
+        return "default"
+    }
+    let appID = Bundle(url: app)?.bundleIdentifier
+    if let page, let document = PDFDocument(url: url), let word = landmark(document, page: page, words: words) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.appleEvent = openEvent(url, searching: word)
+        NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+        return "searching \(word)"
+    }
+    if let seconds, seconds >= 1, appID == iina {
+        var components = URLComponents(string: "iina://open")
+        components?.queryItems = [URLQueryItem(name: "url", value: url.absoluteString),
+                                  URLQueryItem(name: "mpv_start", value: String(format: "%.1f", seconds))]
+        if let link = components?.url {
+            NSWorkspace.shared.open(link)
+            return "iina"
+        }
+    }
+    if let seconds, seconds >= 1, appID == quickTime {
+        // osascript, so macOS's "control QuickTime Player?" question never blocks this loop.
+        // The time goes over as whole milliseconds: a decimal point depends on locale.
+        let script = """
+            on run argv
+                set theFile to POSIX file (item 1 of argv)
+                set theTime to (item 2 of argv as integer) / 1000
+                tell application "QuickTime Player"
+                    activate
+                    set theDocument to open theFile
+                    set current time of theDocument to theTime
+                    play theDocument
+                end tell
+            end run
+            """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script, url.path, String(Int(seconds * 1000))]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { finished in
+            // Not allowed to control it, or no answer: open it the plain way.
+            if finished.terminationStatus != 0 { NSWorkspace.shared.open(url) }
+        }
+        if (try? process.run()) != nil { return "quicktime" }
+    }
+    NSWorkspace.shared.open(url)
+    return "default"
+}
+
 // MARK: Requests
 
 func handle(_ request: [String: Any]) throws -> [String: Any] {
@@ -381,7 +466,9 @@ func handle(_ request: [String: Any]) throws -> [String: Any] {
     guard let path = request["path"] as? String else { throw ReadError("no path") }
     let url = URL(fileURLWithPath: path)
     let folder = URL(fileURLWithPath: request["out_dir"] as? String ?? NSTemporaryDirectory())
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    if request["out_dir"] != nil {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    }
     switch op {
     case "picture":
         let screenshot = request["screenshot"] as? Bool ?? false
@@ -407,6 +494,14 @@ func handle(_ request: [String: Any]) throws -> [String: Any] {
             ? try runBlocking { try await soundWindows(url, window: window, hop: hop, folder: folder) }.pieces
             : []
         return ["frames": video.frames, "sound": sound, "duration": video.duration]
+    case "open":
+        let how = open(url, page: request["page"] as? Int, seconds: request["seconds"] as? Double,
+                       words: request["words"] as? [String] ?? [])
+        return ["how": how]
+    case "copy":
+        // The file itself, to paste in Finder, Mail or a chat.
+        NSPasteboard.general.clearContents()
+        return ["copied": NSPasteboard.general.writeObjects([url as NSURL])]
     case "preview_page":
         guard let document = PDFDocument(url: url) else { throw ReadError("can't open PDF") }
         if document.isLocked { throw ReadError("password-protected") }

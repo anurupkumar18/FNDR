@@ -146,6 +146,33 @@ impl FilesReader {
     }
 }
 
+impl FilesReader {
+    /// Opens a file in its app at the page (with a word from it in Preview's
+    /// search) or the moment (QuickTime Player, IINA). Returns how it opened.
+    pub fn open(
+        &mut self,
+        path: &Path,
+        page: Option<usize>,
+        seconds: Option<f64>,
+        words: &[String],
+    ) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct Out {
+            how: String,
+        }
+        let request =
+            json!({ "op": "open", "path": path, "page": page, "seconds": seconds, "words": words });
+        self.call::<Out>(request).map(|out| out.how)
+    }
+
+    /// Puts the file itself on the pasteboard, to paste anywhere.
+    pub fn copy(&mut self, path: &Path) -> Result<(), String> {
+        self.process
+            .call(json!({ "op": "copy", "path": path }))
+            .map(|_| ())
+    }
+}
+
 impl Reader for FilesReader {
     fn picture(
         &mut self,

@@ -1,0 +1,118 @@
+.file-result .file-result-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result-kind {
+    flex: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--file-kind-bg, rgba(127, 127, 127, 0.18));
+    color: inherit;
+    opacity: 0.85;
+}
+
+.file-result-place {
+    flex: none;
+    margin-left: 6px;
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.file-result-excerpt {
+    display: block;
+    font-size: 12px;
+    opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result-excerpt mark {
+    background: transparent;
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+}
+
+.file-result-folder {
+    display: block;
+    font-size: 11px;
+    opacity: 0.6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result[data-weaker] {
+    opacity: 0.75;
+}
+
+.file-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(127, 127, 127, 0.2);
+}
+
+.file-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.file-preview-close {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.file-preview-image {
+    max-width: 100%;
+    max-height: 320px;
+    object-fit: contain;
+    border-radius: 6px;
+    align-self: center;
+}
+
+.file-preview-loading {
+    height: 120px;
+    border-radius: 6px;
+    background: rgba(127, 127, 127, 0.12);
+}
+
+.file-preview-text {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 200px;
+    overflow: auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .file-preview-loading {
+        animation: file-preview-pulse 1.2s ease-in-out infinite;
+    }
+}
+
+@keyframes file-preview-pulse {
+    50% {
+        opacity: 0.5;
+    }
+}

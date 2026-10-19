@@ -97,6 +97,7 @@ zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 rusqlite = "0.37"
 # Files search (ADR 033): fp16 vectors and NFKC for exact words.
 half = "2.7"
+base64 = "0.22"
 unicode-normalization = "0.1"
 url = "2.5.8"
 quick-xml = "0.39.4"

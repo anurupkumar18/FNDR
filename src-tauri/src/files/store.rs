@@ -231,6 +231,14 @@ impl FilesStore {
         Ok(gone.len())
     }
 
+    /// Whether `path` is a file in this index: surfaces act only on those.
+    pub fn contains(&self, path: &str) -> rusqlite::Result<bool> {
+        self.db
+            .query_row("SELECT 1 FROM files WHERE path = ?", [path], |_| Ok(()))
+            .optional()
+            .map(|found| found.is_some())
+    }
+
     pub fn remove_file(&self, id: i64) -> rusqlite::Result<()> {
         self.clear_segments(id)?;
         self.db

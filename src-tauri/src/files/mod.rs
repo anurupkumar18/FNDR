@@ -13,6 +13,7 @@
 //! and inside a code project only screenshots.
 
 pub mod crawl;
+pub mod estimate;
 pub mod extract;
 pub mod helper;
 pub mod indexer;

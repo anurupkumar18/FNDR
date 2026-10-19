@@ -247,6 +247,21 @@ impl FilesService {
         model::missing(&self.model_dir()).is_empty()
     }
 
+    /// Whether `path` is in the Files index (or the code index): what surfaces may open, reveal, copy or preview.
+    pub fn is_indexed(&self, path: &str) -> bool {
+        FilesStore::open(&self.index_file())
+            .and_then(|store| store.contains(path))
+            .unwrap_or(false)
+    }
+
+    pub fn app_data_dir(&self) -> &Path {
+        &self.app_data_dir
+    }
+
+    pub fn programs(&self) -> &Programs {
+        &self.programs
+    }
+
     // ── Search ──────────────────────────────────────────────────────────────
 
     /// Files matching `query`, best first. `kinds` narrows to some kinds.

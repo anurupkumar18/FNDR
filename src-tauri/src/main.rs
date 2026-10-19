@@ -719,6 +719,8 @@ fn main() {
 
             app.manage(state.clone());
             app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
+            // Files search (ADR 033): off until the person turns it on.
+            ipc::commands::files::start(app.handle().clone(), state.clone());
 
             // Restore the local MCP endpoint only when this app connected a client.
             {
@@ -918,6 +920,17 @@ fn main() {
             ipc::commands::import_status,
             ipc::commands::import_cancel,
             ipc::commands::import_forget,
+            ipc::commands::files_status,
+            ipc::commands::files_settings_get,
+            ipc::commands::files_settings_set,
+            ipc::commands::files_search,
+            ipc::commands::files_model_download,
+            ipc::commands::files_open,
+            ipc::commands::files_reveal,
+            ipc::commands::files_copy,
+            ipc::commands::files_preview,
+            ipc::commands::files_forget,
+            ipc::commands::files_estimate,
             ipc::commands::get_app_names,
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,

@@ -306,6 +306,35 @@ describe("NotchHud", () => {
         expect(ipcMocks.fndrAnswer).not.toHaveBeenCalled();
     });
 
+    it("lists files under memories and opens one at its moment", async () => {
+        const clip = {
+            path: "/Users/a/Movies/safari.mov", kind: "video", score: 3, z: 3, cosine: 0.5, keyword_rank: null,
+            segment: "frame", segment_id: 4, loc: 72, loc_end: 80, excerpt: null, modified: 0, size: 1, info: null,
+        };
+        coreMocks.invoke.mockImplementation((command: string) =>
+            Promise.resolve(
+                command === "files_search" ? { hits: [clip], strong: 1, meaning: true }
+                    : command === "files_open" ? "quicktime"
+                    : undefined,
+            ),
+        );
+        render(<NotchHud />);
+        const input = await openPanel();
+        fireEvent.change(input, { target: { value: "zebra in a video" } });
+        await screen.findByText(card.title);
+        expect(await screen.findByText("safari.mov · at 1:12")).toBeInTheDocument();
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() =>
+            expect(coreMocks.invoke).toHaveBeenCalledWith("files_open", {
+                path: "/Users/a/Movies/safari.mov", page: undefined, seconds: 72, words: ["zebra", "video"],
+            }),
+        );
+        expect(ipcMocks.notchHudOpenMemory).not.toHaveBeenCalled();
+    });
+
     it("traces typed memory search from debounce through a verified count without exposing the query", async () => {
         const pending = deferred<MemoryCard[]>();
         ipcMocks.searchMemoryCards.mockReturnValueOnce(pending.promise);

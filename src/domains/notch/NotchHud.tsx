@@ -55,8 +55,14 @@ import {
     type VoiceActivityEvent,
 } from "@/shared/activity/voiceActivityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import type { FileHit } from "@/shared/ipc/files";
+import { openFileHit } from "@/shared/files/fileActions";
+import { fileFolder, fileName, hitPlace, isFileQuery, kindLabel } from "@/shared/files/fileHit";
+import { useFileSearch } from "@/shared/files/useFileSearch";
 
 const SEARCH_DEBOUNCE_MS = 200;
+/** Files found beside memories (ADR 033). */
+const FILE_ROWS = 3;
 /** No row highlighted — Enter asks FNDR instead of opening a memory. */
 const NO_SELECTION = -1;
 
@@ -409,7 +415,9 @@ export function NotchHud() {
                         atMs: requestedAt,
                     });
                 });
-                const request = trimmed
+                const request = isFileQuery(trimmed)
+                    ? Promise.resolve([])
+                    : trimmed
                     ? searchMemoryCards(trimmed, undefined, undefined, notchMetrics.openMaxRows)
                     : listMemoryCards(notchMetrics.openMaxRows);
                 request
@@ -467,6 +475,19 @@ export function NotchHud() {
         );
         return () => window.clearTimeout(timer);
     }, [query, stage, conversing]);
+
+    const files = useFileSearch(query, stage === "open" && !conversing, FILE_ROWS);
+
+    const openFile = useCallback(
+        (hit: FileHit | undefined) => {
+            if (!hit) {
+                return;
+            }
+            void openFileHit(hit, query).catch(() => undefined);
+            closePanel();
+        },
+        [closePanel, query]
+    );
 
     const openMemory = useCallback(
         (card: MemoryCard | undefined) => {
@@ -646,7 +667,7 @@ export function NotchHud() {
             }
             if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSelectedIndex((index) => Math.min(index + 1, results.length - 1));
+                setSelectedIndex((index) => Math.min(index + 1, results.length + files.hits.length - 1));
                 return;
             }
             if (event.key === "ArrowUp") {
@@ -661,10 +682,14 @@ export function NotchHud() {
                     openMemory(results[selectedIndex]);
                     return;
                 }
+                if (selectedIndex !== NO_SELECTION && files.hits[selectedIndex - results.length]) {
+                    openFile(files.hits[selectedIndex - results.length]);
+                    return;
+                }
                 ask(query);
             }
         },
-        [ask, closePanel, conversing, openMemory, query, results, selectedIndex]
+        [ask, closePanel, conversing, files.hits, openFile, openMemory, query, results, selectedIndex]
     );
 
     const thinking = turns.some((turn) => turn.status === "thinking");
@@ -863,7 +888,7 @@ export function NotchHud() {
                                 </div>
                             ) : null}
 
-                            {!conversing && results.length > 0 ? (
+                            {!conversing && results.length + files.hits.length > 0 ? (
                                 <div className="notch-results" role="listbox">
                                     {results.map((card, index) => (
                                         <button
@@ -883,12 +908,39 @@ export function NotchHud() {
                                             <span className="notch-row-meta">{card.app_name}</span>
                                         </button>
                                     ))}
+                                    {files.hits.map((hit, offset) => {
+                                        const index = results.length + offset;
+                                        const place = hitPlace(hit);
+                                        return (
+                                            <button
+                                                key={`${hit.path}-${hit.segment_id}`}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={index === selectedIndex}
+                                                className={
+                                                    index === selectedIndex
+                                                        ? "notch-row notch-row-selected"
+                                                        : "notch-row"
+                                                }
+                                                onMouseEnter={() => setSelectedIndex(index)}
+                                                onClick={() => openFile(hit)}
+                                            >
+                                                <span className="notch-row-title">
+                                                    {fileName(hit.path)}
+                                                    {place ? ` · ${place}` : ""}
+                                                </span>
+                                                <span className="notch-row-meta">
+                                                    {kindLabel(hit.kind)} · {fileFolder(hit.path)}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             ) : null}
 
                             <p className="notch-footer">
                                 <span>⏎ ask</span>
-                                {!conversing && results.length > 0 ? <span>↓ browse</span> : null}
+                                {!conversing && results.length + files.hits.length > 0 ? <span>↓ browse</span> : null}
                                 <span>esc {conversing ? "clear" : "close"}</span>
                             </p>
                             </>

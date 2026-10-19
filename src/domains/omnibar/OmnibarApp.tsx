@@ -23,10 +23,16 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import type { FileHit } from "@/shared/ipc/files";
+import { FilePreview, FileResult } from "@/shared/files/FileResult";
+import { copyFileHit, openFileHit, revealFileHit } from "@/shared/files/fileActions";
+import { isFileQuery } from "@/shared/files/fileHit";
+import { useFileSearch } from "@/shared/files/useFileSearch";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const CLIP_DEBOUNCE_MS = 150;
 const RESULT_LIMIT = 8;
+const FILE_LIMIT = 8;
 const CLIP_LIMIT = 30;
 const COPIED_FLASH_MS = 550;
 
@@ -128,6 +134,7 @@ export function OmnibarApp() {
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
+    const [previewHit, setPreviewHit] = useState<FileHit | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const searchSeq = useRef(0);
@@ -151,6 +158,7 @@ export function OmnibarApp() {
         setCopiedId(null);
         setFeedback(null);
         setActivityTrace(null);
+        setPreviewHit(null);
     }, []);
 
     // Skills are read each time the command bar opens, so one saved in the
@@ -177,7 +185,7 @@ export function OmnibarApp() {
         if (surface !== "memory" || mode.kind !== "search") {
             return;
         }
-        const trimmed = query.trim();
+        const trimmed = isFileQuery(query) ? "" : query.trim();
         if (!trimmed) {
             setResults([]);
             setSelectedIndex(0);
@@ -585,6 +593,40 @@ export function OmnibarApp() {
     const skill = typingSearch ? skillNamed(query, skills) : null;
     const doText = skill ? skill.name : typingSearch ? requestToDo(query) : null;
     const actionRows = doText ? 1 : 0;
+    const files = useFileSearch(query, typingSearch, FILE_LIMIT);
+    const fileStart = actionRows + results.length;
+    const selectedFile: FileHit | undefined =
+        surface === "memory" && selectedIndex >= fileStart ? files.hits[selectedIndex - fileStart] : undefined;
+
+    const openFile = useCallback(
+        (hit: FileHit) => {
+            const seq = ++actionSeq.current;
+            setFeedback(null);
+            void openFileHit(hit, query)
+                .then(() => dismissOmnibar())
+                .then(() => {
+                    if (actionSeq.current === seq) reset();
+                })
+                .catch(() => {
+                    if (actionSeq.current === seq) {
+                        setFeedback({ kind: "error", message: "Couldn’t open that file. Try again." });
+                    }
+                });
+        },
+        [query, reset],
+    );
+
+    // An open preview follows the selection, as Quick Look does.
+    useEffect(() => {
+        setPreviewHit((current) => (current && selectedFile && current.path !== selectedFile.path ? selectedFile : current));
+    }, [selectedFile]);
+
+    const fileAction = useCallback((action: Promise<void>, done: string, failed: string) => {
+        const seq = ++actionSeq.current;
+        void action
+            .then(() => actionSeq.current === seq && setFeedback({ kind: "status", message: done }))
+            .catch(() => actionSeq.current === seq && setFeedback({ kind: "error", message: failed }));
+    }, []);
 
     const handleKeyDown = (event: React.KeyboardEvent) => {
         if (event.key === "Escape") {
@@ -606,7 +648,22 @@ export function OmnibarApp() {
             return;
         }
         const listLength =
-            surface === "memory" ? results.length + actionRows : clips.length;
+            surface === "memory" ? results.length + actionRows + files.hits.length : clips.length;
+        if (selectedFile && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
+            event.preventDefault();
+            setPreviewHit((current) => (current?.path === selectedFile.path ? null : selectedFile));
+            return;
+        }
+        if (
+            selectedFile &&
+            (event.metaKey || event.ctrlKey) &&
+            event.key.toLowerCase() === "c" &&
+            inputRef.current?.selectionStart === inputRef.current?.selectionEnd
+        ) {
+            event.preventDefault();
+            fileAction(copyFileHit(selectedFile), "Copied the file. Paste it anywhere.", "Couldn’t copy that file.");
+            return;
+        }
         if (event.key === "ArrowDown") {
             event.preventDefault();
             if (listLength > 0) {
@@ -631,6 +688,10 @@ export function OmnibarApp() {
             }
             if (event.metaKey || event.ctrlKey) {
                 ask();
+            } else if (selectedFile && event.shiftKey) {
+                fileAction(revealFileHit(selectedFile), "Shown in Finder.", "Couldn’t show that file in Finder.");
+            } else if (selectedFile) {
+                openFile(selectedFile);
             } else if (doText && selectedIndex === 0) {
                 doIt(doText);
             } else if (results[selectedIndex - actionRows]) {
@@ -662,7 +723,8 @@ export function OmnibarApp() {
                     }
                     aria-controls={`omnibar-${surface}-results`}
                     aria-activedescendant={
-                        mode.kind === "search" && (surface === "memory" ? results.length + actionRows : clips.length)
+                        mode.kind === "search" &&
+                        (surface === "memory" ? results.length + actionRows + files.hits.length : clips.length)
                             ? `omnibar-${surface}-result-${selectedIndex}`
                             : undefined
                     }
@@ -687,7 +749,7 @@ export function OmnibarApp() {
                     autoComplete="off"
                     disabled={mode.kind === "asking"}
                 />
-                {searching && <span className="omnibar-spinner" aria-hidden />}
+                {(searching || files.searching) && <span className="omnibar-spinner" aria-hidden />}
                 <button
                     type="button"
                     className="omnibar-surface-toggle"
@@ -765,12 +827,31 @@ export function OmnibarApp() {
                             </span>
                         </button>
                     ))}
-                    {!results.length && query.trim() && !searching && !feedback && (
-                        <div className="omnibar-empty">No memory matches this search.</div>
+                    {files.hits.length > 0 && (
+                        <div className="omnibar-section" role="presentation">
+                            Files
+                        </div>
+                    )}
+                    {files.hits.map((hit, index) => (
+                        <FileResult
+                            key={`${hit.path}-${hit.segment_id}`}
+                            id={`omnibar-memory-result-${fileStart + index}`}
+                            hit={hit}
+                            className="omnibar-result"
+                            selected={fileStart + index === selectedIndex}
+                            weaker={index >= files.strong}
+                            onSelect={() => setSelectedIndex(fileStart + index)}
+                            onOpen={() => openFile(hit)}
+                        />
+                    ))}
+                    {!results.length && !files.hits.length && query.trim() && !searching && !files.searching && !feedback && (
+                        <div className="omnibar-empty">
+                            {isFileQuery(query) ? "No file matches this search." : "No memory matches this search."}
+                        </div>
                     )}
                     {!query.trim() && !searching && !feedback && (
                         <div className="omnibar-empty omnibar-empty-guidance">
-                            Search the memories stored on this Mac, or press ⌘↵ to ask a question.
+                            Search the memories and files on this Mac, or press ⌘↵ to ask a question. Start with file: for files only.
                         </div>
                     )}
                 </div>
@@ -822,6 +903,10 @@ export function OmnibarApp() {
                 </div>
             )}
 
+            {surface === "memory" && mode.kind === "search" && previewHit && (
+                <FilePreview hit={previewHit} onClose={() => setPreviewHit(null)} />
+            )}
+
             {surface === "memory" && mode.kind === "asking" && (
                 <div className="omnibar-answer omnibar-answer-loading" aria-hidden="true" />
             )}
@@ -869,7 +954,14 @@ export function OmnibarApp() {
             <div className="omnibar-footer">
                 <span>↹ {surface === "memory" ? "clips" : "memory"}</span>
                 <span>↑↓ navigate</span>
-                {surface === "memory" ? (
+                {surface === "memory" && selectedFile ? (
+                    <>
+                        <span>↵ open</span>
+                        <span>⇧↵ Finder</span>
+                        <span>⌘Y preview</span>
+                        <span>⌘C copy file</span>
+                    </>
+                ) : surface === "memory" ? (
                     <>
                         <span>↵ open</span>
                         <span>⌘↵ ask</span>
