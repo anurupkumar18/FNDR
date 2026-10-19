@@ -2,7 +2,9 @@
 
 Decision: [ADR 033](../../decisions/033-files-search-from-digup.md). Branch: `feat/files-search`. Everything ships behind the `files_search_enabled` setting, off until part 9.
 
-Status on 2026-10-19: parts 1 to 10 are built on the branch. Parts 1, 2 and the readers of parts 3 to 5 have run on a Mac (see ADR 033, Measured); the eval (part 10) and the surfaces in the running app have not yet.
+Status on 2026-10-19: parts 1 to 10 are built on the branch and the eval passes on a Mac (R@1 1.00 over 20 queries; ADR 033, Measured). The surfaces have not been seen in the running app yet.
+
+A parity pass against DigUp's app (the same evening) added what the first build lacked: in Quick Find, word matches while typing, results grouped by kind with Show all, the weaker matches folded behind a row, Quick Look thumbnails, Space for Quick Look, Cmd+O to the bigger window, and notes on incomplete results; in Search and Ask, filters with counts and the keyboard; a preview pane that plays from the moment and shows the passage or code lines; the power policy (Low Power Mode, a warm Mac, battery) and any indexing hours; per-folder progress, reach and subfolders in Settings; code folders offered in onboarding; model files downloaded elsewhere. Not ported: dragging a result out (needs a native drag plugin, open with Kunj) and DigUp's empty-window example chips (Search and Ask has its own empty state).
 
 Each part is one vertical slice with its own gate. A part is done when its gate passes and a check against the real program (the model, Finder, QuickTime, an editor) has run once on a Mac where it depends on one.
 
