@@ -665,7 +665,6 @@ export function OmnibarApp() {
             void filesQuickLook(selectedFile.path).catch(() => setQuickLook(false));
         }
         // Only a new selection moves it; opening and closing go through toggleQuickLook.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedFile?.path]);
 
     const openInWindow = useCallback(

@@ -135,7 +135,6 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
         if (!current) return;
         if (quickLook) void filesQuickLook(current.path).catch(() => setQuickLook(false));
         setPreview((open) => (open ? current : open));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [current?.path]);
 
     if (!text || (!all.length && !code.length && filter === 0)) {
