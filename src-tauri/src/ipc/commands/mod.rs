@@ -97,11 +97,6 @@ mod import;
 pub use import::*;
 
 pub mod files;
-pub use files::{
-    files_copy, files_editors, files_estimate, files_forget, files_model_download, files_open,
-    files_open_code, files_pick_folder, files_preview, files_reveal, files_search,
-    files_settings_get, files_settings_set, files_status, files_suggested_folders,
-};
 
 mod daily_review;
 pub use daily_review::*;

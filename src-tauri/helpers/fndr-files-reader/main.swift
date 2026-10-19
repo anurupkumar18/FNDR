@@ -92,12 +92,14 @@ func write(_ image: CGImage, to url: URL, png: Bool) throws {
 
 /// Apple Vision, accurate: small UI text is what screenshots are full of, and
 /// fast lost an exact lookup on DigUp's evals.
+/// A picture with see-through parts is read on white first: Vision takes them
+/// as black, and dark text on a clear background then reads as nothing.
 func recognizeText(in image: CGImage) -> String {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
     request.automaticallyDetectsLanguage = true
-    try? VNImageRequestHandler(cgImage: image).perform([request])
+    try? VNImageRequestHandler(cgImage: onWhite(image)).perform([request])
     return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
 }
 
@@ -106,6 +108,22 @@ let readsArabic: Bool = {
     request.recognitionLevel = .accurate
     return (try? request.supportedRecognitionLanguages())?.contains { $0.hasPrefix("ar") } ?? false
 }()
+
+func onWhite(_ image: CGImage) -> CGImage {
+    switch image.alphaInfo {
+    case .none, .noneSkipFirst, .noneSkipLast: return image
+    default: break
+    }
+    guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return image }
+    let whole = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.fill(whole)
+    context.draw(image, in: whole)
+    return context.makeImage() ?? image
+}
 
 // MARK: PDF pages
 
