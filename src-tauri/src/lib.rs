@@ -17,6 +17,7 @@ pub mod downloads;
 pub mod embed;
 pub mod embedding;
 pub mod evals;
+pub mod files;
 pub mod graph;
 pub mod handoff;
 pub mod http_util;
