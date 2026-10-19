@@ -309,7 +309,7 @@ describe("NotchHud", () => {
     it("lists files under memories and opens one at its moment", async () => {
         const clip = {
             path: "/Users/a/Movies/safari.mov", kind: "video", score: 3, z: 3, cosine: 0.5, keyword_rank: null,
-            segment: "frame", segment_id: 4, loc: 72, loc_end: 80, excerpt: null, modified: 0, size: 1, info: null,
+            segment: "frame", segment_id: 4, loc: 72, loc_end: 80, excerpt: null, modified: 0, size: 1, info: null, focus: null,
         };
         coreMocks.invoke.mockImplementation((command: string) =>
             Promise.resolve(

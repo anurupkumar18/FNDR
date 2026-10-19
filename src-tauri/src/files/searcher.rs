@@ -39,6 +39,9 @@ pub struct FileHit {
     pub modified: f64,
     pub size: i64,
     pub info: serde_json::Value,
+    /// Code: the line to open at, in the stretch `loc`..`loc_end`: where the
+    /// name looked up is defined, or the first line with the query's words.
+    pub focus: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +52,8 @@ pub struct SearchOptions {
     pub word_weight: f64,
     /// The last word is still being typed: match it as a prefix.
     pub prefix_last: bool,
+    /// This is the code index: names are looked up as names.
+    pub code: bool,
 }
 
 impl Default for SearchOptions {
@@ -59,6 +64,7 @@ impl Default for SearchOptions {
             z_gate: 2.0,
             word_weight: WORD_WEIGHT,
             prefix_last: false,
+            code: false,
         }
     }
 }
@@ -165,16 +171,27 @@ impl Searcher {
             }
         }
 
-        // Words: FTS5 over names, OCR, page and document text.
+        // Words: FTS5 over names, OCR, page and document text. A name from code
+        // (quantize_row_q8_0_ref) is matched as one phrase, as it is written.
         let terms = terms(text);
-        let mut patterns = patterns(&terms, options.prefix_last);
+        let identifier = if options.code {
+            super::code::lookup::identifier(text)
+        } else {
+            None
+        };
+        let mut patterns = match &identifier {
+            Some(words) => vec![super::code::lookup::phrase(words)],
+            None => patterns(&terms, options.prefix_last),
+        };
         // A word that is in no file as typed matches as the start of longer words.
-        for (index, term) in terms.iter().enumerate() {
-            if term.chars().count() >= 3
-                && !patterns[index].ends_with('*')
-                && !is_indexed(store, &patterns[index])?
-            {
-                patterns[index].push('*');
+        if identifier.is_none() {
+            for (index, term) in terms.iter().enumerate() {
+                if term.chars().count() >= 3
+                    && !patterns[index].ends_with('*')
+                    && !is_indexed(store, &patterns[index])?
+                {
+                    patterns[index].push('*');
+                }
             }
         }
         let mut words: Vec<(i64, i64, Option<String>)> = Vec::new();
@@ -217,7 +234,7 @@ impl Searcher {
             }
         }
 
-        let lookup = is_lookup(&terms);
+        let lookup = is_lookup(&terms) || identifier.is_some();
         let (meaning_weight, words_weight) = if lookup {
             (0.5, options.word_weight * 2.0)
         } else {
@@ -266,14 +283,25 @@ impl Searcher {
             // Point at the best meaning segment if it stands out; else at the segment the words matched.
             let use_meaning =
                 semantic.is_some_and(|value| value.0 >= options.z_gate || keyword.is_none());
-            let segment_id = match (use_meaning, semantic, keyword) {
+            let mut segment_id = match (use_meaning, semantic, keyword) {
                 (true, Some(value), _) => self.row_segment[value.2],
                 (_, _, Some(keyword)) => keyword.1,
                 _ => continue,
             };
-            let Some(hit) = self.hit(store, file, segment_id, score, semantic, keyword)? else {
+            let mut focus = None;
+            if options.code {
+                // Where a name is defined is looked for in the first 10 results only: a name
+                // used all over a big repo is in hundreds of stretches of every file that has it.
+                let words_here =
+                    keyword.is_some_and(|keyword| keyword.1 == segment_id) || identifier.is_some();
+                let looked_up = identifier.as_deref().filter(|_| hits.len() < 10);
+                (segment_id, focus) =
+                    code_place(store, file, segment_id, looked_up, text, &terms, words_here)?;
+            }
+            let Some(mut hit) = self.hit(store, file, segment_id, score, semantic, keyword)? else {
                 continue;
             };
+            hit.focus = focus;
             hits.push(hit);
         }
         Ok(hits)
@@ -360,6 +388,7 @@ impl Searcher {
             info: info
                 .and_then(|info| serde_json::from_str(&info).ok())
                 .unwrap_or(serde_json::Value::Null),
+            focus: None,
         }))
     }
 
@@ -375,6 +404,80 @@ impl Searcher {
             })
             .collect()
     }
+}
+
+/// The text of a segment as written: a page, a passage, a stretch of code.
+pub fn segment_text(store: &FilesStore, segment: i64) -> rusqlite::Result<Option<String>> {
+    store
+        .db
+        .query_row(
+            "SELECT coalesce(original, body) FROM fts WHERE rowid = ?",
+            [segment],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
+/// Code: the stretch to point at and the line in it to open at. A name looked
+/// up points at the stretch that defines it, when one does; otherwise the line
+/// is the first with the query's words, when they matched in this stretch.
+fn code_place(
+    store: &FilesStore,
+    file: i64,
+    segment: i64,
+    identifier: Option<&[String]>,
+    query: &str,
+    terms: &[String],
+    words_here: bool,
+) -> rusqlite::Result<(i64, Option<f64>)> {
+    use super::code::lookup;
+    let name = query.trim().replace("()", "");
+    if let Some(words) = identifier {
+        let mut best: Option<(i64, usize, u8)> = None;
+        let mut statement = store.db.prepare(
+            "SELECT s.id, s.loc, coalesce(fts.original, fts.body) FROM fts JOIN segments s ON s.id = fts.rowid
+             WHERE fts MATCH ? AND s.file = ? ORDER BY s.loc LIMIT 300",
+        )?;
+        let mut rows = statement.query(params![lookup::phrase(words), file])?;
+        while let Some(row) = rows.next()? {
+            if best.is_some_and(|best| best.2 >= 2) {
+                break;
+            }
+            let Some(text) = row.get::<_, Option<String>>(2)? else {
+                continue;
+            };
+            let first = row.get::<_, Option<f64>>(1)?.unwrap_or(1.0) as usize;
+            if let Some((line, strength)) = lookup::definition(&name, &text, first) {
+                if strength > best.map_or(0, |best| best.2) {
+                    best = Some((row.get(0)?, line, strength));
+                }
+            }
+        }
+        if let Some((segment, line, _)) = best {
+            return Ok((segment, Some(line as f64)));
+        }
+    }
+    if !words_here {
+        return Ok((segment, None));
+    }
+    let Some(text) = segment_text(store, segment)? else {
+        return Ok((segment, None));
+    };
+    let first: f64 = store
+        .db
+        .query_row("SELECT loc FROM segments WHERE id = ?", [segment], |row| {
+            row.get::<_, Option<f64>>(0)
+        })?
+        .unwrap_or(1.0);
+    let words: Vec<String> = if identifier.is_some() {
+        vec![name.to_lowercase()]
+    } else {
+        terms.to_vec()
+    };
+    Ok((
+        segment,
+        lookup::first_line(&words, &text, first as usize).map(|line| line as f64),
+    ))
 }
 
 /// This query's meaning scores: each score minus its modality's mean, in
@@ -846,6 +949,7 @@ mod tests {
             modified: 0.0,
             size: 0,
             info: serde_json::Value::Null,
+            focus: None,
         };
         assert_eq!(strong_count(&[hit(4.0), hit(2.5), hit(1.0)], 0.5), 2);
         assert_eq!(strong_count(&[], 0.5), 0);

@@ -12,6 +12,7 @@
 //! files, hidden folders, `~/Library`, bundles, datasets or cloud-only files,
 //! and inside a code project only screenshots.
 
+pub mod code;
 pub mod crawl;
 pub mod estimate;
 pub mod extract;

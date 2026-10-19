@@ -319,6 +319,11 @@ pub fn classify_code(path: &Path, options: &IndexOptions) -> Classification {
     Classification::Ignore
 }
 
+/// Source code, as code search reads it (not a repo's docs).
+pub fn is_source_extension(ext: &str) -> bool {
+    SOURCE_EXTENSIONS.contains(&ext)
+}
+
 /// Keys, certificates, password and credential files: never read, wherever they are.
 pub fn is_secret(name: &str) -> bool {
     let lower = name.to_lowercase();

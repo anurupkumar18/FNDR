@@ -18,6 +18,7 @@ function hit(partial: Partial<FileHit>): FileHit {
         modified: 0,
         size: 1,
         info: null,
+        focus: null,
         ...partial,
     };
 }
@@ -29,6 +30,9 @@ describe("file hits", () => {
         expect(hitPlace(hit({ kind: "audio", segment: "audio", loc: 3725 }))).toBe("at 1:02:05");
         expect(hitPlace(hit({ kind: "image", segment: "image", loc: null }))).toBeNull();
         expect(hitPlace(hit({ segment: "name" }))).toBeNull();
+        expect(hitPlace(hit({ kind: "code", segment: "lines", loc: 40, loc_end: 80, focus: 52 }))).toBe("line 52");
+        expect(hitPlace(hit({ kind: "code", segment: "lines", loc: 40, loc_end: 80 }))).toBe("line 40");
+        expect(hitPlace(hit({ kind: "code", segment: "cells", loc: 3 }))).toBe("cell 3");
     });
 
     it("name and place the file", () => {

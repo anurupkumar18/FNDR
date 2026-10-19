@@ -23,6 +23,8 @@ export interface FileHit {
     modified: number;
     size: number;
     info: Record<string, unknown> | null;
+    /** Code: the line to open at (where a name is defined, or the query's words are). */
+    focus: number | null;
 }
 
 export interface FilesSearchResult {
@@ -61,6 +63,8 @@ export interface FilesSettings {
     excluded_folders: string[];
     excluded_types: string;
     code_folders: string[];
+    /** An editor's bundle id; "" each file's default app; null the first installed editor. */
+    code_editor: string | null;
     include_datasets: boolean;
     paused: boolean;
     hours: IndexHours;
@@ -112,6 +116,19 @@ export function filesModelDownload(): Promise<void> {
 
 export function filesOpen(path: string, page?: number, seconds?: number, words?: string[]): Promise<string> {
     return invoke("files_open", { path, page, seconds, words });
+}
+
+export interface CodeEditor {
+    id: string;
+    name: string;
+}
+
+export function filesOpenCode(path: string, line: number): Promise<string> {
+    return invoke("files_open_code", { path, line });
+}
+
+export function filesEditors(): Promise<CodeEditor[]> {
+    return invoke("files_editors");
 }
 
 export function filesReveal(path: string): Promise<void> {

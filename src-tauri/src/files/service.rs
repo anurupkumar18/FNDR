@@ -106,10 +106,17 @@ struct Signal {
     changed_at: Option<Instant>,
 }
 
+/// One index's file and loaded vectors, for searching.
 #[derive(Default)]
-struct SearchSide {
+struct IndexSide {
     store: Option<FilesStore>,
     searcher: Option<(Searcher, u64)>,
+}
+
+#[derive(Default)]
+struct SearchSide {
+    /// The Files index, then the code index.
+    indexes: [IndexSide; 2],
     helper: Option<FilesHelper>,
     last_used: Option<Instant>,
 }
@@ -131,6 +138,11 @@ pub struct FilesService {
 impl FilesService {
     pub fn index_path(app_data_dir: &Path) -> PathBuf {
         app_data_dir.join("files").join("index.sqlite")
+    }
+
+    /// Code has an index of its own and never shows up in other searches.
+    pub fn code_index_path(app_data_dir: &Path) -> PathBuf {
+        app_data_dir.join("files").join("code.sqlite")
     }
 
     /// Loads the settings and starts the worker thread.
@@ -177,18 +189,29 @@ impl FilesService {
         settings
             .save(&self.app_data_dir)
             .map_err(|error| error.to_string())?;
-        let dropped: Vec<String> = {
+        let (dropped, dropped_code): (Vec<String>, Vec<String>) = {
             let old = self.settings.read();
-            old.folders
-                .iter()
-                .filter(|folder| !settings.folders.contains(folder))
-                .cloned()
-                .collect()
+            let gone = |old: &[String], new: &[String]| -> Vec<String> {
+                old.iter()
+                    .filter(|folder| !new.contains(folder))
+                    .cloned()
+                    .collect()
+            };
+            (
+                gone(&old.folders, &settings.folders),
+                gone(&old.code_folders, &settings.code_folders),
+            )
         };
         *self.settings.write() = settings;
-        if !dropped.is_empty() {
-            let store = FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?;
-            for folder in dropped {
+        for (file, folders) in [
+            (self.index_file(), dropped),
+            (self.code_index_file(), dropped_code),
+        ] {
+            if folders.is_empty() || !file.exists() {
+                continue;
+            }
+            let store = FilesStore::open(&file).map_err(|error| error.to_string())?;
+            for folder in folders {
                 store
                     .remove_folder(&folder)
                     .map_err(|error| error.to_string())?;
@@ -212,10 +235,12 @@ impl FilesService {
     pub fn forget(&self) -> Result<(), String> {
         let mut side = self.search_side.lock();
         *side = SearchSide::default();
-        for suffix in ["", "-wal", "-shm"] {
-            let path = PathBuf::from(format!("{}{suffix}", self.index_file().display()));
-            if path.exists() {
-                std::fs::remove_file(path).map_err(|error| error.to_string())?;
+        for file in [self.index_file(), self.code_index_file()] {
+            for suffix in ["", "-wal", "-shm"] {
+                let path = PathBuf::from(format!("{}{suffix}", file.display()));
+                if path.exists() {
+                    std::fs::remove_file(path).map_err(|error| error.to_string())?;
+                }
             }
         }
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -239,6 +264,10 @@ impl FilesService {
         Self::index_path(&self.app_data_dir)
     }
 
+    fn code_index_file(&self) -> PathBuf {
+        Self::code_index_path(&self.app_data_dir)
+    }
+
     fn model_dir(&self) -> PathBuf {
         model::dir(&self.app_data_dir)
     }
@@ -249,9 +278,14 @@ impl FilesService {
 
     /// Whether `path` is in the Files index (or the code index): what surfaces may open, reveal, copy or preview.
     pub fn is_indexed(&self, path: &str) -> bool {
-        FilesStore::open(&self.index_file())
-            .and_then(|store| store.contains(path))
-            .unwrap_or(false)
+        [self.index_file(), self.code_index_file()]
+            .iter()
+            .any(|file| {
+                file.exists()
+                    && FilesStore::open(file)
+                        .and_then(|store| store.contains(path))
+                        .unwrap_or(false)
+            })
     }
 
     pub fn app_data_dir(&self) -> &Path {
@@ -265,6 +299,7 @@ impl FilesService {
     // ── Search ──────────────────────────────────────────────────────────────
 
     /// Files matching `query`, best first. `kinds` narrows to some kinds.
+    /// `code: ...` searches the code index and nothing else; `file: ...` files only.
     /// Blocking: call it from a blocking thread.
     pub fn search(
         &self,
@@ -272,56 +307,64 @@ impl FilesService {
         kinds: Option<HashSet<FileKind>>,
         limit: usize,
     ) -> Result<FilesSearch, String> {
+        let nothing = || FilesSearch {
+            hits: Vec::new(),
+            strong: 0,
+            meaning: false,
+        };
         if !self.settings.read().enabled {
-            return Ok(FilesSearch {
-                hits: Vec::new(),
-                strong: 0,
-                meaning: false,
-            });
+            return Ok(nothing());
         }
-        let text = super::file_query_text(query).unwrap_or(query).trim();
-        if text.is_empty() {
-            return Ok(FilesSearch {
-                hits: Vec::new(),
-                strong: 0,
-                meaning: false,
-            });
+        let code_text = super::code_query_text(query);
+        let code = code_text.is_some();
+        let text = code_text
+            .or_else(|| super::file_query_text(query))
+            .unwrap_or(query)
+            .trim();
+        let file = if code {
+            self.code_index_file()
+        } else {
+            self.index_file()
+        };
+        if text.is_empty() || !file.exists() {
+            return Ok(nothing());
         }
         let mut side = self.search_side.lock();
         side.last_used = Some(Instant::now());
-        if side.store.is_none() {
-            if !self.index_file().exists() {
-                return Ok(FilesSearch {
-                    hits: Vec::new(),
-                    strong: 0,
-                    meaning: false,
-                });
-            }
-            side.store =
-                Some(FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?);
-        }
         let generation = self.generation.load(Ordering::SeqCst);
-        if side
-            .searcher
-            .as_ref()
-            .is_none_or(|(_, seen)| *seen != generation)
         {
-            let store = side.store.as_ref().expect("opened above");
-            side.searcher = Some((
-                Searcher::load(store).map_err(|error| error.to_string())?,
-                generation,
-            ));
+            let index = &mut side.indexes[usize::from(code)];
+            if index.store.is_none() {
+                index.store = Some(FilesStore::open(&file).map_err(|error| error.to_string())?);
+            }
+            if index
+                .searcher
+                .as_ref()
+                .is_none_or(|(_, seen)| *seen != generation)
+            {
+                let store = index.store.as_ref().expect("opened above");
+                index.searcher = Some((
+                    Searcher::load(store).map_err(|error| error.to_string())?,
+                    generation,
+                ));
+            }
         }
-        let vector = self.query_vector(&mut side, text);
+        let vector = self.query_vector(&mut side, text, code);
         let options = SearchOptions {
             kinds,
             limit,
             prefix_last: true,
+            code,
+            word_weight: if code {
+                searcher::CODE_WORD_WEIGHT
+            } else {
+                searcher::WORD_WEIGHT
+            },
             ..SearchOptions::default()
         };
-        let side = &*side;
-        let (searcher, _) = side.searcher.as_ref().expect("loaded above");
-        let store = side.store.as_ref().expect("opened above");
+        let index = &side.indexes[usize::from(code)];
+        let (searcher, _) = index.searcher.as_ref().expect("loaded above");
+        let store = index.store.as_ref().expect("opened above");
         let hits = searcher
             .search(store, text, vector.as_deref(), &options)
             .map_err(|error| error.to_string())?;
@@ -335,7 +378,7 @@ impl FilesService {
 
     /// The query's vector from a text-only helper, started on first use. `None`
     /// (words only) when the model or the helper is missing or fails.
-    fn query_vector(&self, side: &mut SearchSide, text: &str) -> Option<Vec<f32>> {
+    fn query_vector(&self, side: &mut SearchSide, text: &str, code: bool) -> Option<Vec<f32>> {
         if side.helper.is_none() {
             let program = self.programs.helper.as_ref()?;
             let text_model = self.model_dir().join(model::TEXT.name);
@@ -350,7 +393,7 @@ impl FilesService {
                 }
             }
         }
-        match side.helper.as_mut()?.embed_query(text, false) {
+        match side.helper.as_mut()?.embed_query(text, code) {
             Ok(vector) => Some(vector),
             Err(error) => {
                 tracing::warn!("Files search query embedding failed: {error}");
@@ -420,19 +463,39 @@ impl FilesService {
             self.set_status(FilesState::Off, None);
             return Ok(false);
         }
-        self.watch(&settings.roots());
-        let store = FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?;
+        let code_roots: Vec<PathBuf> = settings.code_folders.iter().map(PathBuf::from).collect();
+        self.watch(&[settings.roots(), code_roots.clone()].concat());
+        let files_store =
+            FilesStore::open(&self.index_file()).map_err(|error| error.to_string())?;
+        let code_store =
+            FilesStore::open(&self.code_index_file()).map_err(|error| error.to_string())?;
         let options = settings.index_options();
+        let code_options = super::IndexOptions {
+            code: true,
+            ..settings.index_options()
+        };
         if std::mem::take(&mut self.signal.lock().dirty) {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_default();
-            indexer::sync(&store, &settings.roots(), &options, &home)
+            indexer::sync(&files_store, &settings.roots(), &options, &home)
+                .map_err(|error| error.to_string())?;
+            indexer::sync_code(&code_store, &code_roots, &code_options, &home)
                 .map_err(|error| error.to_string())?;
             self.generation.fetch_add(1, Ordering::SeqCst);
         }
-        let counts = store.counts().map_err(|error| error.to_string())?;
-        let partial = store.partial(1).map_err(|error| error.to_string())?.len();
+        // Ordinary files first; code after them (it is text only, and quick).
+        let files_counts = files_store.counts().map_err(|error| error.to_string())?;
+        let files_partial = files_store
+            .partial(1)
+            .map_err(|error| error.to_string())?
+            .len();
+        let (store, options, counts, partial) = if files_counts.pending > 0 || files_partial > 0 {
+            (&files_store, &options, files_counts, files_partial)
+        } else {
+            let code_counts = code_store.counts().map_err(|error| error.to_string())?;
+            (&code_store, &code_options, code_counts, 0)
+        };
         if counts.pending == 0 && partial == 0 {
             self.set_status(FilesState::Idle, None);
             return Ok(false);
@@ -493,9 +556,9 @@ impl FilesService {
             scratch: &scratch,
         };
         let run: IndexRun = if counts.pending > 0 {
-            indexer::index_pending(&store, &mut parts, &options, BATCH)
+            indexer::index_pending(store, &mut parts, options, BATCH)
         } else {
-            indexer::continue_long_files(&store, &mut parts, &options, 1)
+            indexer::continue_long_files(store, &mut parts, options, 1)
         }
         .map_err(|error| error.to_string())?;
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -557,9 +620,17 @@ impl FilesService {
     }
 
     fn set_status(&self, state: FilesState, detail: Option<String>) {
-        let counts = FilesStore::open(&self.index_file())
-            .and_then(|store| store.counts())
-            .unwrap_or_default();
+        let counts = [self.index_file(), self.code_index_file()]
+            .iter()
+            .filter(|file| file.exists())
+            .filter_map(|file| FilesStore::open(file).and_then(|store| store.counts()).ok())
+            .fold(IndexCounts::default(), |sum, counts| IndexCounts {
+                files: sum.files + counts.files,
+                done: sum.done + counts.done,
+                pending: sum.pending + counts.pending,
+                failed: sum.failed + counts.failed,
+                vectors: sum.vectors + counts.vectors,
+            });
         let status = FilesStatus {
             state,
             detail,
@@ -698,6 +769,43 @@ mod tests {
             .unwrap();
         wait_for(&service, FilesState::Idle);
         assert!(service.search("invoice", None, 10).unwrap().hits.is_empty());
+        service.stop();
+    }
+
+    #[test]
+    fn code_folders_are_searched_only_with_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("package.json"), "{}").unwrap();
+        std::fs::write(
+            repo.join("auth.ts"),
+            "export function refreshAccessToken(user) {\n  return user;\n}\n",
+        )
+        .unwrap();
+        let (service, _) = service(dir.path(), None);
+        service
+            .set_settings(FilesSettings {
+                enabled: true,
+                code_folders: vec![repo.to_string_lossy().into()],
+                ..FilesSettings::default()
+            })
+            .unwrap();
+        wait_for(&service, FilesState::Idle);
+        let found = service
+            .search("code: refreshAccessToken", None, 10)
+            .unwrap();
+        assert!(found.hits[0].path.ends_with("auth.ts"), "{found:?}");
+        assert_eq!(found.hits[0].focus, Some(1.0));
+        assert!(
+            service
+                .search("refreshAccessToken", None, 10)
+                .unwrap()
+                .hits
+                .is_empty(),
+            "code stays out of other searches"
+        );
+        assert!(service.is_indexed(&repo.join("auth.ts").to_string_lossy()));
         service.stop();
     }
 

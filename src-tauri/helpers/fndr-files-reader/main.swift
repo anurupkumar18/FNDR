@@ -459,10 +459,101 @@ func open(_ url: URL, page: Int?, seconds: Double?, words: [String]) -> String {
     return "default"
 }
 
+// MARK: Code editors
+
+/// How an editor is told the line: a URL, or a command its app bundles.
+enum EditorMethod {
+    case fileURL(String)      // "vscode://file/<path>:<line>:1"
+    case command(String)      // a command inside the bundle taking "<path>:<line>"
+    case xed                  // Xcode's `xed --line <line> <path>`
+    case jetBrains            // the launcher takes `--line <line> <path>`
+    case openURL(String)      // "txmt://open?url=file://<path>&line=<line>"
+}
+
+let editors: [(id: String, name: String, method: EditorMethod)] = [
+    ("dev.zed.Zed", "Zed", .command("Contents/MacOS/cli")),
+    ("dev.zed.Zed-Preview", "Zed Preview", .command("Contents/MacOS/cli")),
+    ("com.todesktop.230313mzl4w4u92", "Cursor", .fileURL("cursor")),
+    ("com.microsoft.VSCode", "Visual Studio Code", .fileURL("vscode")),
+    ("com.microsoft.VSCodeInsiders", "VS Code Insiders", .fileURL("vscode-insiders")),
+    ("com.exafunction.windsurf", "Windsurf", .fileURL("windsurf")),
+    ("com.vscodium", "VSCodium", .fileURL("vscodium")),
+    ("com.sublimetext.4", "Sublime Text", .command("Contents/SharedSupport/bin/subl")),
+    ("com.sublimetext.3", "Sublime Text 3", .command("Contents/SharedSupport/bin/subl")),
+    ("com.jetbrains.pycharm", "PyCharm", .jetBrains),
+    ("com.jetbrains.pycharm.ce", "PyCharm CE", .jetBrains),
+    ("com.jetbrains.intellij", "IntelliJ IDEA", .jetBrains),
+    ("com.jetbrains.intellij.ce", "IntelliJ IDEA CE", .jetBrains),
+    ("com.jetbrains.WebStorm", "WebStorm", .jetBrains),
+    ("com.jetbrains.CLion", "CLion", .jetBrains),
+    ("com.jetbrains.goland", "GoLand", .jetBrains),
+    ("com.jetbrains.rustrover", "RustRover", .jetBrains),
+    ("com.jetbrains.PhpStorm", "PhpStorm", .jetBrains),
+    ("com.jetbrains.rubymine", "RubyMine", .jetBrains),
+    ("com.google.android.studio", "Android Studio", .jetBrains),
+    ("com.apple.dt.Xcode", "Xcode", .xed),
+    ("com.barebones.bbedit", "BBEdit", .openURL("x-bbedit")),
+    ("com.macromates.TextMate", "TextMate", .openURL("txmt")),
+]
+
+func installedEditors() -> [(id: String, name: String, method: EditorMethod)] {
+    editors.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.id) != nil }
+}
+
+/// Opens code at a line in `editorID` ("" for the file's default app; nil for
+/// the first installed editor, preferring one that is running). Returns how.
+func openCode(_ url: URL, line: Int, editorID: String?) -> String {
+    let installed = installedEditors()
+    let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+    let editor: (id: String, name: String, method: EditorMethod)? = editorID == "" ? nil
+        : installed.first { $0.id == editorID } ?? installed.first { running.contains($0.id) } ?? installed.first
+    guard let editor, let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: editor.id) else {
+        NSWorkspace.shared.open(url)
+        return "default"
+    }
+    var link: URL?
+    var command: (URL, [String])?
+    switch editor.method {
+    case .fileURL(let scheme):
+        let path = url.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? url.path
+        link = URL(string: "\(scheme)://file\(path):\(line):1")
+    case .openURL(let scheme):
+        var components = URLComponents(string: "\(scheme)://open")
+        components?.queryItems = [URLQueryItem(name: "url", value: url.absoluteString),
+                                  URLQueryItem(name: "line", value: "\(line)")]
+        link = components?.url
+    case .command(let path):
+        command = (app.appendingPathComponent(path), ["\(url.path):\(line)"])
+    case .xed:
+        command = (app.appendingPathComponent("Contents/Developer/usr/bin/xed"), ["--line", "\(line)", url.path])
+    case .jetBrains:
+        let executable = Bundle(url: app)?.executableURL ?? app.appendingPathComponent("Contents/MacOS/idea")
+        command = (executable, ["--line", "\(line)", url.path])
+    }
+    if let link {
+        NSWorkspace.shared.open(link)
+    } else if let (executable, arguments) = command, FileManager.default.isExecutableFile(atPath: executable.path) {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        if (try? process.run()) == nil {
+            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+    } else {
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    }
+    return editor.name
+}
+
 // MARK: Requests
 
 func handle(_ request: [String: Any]) throws -> [String: Any] {
     guard let op = request["op"] as? String else { throw ReadError("no op") }
+    if op == "editors" {
+        return ["editors": installedEditors().map { ["id": $0.id, "name": $0.name] }]
+    }
     guard let path = request["path"] as? String else { throw ReadError("no path") }
     let url = URL(fileURLWithPath: path)
     let folder = URL(fileURLWithPath: request["out_dir"] as? String ?? NSTemporaryDirectory())
@@ -497,6 +588,9 @@ func handle(_ request: [String: Any]) throws -> [String: Any] {
     case "open":
         let how = open(url, page: request["page"] as? Int, seconds: request["seconds"] as? Double,
                        words: request["words"] as? [String] ?? [])
+        return ["how": how]
+    case "open_code":
+        let how = openCode(url, line: max(1, request["line"] as? Int ?? 1), editorID: request["editor"] as? String)
         return ["how": how]
     case "copy":
         // The file itself, to paste in Finder, Mail or a chat.

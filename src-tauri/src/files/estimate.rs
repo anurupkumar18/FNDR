@@ -105,7 +105,7 @@ mod tests {
         std::fs::write(root.join("book.pdf"), vec![0_u8; 10_000_000]).unwrap(); // about 100 pages
         std::fs::write(root.join("id_rsa"), b"x").unwrap();
         let estimate = estimate(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             &IndexOptions::default(),
             Path::new("/nonexistent-home"),
         );

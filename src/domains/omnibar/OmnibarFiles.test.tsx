@@ -42,6 +42,7 @@ const leasePage = {
     modified: 0,
     size: 1,
     info: null,
+    focus: null,
 };
 
 const memory = {

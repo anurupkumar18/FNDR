@@ -931,6 +931,8 @@ fn main() {
             ipc::commands::files_preview,
             ipc::commands::files_forget,
             ipc::commands::files_estimate,
+            ipc::commands::files_open_code,
+            ipc::commands::files_editors,
             ipc::commands::get_app_names,
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,

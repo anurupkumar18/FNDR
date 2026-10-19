@@ -52,7 +52,24 @@ pub fn sync(
     options: &IndexOptions,
     home: &Path,
 ) -> rusqlite::Result<CrawlReport> {
-    let report = crawl::crawl(roots, options, home);
+    record(store, roots, crawl::crawl(roots, options, home))
+}
+
+/// [`sync`] for the code index: the code folders, walked the way code search reads them.
+pub fn sync_code(
+    store: &FilesStore,
+    roots: &[PathBuf],
+    options: &IndexOptions,
+    home: &Path,
+) -> rusqlite::Result<CrawlReport> {
+    record(store, roots, crawl::crawl_code(roots, options, home))
+}
+
+fn record(
+    store: &FilesStore,
+    roots: &[PathBuf],
+    report: CrawlReport,
+) -> rusqlite::Result<CrawlReport> {
     let mut found = HashSet::with_capacity(report.candidates.len());
     for facts in &report.candidates {
         let (id, needs_reading) = store.upsert_file(facts)?;
@@ -187,6 +204,9 @@ fn read_file(
     if file.kind == FileKind::Doc {
         return read_document(store, tools, options, file, later);
     }
+    if file.kind == FileKind::Code {
+        return read_code(store, tools, file);
+    }
     let Some(reader) = tools.reader.as_deref_mut() else {
         return Ok(Outcome::Waiting);
     };
@@ -309,8 +329,72 @@ fn read_file(
                 "duration": round1(video.duration), "frames": video.frames.len(), "sound_windows": video.sound.len(),
             })))
         }
-        FileKind::Doc | FileKind::Code => Ok(Outcome::Waiting),
+        FileKind::Doc => Ok(Outcome::Waiting),
+        FileKind::Code => unreachable!("code is read before a reader is needed"),
     }
+}
+
+/// A code file's stretches of lines (a notebook's of cells), each embedded
+/// with the file's path in its repo as its title, and kept with its lines for
+/// keyword search and for opening at the place.
+fn read_code(
+    store: &FilesStore,
+    tools: &mut Tools<'_>,
+    file: &PendingFile,
+) -> Result<Outcome, Failure> {
+    let code = match super::code::read(Path::new(&file.path)) {
+        Ok(code) => code,
+        Err(why) if why.starts_with("unreadable") => return Err(Failure::Read(why)),
+        Err(why) => return Ok(Outcome::Skipped(why)),
+    };
+    if code.pieces.is_empty() {
+        return Ok(Outcome::Skipped("no code".into()));
+    }
+    // Lines that are mostly numbers and symbols (a table of constants) get keyword search only.
+    let worded: Vec<usize> = (0..code.pieces.len())
+        .filter(|index| search_text::has_words(&code.pieces[*index].text))
+        .collect();
+    let inputs: Vec<String> = worded
+        .iter()
+        .map(|index| prompts::document(Some(&code.title), &code.pieces[*index].text))
+        .collect();
+    let vectors = if inputs.is_empty() {
+        Vec::new()
+    } else {
+        tools.embedder.embed_texts(&inputs)?
+    };
+    let mut by_index: Vec<Option<Vec<f32>>> = vec![None; code.pieces.len()];
+    for (index, vector) in worded.into_iter().zip(vectors) {
+        by_index[index] = Some(vector);
+    }
+    let kind = if code.cells.is_some() {
+        SegmentKind::Cells
+    } else {
+        SegmentKind::Lines
+    };
+    for (index, piece) in code.pieces.iter().enumerate() {
+        let summary = super::code::summary(&piece.text);
+        store.add_segment(
+            file.id,
+            &segment(
+                kind,
+                Modality::Text,
+                Some(piece.first as f64),
+                Some(piece.last as f64),
+                Some(&summary),
+                Some(&piece.text),
+                by_index[index].as_deref(),
+            ),
+        )?;
+    }
+    let mut info = json!({ "lines": code.lines });
+    if let Some(cells) = code.cells {
+        info["cells"] = json!(cells);
+    }
+    if let Some(repo) = code.repo {
+        info["repo"] = json!(repo);
+    }
+    Ok(Outcome::Done(info))
 }
 
 /// Pages of a PDF: all of a short one, a step of a long one. A long one stays
@@ -974,6 +1058,76 @@ mod tests {
             places.windows(2).all(|pair| pair[1] == pair[0] + 1.0),
             "passages numbered once each"
         );
+    }
+
+    #[test]
+    fn code_is_found_at_the_line_that_defines_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("app");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        write(&repo, "package.json", "{}");
+        write(
+            &repo.join("src"),
+            "client.ts",
+            "import { api } from './api';\n\nexport async function load() {\n  const token = await refreshAccessToken(user);\n  return api(token);\n}\n",
+        );
+        write(
+            &repo.join("src"),
+            "auth.ts",
+            "// Tokens\n\nexport async function refreshAccessToken(user) {\n  return fetch('/token');\n}\n",
+        );
+        write(
+            &repo.join("src"),
+            "retry.py",
+            "import time\n\ndef retry_with_backoff(call, times=3):\n    for attempt in range(times):\n        time.sleep(2 ** attempt)\n",
+        );
+        let store = FilesStore::open_in_memory().unwrap();
+        let options = IndexOptions::default();
+        let report = super::super::crawl::crawl_code(
+            std::slice::from_ref(&repo),
+            &options,
+            Path::new("/nonexistent-home"),
+        );
+        for facts in &report.candidates {
+            let (id, _) = store.upsert_file(facts).unwrap();
+            store.add_name(id, &facts.path).unwrap();
+        }
+        let scratch = dir.path().join("scratch");
+        let mut tools = Tools {
+            embedder: &mut BagOfWords,
+            reader: None,
+            scratch: &scratch,
+        };
+        let run = index_pending(&store, &mut tools, &options, 10).unwrap();
+        assert_eq!(run.done, 3, "{run:?}");
+
+        let searcher = Searcher::load(&store).unwrap();
+        let code = SearchOptions {
+            code: true,
+            word_weight: super::super::searcher::CODE_WORD_WEIGHT,
+            ..SearchOptions::default()
+        };
+        let hits = searcher
+            .search(&store, "refreshAccessToken", None, &code)
+            .unwrap();
+        assert!(hits[0].path.ends_with("auth.ts"), "{hits:?}");
+        assert_eq!(hits[0].focus, Some(3.0));
+        let hits = searcher
+            .search(
+                &store,
+                "retry backoff",
+                Some(&BagOfWords::vector("retry backoff")),
+                &code,
+            )
+            .unwrap();
+        assert!(hits[0].path.ends_with("retry.py"), "{hits:?}");
+        assert_eq!(hits[0].focus, Some(3.0));
+        // A keyword match quotes its words; the stored summary is the definition line.
+        assert!(hits[0]
+            .excerpt
+            .as_deref()
+            .unwrap()
+            .contains("\u{AB}retry\u{BB}_with_\u{AB}backoff\u{BB}"));
     }
 
     #[test]

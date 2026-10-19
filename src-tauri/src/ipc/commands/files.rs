@@ -165,6 +165,26 @@ pub async fn files_open(
     .map_err(|error| error.to_string())?
 }
 
+/// Opens code at its line in the editor chosen in Settings.
+#[tauri::command]
+pub async fn files_open_code(path: String, line: usize) -> Result<String, String> {
+    let path = indexed(&path)?;
+    let editor = service()?.settings().code_editor;
+    tauri::async_runtime::spawn_blocking(move || {
+        reader()?.open_code(&path, line.max(1), editor.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The code editors installed here, for Settings.
+#[tauri::command]
+pub async fn files_editors() -> Result<Vec<crate::files::reader::Editor>, String> {
+    tauri::async_runtime::spawn_blocking(|| reader()?.editors())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub async fn files_reveal(path: String) -> Result<(), String> {
     let path = indexed(&path)?;

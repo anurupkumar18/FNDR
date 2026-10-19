@@ -1,8 +1,8 @@
 import type { FileHit, FileKind } from "@/shared/ipc/files";
 
-/** `file: ...` searches files only (ADR 033). */
+/** `file: ...` searches files only; `code: ...` the code index only (ADR 033). */
 export function isFileQuery(query: string): boolean {
-    return /^\s*file:/i.test(query);
+    return /^\s*(file|code):/i.test(query);
 }
 
 /** The file's name, without its folders. */
@@ -41,8 +41,17 @@ export function clock(seconds: number): string {
     return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
 }
 
-/** Where in the file the match is ("p. 3", "at 0:25"), or nothing for the whole file. */
+/** Code: the line to open at, from 1. */
+export function hitLine(hit: FileHit): number | undefined {
+    if (hit.kind !== "code" || hit.segment !== "lines") return undefined;
+    return Math.max(1, Math.round(hit.focus ?? hit.loc ?? 1));
+}
+
+/** Where in the file the match is ("p. 3", "at 0:25", "line 42"), or nothing for the whole file. */
 export function hitPlace(hit: FileHit): string | null {
+    const line = hitLine(hit);
+    if (line !== undefined) return `line ${line}`;
+    if (hit.kind === "code" && hit.segment === "cells" && hit.loc != null) return `cell ${Math.round(hit.loc)}`;
     const page = hitPage(hit);
     if (page !== undefined) return `p. ${page}`;
     const moment = hitMoment(hit);

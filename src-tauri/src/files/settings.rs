@@ -14,8 +14,11 @@ pub struct FilesSettings {
     pub excluded_folders: Vec<String>,
     /// File types to leave out, as people write them ("heic, .txt").
     pub excluded_types: String,
-    /// Folders whose code `code:` searches (part 8). Empty: code search is off.
+    /// Folders whose code `code:` searches. Empty: code search is off.
     pub code_folders: Vec<String>,
+    /// Where code opens: an editor's bundle id, "" for each file's default app,
+    /// or `None` for the first installed editor, preferring a running one.
+    pub code_editor: Option<String>,
     /// Read folders that look like datasets too.
     pub include_datasets: bool,
     /// Indexing stops until the person resumes it.
@@ -32,6 +35,7 @@ impl Default for FilesSettings {
             excluded_folders: Vec::new(),
             excluded_types: String::new(),
             code_folders: Vec::new(),
+            code_editor: None,
             include_datasets: false,
             paused: false,
             hours: IndexHours::Always,

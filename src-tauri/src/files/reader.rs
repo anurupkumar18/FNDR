@@ -72,6 +72,13 @@ pub struct VideoRead {
     pub duration: f64,
 }
 
+/// A code editor, by bundle id.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct Editor {
+    pub id: String,
+    pub name: String,
+}
+
 /// Which PDF pages to read. `None` for both: a short PDF whole, a long one its first step.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PageRange {
@@ -163,6 +170,32 @@ impl FilesReader {
         let request =
             json!({ "op": "open", "path": path, "page": page, "seconds": seconds, "words": words });
         self.call::<Out>(request).map(|out| out.how)
+    }
+
+    /// The code editors installed here that code search can open at a line.
+    pub fn editors(&mut self) -> Result<Vec<Editor>, String> {
+        #[derive(Deserialize)]
+        struct Out {
+            editors: Vec<Editor>,
+        }
+        self.call::<Out>(json!({ "op": "editors" }))
+            .map(|out| out.editors)
+    }
+
+    /// Opens code at `line` in `editor` (a bundle id; "" the default app;
+    /// `None` the first installed, preferring a running one). Returns which.
+    pub fn open_code(
+        &mut self,
+        path: &Path,
+        line: usize,
+        editor: Option<&str>,
+    ) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct Out {
+            how: String,
+        }
+        self.call::<Out>(json!({ "op": "open_code", "path": path, "line": line, "editor": editor }))
+            .map(|out| out.how)
     }
 
     /// Puts the file itself on the pasteboard, to paste anywhere.
