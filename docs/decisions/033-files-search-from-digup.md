@@ -48,5 +48,5 @@ DigUp searches the files on a computer by what is in them: pictures by what they
 ## Open before acceptance
 
 1. **License.** DigUp's README says EmbeddingGemma 2 is Apache 2.0, unlike EmbeddingGemma 300M's Gemma Terms. This was not verifiable from the build container (Hugging Face blocked); confirm on the model card before the model download slice.
-2. **llama.cpp version.** Which llama.cpp commit `llama-cpp-sys-2` 0.1.143 vendors, and the first crate release at or after b11452.
+2. **llama.cpp version.** Checked 2026-10-19 on the newest crate, `llama-cpp-sys-2` 0.1.160 (FNDR pins 0.1.143). It has every llama.cpp call DigUp makes (`llama_batch_ext_init`, `llama_model_n_embd_out`, `llama_model_n_embd_inp`, `mtmd_helper_video_free`, `mtmd_bitmap_init_from_audio`), the `gemma-embedding` and `gemma4` architectures, and Gemma 4 vision and audio projectors. It does not carry the no-logits fix (`has_logits = true` in `llama-context.cpp`), so FNDR would carry that one-line patch. Whether its llama.cpp loads `embeddinggemma-2-Q8_0.gguf` and its media file can only be settled by loading them on a Mac; that is the first step of part 2.
 3. **MCP.** Whether outside agents may search files through MCP. Proposed default: no, until a separate decision.
