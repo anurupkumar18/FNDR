@@ -14,14 +14,10 @@ export function useThumbnails(paths: string[], pixels?: number): Record<string, 
         const wanted = paths.filter((path) => !asked.current.has(path));
         if (!wanted.length) return;
         wanted.forEach((path) => asked.current.add(path));
-        let live = true;
+        // Kept even when the rows change before they arrive: the paths are asked only once.
         filesThumbnails(wanted, pixels)
-            .then((found) => live && setThumbnails((current) => ({ ...current, ...found })))
-            .catch(() => undefined);
-        return () => {
-            live = false;
-        };
-        // `key` stands for `paths`: a new array with the same paths asks nothing.
+            .then((found) => setThumbnails((current) => ({ ...current, ...found })))
+            .catch(() => wanted.forEach((path) => asked.current.delete(path)));
     }, [key]);
     return thumbnails;
 }

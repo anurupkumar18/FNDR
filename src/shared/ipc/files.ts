@@ -141,9 +141,12 @@ export function filesThumbnails(paths: string[], pixels?: number): Promise<Recor
     return invoke("files_thumbnails", { paths, pixels });
 }
 
-/** Quick Look for a found file, or closes the one showing (no path). True when it shows. */
-export function filesQuickLook(path?: string): Promise<boolean> {
-    return invoke("files_quick_look", { path });
+/**
+ * Quick Look for a found file: a path toggles it for that file, `follow`
+ * shows that file whatever showed before, no path closes it. True when it shows.
+ */
+export function filesQuickLook(path?: string, follow?: boolean): Promise<boolean> {
+    return invoke("files_quick_look", { path, follow });
 }
 
 /** The same search in Search and Ask's Files section, for a bigger look. */

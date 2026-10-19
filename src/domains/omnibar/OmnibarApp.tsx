@@ -168,6 +168,10 @@ export function OmnibarApp() {
         setFeedback(null);
         setActivityTrace(null);
         setPreviewHit(null);
+        setQuickLook((open) => {
+            if (open) void filesQuickLook().catch(() => undefined);
+            return false;
+        });
     }, []);
 
     // Skills are read each time the command bar opens, so one saved in the
@@ -653,19 +657,32 @@ export function OmnibarApp() {
             .catch(() => actionSeq.current === seq && setFeedback({ kind: "error", message: failed }));
     }, []);
 
+    // The backend says whether Quick Look shows, so a window closed by hand never leaves this stale.
     const toggleQuickLook = useCallback((hit: FileHit | undefined) => {
-        void filesQuickLook(quickLook ? undefined : hit?.path)
+        void filesQuickLook(hit?.path)
             .then(setQuickLook)
             .catch(() => setQuickLook(false));
-    }, [quickLook]);
+    }, []);
 
     // Quick Look shows the file that is selected, as it follows the arrows.
     useEffect(() => {
         if (quickLook && selectedFile) {
-            void filesQuickLook(selectedFile.path).catch(() => setQuickLook(false));
+            void filesQuickLook(selectedFile.path, true)
+                .then(setQuickLook)
+                .catch(() => setQuickLook(false));
         }
         // Only a new selection moves it; opening and closing go through toggleQuickLook.
     }, [selectedFile?.path]);
+
+    // Quick Look goes when Quick Find is reset (a file opened, the search handed off, Esc) or closes.
+    const quickLookOpen = useRef(false);
+    quickLookOpen.current = quickLook;
+    useEffect(
+        () => () => {
+            if (quickLookOpen.current) void filesQuickLook().catch(() => undefined);
+        },
+        [],
+    );
 
     const openInWindow = useCallback(
         (kinds?: FileHit["kind"][]) => {

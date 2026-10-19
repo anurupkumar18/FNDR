@@ -71,6 +71,21 @@ impl IndexHours {
         }
     }
 
+    /// The first builds saved hours (22 to 7), not minutes: read both as hours
+    /// when both fit in a day's hours. A real range inside 00:00 to 00:23 is
+    /// too short to choose on purpose.
+    fn from_hours_if_old(self) -> Self {
+        match self {
+            IndexHours::Between { start, end } if start <= 23 && end <= 23 && start != end => {
+                IndexHours::Between {
+                    start: start * 60,
+                    end: end * 60,
+                }
+            }
+            hours => hours,
+        }
+    }
+
     /// "22:00": when indexing may start again, while it waits for the hours.
     pub fn resumes_at(self) -> Option<String> {
         match self {
@@ -89,10 +104,12 @@ impl FilesSettings {
 
     /// The saved settings, or the defaults (off) when there are none or they are unreadable.
     pub fn load(app_data_dir: &Path) -> Self {
-        std::fs::read_to_string(Self::path(app_data_dir))
+        let mut settings: Self = std::fs::read_to_string(Self::path(app_data_dir))
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        settings.hours = settings.hours.from_hours_if_old();
+        settings
     }
 
     pub fn save(&self, app_data_dir: &Path) -> std::io::Result<()> {
@@ -148,6 +165,25 @@ mod tests {
     }
 
     #[test]
+    fn hours_saved_by_the_first_builds_still_mean_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = FilesSettings::path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"hours": {"kind": "between", "start": 22, "end": 7}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            FilesSettings::load(dir.path()).hours,
+            IndexHours::Between {
+                start: 22 * 60,
+                end: 7 * 60
+            }
+        );
+    }
+
+    #[test]
     fn older_settings_index_on_battery() {
         let settings: FilesSettings = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
         assert!(settings.index_on_battery);
@@ -162,7 +198,10 @@ mod tests {
             enabled: true,
             folders: vec!["/Users/a/Documents".into()],
             excluded_types: "HEIC, .txt".into(),
-            hours: IndexHours::Between { start: 22, end: 7 },
+            hours: IndexHours::Between {
+                start: 22 * 60 + 30,
+                end: 7 * 60,
+            },
             ..FilesSettings::default()
         };
         settings.save(dir.path()).unwrap();

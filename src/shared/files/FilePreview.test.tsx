@@ -43,6 +43,18 @@ describe("FilePreview", () => {
         await waitFor(() => expect(files.filesReveal).toHaveBeenCalledWith("/Users/a/Recordings/podcast.m4a"));
     });
 
+    it("drops a clip that arrives after the preview moved to another file", async () => {
+        let finish: (url: string) => void = () => undefined;
+        files.filesClip.mockReturnValue(new Promise<string>((resolve) => (finish = resolve)));
+        const { container, rerender } = render(<FilePreview hit={hit({})} onClose={() => undefined} />);
+        fireEvent.click(screen.getByRole("button", { name: "Play from 0:25" }));
+        rerender(<FilePreview hit={hit({ path: "/Users/a/Recordings/other.m4a", loc: 40 })} onClose={() => undefined} />);
+        finish("data:audio/mp4;base64,OLD");
+        await Promise.resolve();
+        expect(container.querySelector("audio")).toBeNull();
+        expect(screen.getByRole("button", { name: "Play from 0:40" })).toBeInTheDocument();
+    });
+
     it("shows code with line numbers and the line it opens at", async () => {
         files.filesPassage.mockResolvedValue("import time\n\ndef retry_with_backoff(call):\n    pass");
         const code = hit({

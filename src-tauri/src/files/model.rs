@@ -56,8 +56,8 @@ pub fn dir(app_data_dir: &Path) -> PathBuf {
 /// Face): each one that matches a pinned file by size and SHA-256 is copied
 /// into `dir`. Returns the names it took; anything else is refused by name.
 pub fn import(dir: &Path, paths: &[PathBuf]) -> Result<Vec<&'static str>, String> {
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    let mut taken = Vec::new();
+    // Every file is checked before any is copied: a stray pick leaves nothing half done.
+    let mut matched = Vec::new();
     for path in paths {
         let size = std::fs::metadata(path)
             .map_err(|error| format!("{}: {error}", path.display()))?
@@ -70,6 +70,11 @@ pub fn import(dir: &Path, paths: &[PathBuf]) -> Result<Vec<&'static str>, String
         };
         crate::models::verify_file_sha256(path, file.sha256)
             .map_err(|_| format!("{} is not the pinned {}", path.display(), file.name))?;
+        matched.push((path, file));
+    }
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let mut taken = Vec::new();
+    for (path, file) in matched {
         let part = dir.join(format!("{}.part", file.name));
         std::fs::copy(path, &part).map_err(|error| error.to_string())?;
         std::fs::rename(&part, dir.join(file.name)).map_err(|error| error.to_string())?;

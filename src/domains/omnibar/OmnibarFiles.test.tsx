@@ -190,4 +190,19 @@ describe("Quick Find with Files search", () => {
         fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), { target: { value: "code: retry" } });
         expect(await screen.findByText(/Code search is off/)).toBeInTheDocument();
     });
+
+    it("closes Quick Look when a file opens and Quick Find resets", async () => {
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        fireEvent.change(box, { target: { value: "file: pets" } });
+        const file = await screen.findByRole("option", { name: /lease\.pdf/ });
+        fireEvent.keyDown(box, { key: "ArrowDown" });
+        fireEvent.keyDown(box, { key: "ArrowUp" });
+        await waitFor(() => expect(file).toHaveAttribute("aria-selected", "true"));
+        fireEvent.keyDown(box, { key: " " });
+        await waitFor(() => expect(fileMocks.filesQuickLook).toHaveBeenCalledWith("/Users/a/Documents/lease.pdf"));
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.dismissOmnibar).toHaveBeenCalled());
+        await waitFor(() => expect(fileMocks.filesQuickLook).toHaveBeenLastCalledWith());
+    });
 });

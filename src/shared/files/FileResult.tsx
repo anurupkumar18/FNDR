@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { filesClip, filesPassage, filesPreview, filesReveal, type FileHit } from "@/shared/ipc/files";
 import {
     clock,
@@ -117,15 +117,20 @@ export function FilePreview({ hit, query = "", onClose }: { hit: FileHit; query?
         };
     }, [hit]);
 
+    // A clip that arrives after the preview moved to another file is dropped.
+    const shown = useRef(hit);
+    shown.current = hit;
     const play = () => {
         if (moment === undefined) return;
+        const asked = hit;
         setClipState("loading");
         filesClip(hit.path, hit.kind, moment)
             .then((url) => {
+                if (shown.current !== asked) return;
                 setClip(url);
                 setClipState("idle");
             })
-            .catch(() => setClipState("failed"));
+            .catch(() => shown.current === asked && setClipState("failed"));
     };
 
     const words = queryWords(query);

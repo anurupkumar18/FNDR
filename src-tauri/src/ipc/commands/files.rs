@@ -255,7 +255,9 @@ pub async fn files_thumbnails(
     use base64::Engine;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, u32), String>>> = OnceLock::new();
+    // Keyed by the file's modification time too, so an edited picture is drawn again.
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, u32, Option<std::time::SystemTime>), String>>> =
+        OnceLock::new();
     const KEEP: usize = 400;
     let pixels = pixels.unwrap_or(144).clamp(32, 512);
 
@@ -271,11 +273,14 @@ pub async fn files_thumbnails(
         {
             let cache = cache.lock().map_err(|_| "thumbnail cache poisoned")?;
             for path in paths {
-                match cache.get(&(path.clone(), pixels)) {
+                let modified = std::fs::metadata(&path)
+                    .and_then(|meta| meta.modified())
+                    .ok();
+                match cache.get(&(path.clone(), pixels, modified)) {
                     Some(url) => {
                         found.insert(path.to_string_lossy().into_owned(), url.clone());
                     }
-                    None => missing.push(path),
+                    None => missing.push((path, modified)),
                 }
             }
         }
@@ -284,14 +289,14 @@ pub async fn files_thumbnails(
         }
         let mut reader = reader()?;
         let mut drawn = Vec::new();
-        for path in missing {
+        for (path, modified) in missing {
             if let Ok(png) = reader.thumbnail(&path, pixels) {
                 let url = format!(
                     "data:image/png;base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(png)
                 );
                 found.insert(path.to_string_lossy().into_owned(), url.clone());
-                drawn.push(((path, pixels), url));
+                drawn.push(((path, pixels, modified), url));
             }
         }
         let mut cache = cache.lock().map_err(|_| "thumbnail cache poisoned")?;
@@ -330,23 +335,37 @@ pub async fn files_open_in_window(
     .map_err(|error| error.to_string())
 }
 
-/// Quick Look for a found file, or closes the one showing.
+/// Quick Look for a found file. `path` toggles it for that file; with
+/// `follow` it shows that file whatever showed before (the selection moved);
+/// no path closes it. Returns whether Quick Look shows now, so a window the
+/// person closed themselves never leaves the surface thinking it is open.
 #[tauri::command]
-pub async fn files_quick_look(path: Option<String>) -> Result<bool, String> {
+pub async fn files_quick_look(path: Option<String>, follow: Option<bool>) -> Result<bool, String> {
     use std::sync::Mutex;
-    static SHOWING: Mutex<Option<std::process::Child>> = Mutex::new(None);
+    static SHOWING: Mutex<Option<(PathBuf, std::process::Child)>> = Mutex::new(None);
     let path = path.map(|path| indexed(&path)).transpose()?;
     let mut showing = SHOWING.lock().map_err(|_| "Quick Look state poisoned")?;
-    if let Some(mut child) = showing.take() {
-        let _ = child.kill();
+    let mut shown = None;
+    if let Some((was, mut child)) = showing.take() {
+        let alive = matches!(child.try_wait(), Ok(None));
+        if alive && path.as_ref() == Some(&was) && follow.unwrap_or(false) {
+            *showing = Some((was, child));
+            return Ok(true);
+        }
+        if alive {
+            let _ = child.kill();
+        }
         let _ = child.wait();
-        if path.is_none() {
-            return Ok(false);
+        if alive {
+            shown = Some(was);
         }
     }
     let Some(path) = path else {
         return Ok(false);
     };
+    if shown.as_ref() == Some(&path) && !follow.unwrap_or(false) {
+        return Ok(false);
+    }
     let child = std::process::Command::new("/usr/bin/qlmanage")
         .arg("-p")
         .arg(&path)
@@ -354,7 +373,7 @@ pub async fn files_quick_look(path: Option<String>) -> Result<bool, String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|error| format!("Quick Look did not start: {error}"))?;
-    *showing = Some(child);
+    *showing = Some((path, child));
     Ok(true)
 }
 

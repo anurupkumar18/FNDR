@@ -68,6 +68,15 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
     const text = plain(query);
 
     // Quick Find's ⌘O and "Show all" land here with the filter they meant.
+    const quickLookOpen = useRef(false);
+    quickLookOpen.current = quickLook;
+    useEffect(
+        () => () => {
+            if (quickLookOpen.current) void filesQuickLook().catch(() => undefined);
+        },
+        [],
+    );
+
     const wantFocus = useRef(false);
     useEffect(() => {
         if (!opened) return;
@@ -134,7 +143,11 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
     // Quick Look and the preview follow the selection.
     useEffect(() => {
         if (!current) return;
-        if (quickLook) void filesQuickLook(current.path).catch(() => setQuickLook(false));
+        if (quickLook) {
+            void filesQuickLook(current.path, true)
+                .then(setQuickLook)
+                .catch(() => setQuickLook(false));
+        }
         setPreview((open) => (open ? current : open));
     }, [current?.path]);
 
@@ -152,7 +165,7 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
     const open = (hit: FileHit) =>
         act(openFileHit(hit, query), `Opened ${fileName(hit.path)}${hitPlace(hit) ? ` ${hitPlace(hit)}` : ""}.`);
     const toggleQuickLook = () => {
-        void filesQuickLook(quickLook ? undefined : current?.path)
+        void filesQuickLook(current?.path)
             .then(setQuickLook)
             .catch(() => setQuickLook(false));
     };
@@ -184,7 +197,10 @@ export function FilesResults({ query, opened }: { query: string; opened?: FilesO
         else if (command && event.key.toLowerCase() === "y") setPreview((shown) => (shown ? null : current));
         else if (command && event.key.toLowerCase() === "c") act(copyFileHit(current), "Copied the file.");
         else if (event.key === "Escape" && (quickLook || preview)) {
-            if (quickLook) toggleQuickLook();
+            if (quickLook) {
+                setQuickLook(false);
+                void filesQuickLook().catch(() => undefined);
+            }
             else setPreview(null);
         } else return;
         event.preventDefault();
