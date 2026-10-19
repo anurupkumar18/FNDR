@@ -65,6 +65,7 @@ On Kunj's Mac (macOS 27.2, Apple Silicon, 16 GB), 2026-10-19:
 - `cargo test --lib files::` in the app crate passes (73 tests at that commit), and `fndr-files-reader` reads real PDFs, pictures and recordings.
 - `files_eval` on the synthetic testbed (42 files: documents, a docx, PDFs, screenshots, recordings, Bengali and Arabic) at `d8b7eb2`: R@1 1.00, R@5 1.00, MRR 1.000 over 20 queries; indexed in 9.2 s with the model warm. The first run scored R@1 0.90: Vision read the testbed's transparent PNG screenshots as black on black, so they are now flattened on white before OCR.
 - At the same commit, `cargo check` of the whole app crate is clean and `cargo test --lib files::` passes 85 tests.
+- The debug app (`ea1c352` with the UI pass), on a scratch profile with Files turned on for the testbed: 42 files read in about 60 s once indexing started; the full helper peaked near 1.05 GB resident and quit when the work was done; a new file was searchable within 5 s. A deleted file stayed for about a minute and the first pass waited about a minute to start, both fixed in `3020ea7`. The reader returned a whole PNG thumbnail and a 5 s AAC clip; `cargo test --lib files::` passed 94 tests.
 
 ## Open before acceptance
 
