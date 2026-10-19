@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./AskPanel.css";
-import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
@@ -227,16 +227,11 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                 )}
 
                 {state.kind === "asking" && (
-                    <div className="ask-status">
-                        <ThinkingIndicator state="searching" size="lg" />
-                        <span>Searching and checking your memories…</span>
-                    </div>
+                    <PanelState kind="loading" title="Searching memories" description="Checking local memories for grounded evidence." announce={false} />
                 )}
 
                 {state.kind === "error" && (
-                    <div className="ask-result ask-result--error" role="alert">
-                        <p>{state.message}</p>
-                    </div>
+                    <PanelState kind="error" title="Ask FNDR could not answer" description={state.message} action={{ label: "Try again", onAction: () => void ask(state.question) }} />
                 )}
 
                 {state.kind === "answer" && (

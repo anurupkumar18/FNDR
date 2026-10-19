@@ -328,17 +328,40 @@ describe("ControlPanel", () => {
         expect(screen.getByText(/private mode ended/i)).toBeInTheDocument();
     });
 
-    it("reapplies the active cinematic palette when switching theme", () => {
+    it("uses the Film and Paper pair by default and switches between it with the theme", () => {
         localStorage.setItem("fndr-theme", "dark");
-        localStorage.setItem("fndr-palette", "system");
         render(<ControlPanel status={null} compact={true} />);
+
+        expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
+            '--cp-active-palette: "film"',
+        );
 
         fireEvent.click(screen.getByRole("button", { name: /switch to light mode/i }));
 
         expect(document.documentElement).toHaveAttribute("data-theme", "light");
         expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
+            '--cp-active-palette: "paper"',
+        );
+        expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
             '--cp-active-mode: "light"',
         );
+    });
+
+    it("keeps cinematic palettes behind optional customization in Settings", () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const defaults = screen.getByRole("radiogroup", { name: "Film & Paper" });
+        expect(within(defaults).getByRole("radio", { name: "Film" })).toBeInTheDocument();
+        expect(within(defaults).getByRole("radio", { name: "Paper" })).toBeInTheDocument();
+
+        const optionalSummary = screen.getByText("Optional cinematic palettes");
+        const optionalPalettes = optionalSummary.closest("details");
+        expect(optionalPalettes).not.toHaveAttribute("open");
+
+        fireEvent.click(optionalSummary);
+        expect(optionalPalettes).toHaveAttribute("open");
+        expect(screen.getByRole("radio", { name: "The Matrix" })).toBeInTheDocument();
     });
 
     it("lets the user change the home background and tells the wallpaper layer", () => {

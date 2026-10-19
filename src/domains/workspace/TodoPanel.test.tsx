@@ -68,8 +68,8 @@ describe("TodoPanel", () => {
         ipc.getTodos.mockResolvedValueOnce([]);
         render(<TodoPanel isVisible onClose={vi.fn()} />);
 
-        expect(await screen.findByText(/Nothing on your list/)).toBeInTheDocument();
-        expect(screen.getByText(/FNDR suggests it here with\s+the words it read/)).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: "No active to-dos yet" })).toBeInTheDocument();
+        expect(screen.getByText("Add one above when something needs to carry forward.")).toBeInTheDocument();
         expect(screen.queryByText("My tasks")).toBeNull();
         expect(screen.queryByText("Suggested")).toBeNull();
     });

@@ -4,7 +4,7 @@ import { acceptSuggestion, isSuggestion, relativeTime, sourceLabel } from "./tod
 import { HandOffPanel } from "@/domains/handoff/HandOffPanel";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./TodoPanel.css";
-import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
@@ -373,29 +373,15 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
 
             <div className="todo-page-body">
                 {loading && tasks.length === 0 && (
-                    <div className="todo-page-state" role="status">
-                        <ThinkingIndicator state="working" size="md" />
-                        <p>Loading tasks...</p>
-                    </div>
+                    <PanelState kind="loading" title="Loading to-dos" description="Checking your local follow-ups and tasks." />
                 )}
 
                 {!loading && loadError && tasks.length === 0 && (
-                    <div className="todo-page-state" role="alert">
-                        <p>{loadError}</p>
-                        <button type="button" className="ui-action-btn" onClick={() => void loadTasks(true)}>
-                            Try again
-                        </button>
-                    </div>
+                    <PanelState kind="error" title="To-dos could not load" description={loadError} action={{ label: "Try again", onAction: () => void loadTasks(true) }} />
                 )}
 
                 {!loading && !loadError && tasks.length === 0 && (
-                    <div className="todo-page-state">
-                        <p>Nothing on your list. Add a task above when something needs to carry forward.</p>
-                        <p>
-                            When a mail, chat or note on screen asks something of you, FNDR suggests it here with
-                            the words it read.
-                        </p>
-                    </div>
+                    <PanelState kind="empty" title="No active to-dos yet" description="Add one above when something needs to carry forward." />
                 )}
 
                 {myTasks.length > 0 && (

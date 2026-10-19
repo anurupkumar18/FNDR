@@ -29,6 +29,52 @@ interface PaletteTokens {
 }
 
 export const PALETTES = {
+    film: {
+        name: "Film",
+        year: 2026,
+        director: "FNDR",
+        description: "The warm, low-light FNDR default.",
+        shades: ["#211815", "#30221d", "#423029", "#5b4034", "#b47b52", "#d8955f", "#e65100"],
+        dark: {
+            bg: "#211815", surface: "#30221d", surfaceRaised: "#423029",
+            border: "rgba(255, 245, 234, 0.12)", borderStrong: "rgba(255, 245, 234, 0.22)",
+            textPrimary: "#fff5ea", textSecondary: "#d9c0ad", textInverse: "#211815",
+            accent: "#e65100", accentMuted: "#f07b38", accentSubtle: "rgba(230, 81, 0, 0.18)",
+        },
+        light: {
+            bg: "#faf9f6", surface: "#ffffff", surfaceRaised: "#f3eee7",
+            border: "rgba(62, 39, 35, 0.12)", borderStrong: "rgba(62, 39, 35, 0.22)",
+            textPrimary: "#3e2723", textSecondary: "#70554e", textInverse: "#ffffff",
+            accent: "#e65100", accentMuted: "#bd4300", accentSubtle: "rgba(230, 81, 0, 0.12)",
+        },
+        aurora: {
+            dark: { bg: [0.129, 0.094, 0.082], mid: [0.706, 0.482, 0.322], acc: [0.902, 0.318, 0.000] },
+            light: { bg: [0.980, 0.976, 0.965], mid: [0.706, 0.482, 0.322], acc: [0.902, 0.318, 0.000] },
+        },
+    },
+    paper: {
+        name: "Paper",
+        year: 2026,
+        director: "FNDR",
+        description: "The warm, high-light FNDR default.",
+        shades: ["#faf9f6", "#eadbca", "#d7baa1", "#bd9476", "#8a6554", "#70554e", "#e65100"],
+        dark: {
+            bg: "#211815", surface: "#30221d", surfaceRaised: "#423029",
+            border: "rgba(255, 245, 234, 0.12)", borderStrong: "rgba(255, 245, 234, 0.22)",
+            textPrimary: "#fff5ea", textSecondary: "#d9c0ad", textInverse: "#211815",
+            accent: "#e65100", accentMuted: "#f07b38", accentSubtle: "rgba(230, 81, 0, 0.18)",
+        },
+        light: {
+            bg: "#faf9f6", surface: "#ffffff", surfaceRaised: "#f3eee7",
+            border: "rgba(62, 39, 35, 0.12)", borderStrong: "rgba(62, 39, 35, 0.22)",
+            textPrimary: "#3e2723", textSecondary: "#70554e", textInverse: "#ffffff",
+            accent: "#e65100", accentMuted: "#bd4300", accentSubtle: "rgba(230, 81, 0, 0.12)",
+        },
+        aurora: {
+            dark: { bg: [0.129, 0.094, 0.082], mid: [0.706, 0.482, 0.322], acc: [0.902, 0.318, 0.000] },
+            light: { bg: [0.980, 0.976, 0.965], mid: [0.706, 0.482, 0.322], acc: [0.902, 0.318, 0.000] },
+        },
+    },
     system: {
         name: "System",
         year: 2026,
@@ -477,13 +523,21 @@ export const PALETTES = {
 
 export type PaletteKey = keyof typeof PALETTES;
 
-/** The neutral macOS look every new install starts with. */
-export const DEFAULT_PALETTE: PaletteKey = "system";
+/** Film in dark mode and Paper in light mode are the standard FNDR pair. */
+export const DEFAULT_PALETTE: PaletteKey = "film";
+export const CANONICAL_PALETTE_KEYS = ["film", "paper"] as const satisfies readonly PaletteKey[];
 
-/** Maps a stored preference to a palette, falling back to System for
- *  missing, unknown, or retired keys (the old "film" amber palette). */
-export function resolveStoredPalette(stored: string | null): PaletteKey {
-    return isPaletteKey(stored) ? stored : DEFAULT_PALETTE;
+export function getDefaultPalette(mode: PaletteMode = "dark"): PaletteKey {
+    return mode === "light" ? "paper" : DEFAULT_PALETTE;
+}
+
+export function isCanonicalPalette(palette: PaletteKey): boolean {
+    return (CANONICAL_PALETTE_KEYS as readonly PaletteKey[]).includes(palette);
+}
+
+/** Maps a stored preference to a palette, falling back to Film or Paper. */
+export function resolveStoredPalette(stored: string | null, mode: PaletteMode = "dark"): PaletteKey {
+    return isPaletteKey(stored) ? stored : getDefaultPalette(mode);
 }
 
 const STYLE_TAG_ID = "cinematic-palette-vars";
@@ -699,6 +753,11 @@ export function getWallpaperAuroraColors(paletteKey: PaletteKey, mode: PaletteMo
 
 export function listPalettes() {
     return Object.keys(PALETTES) as PaletteKey[];
+}
+
+/** Cinematic palettes that are intentionally kept behind optional customization. */
+export function listOptionalPalettes() {
+    return listPalettes().filter((key) => !isCanonicalPalette(key));
 }
 
 export default PALETTES;

@@ -67,12 +67,12 @@
     padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.025);
+    background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
 }
 
 .sg-readiness.is-ready {
-    border-color: rgba(74, 142, 221, 0.35);
-    background: rgba(50, 118, 210, 0.08);
+    border-color: color-mix(in srgb, var(--info) 35%, transparent);
+    background: color-mix(in srgb, var(--info) 8%, transparent);
 }
 
 .sg-readiness-dot {
@@ -85,8 +85,8 @@
 }
 
 .sg-readiness.is-ready .sg-readiness-dot {
-    background: #54a8ff;
-    box-shadow: 0 0 10px rgba(54, 145, 255, 0.55);
+    background: var(--info);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--info) 55%, transparent);
     opacity: 1;
 }
 
@@ -113,7 +113,7 @@
 .sg-status-warning {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.02);
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 
 .sg-setting-row {
@@ -210,7 +210,7 @@
     width: 34px;
     height: 18px;
     flex: 0 0 auto;
-    accent-color: #358ddd;
+    accent-color: var(--info);
 }
 
 .sg-ask-card {
@@ -281,15 +281,15 @@
 }
 
 .sg-diagnostics-card .sg-diagnostics-warning {
-    color: #e8bf75;
+    color: var(--warning);
 }
 
 .sg-diagnostics-card .sg-diagnostics-state {
-    color: #8fc7ff;
+    color: var(--info);
 }
 
 .sg-diagnostics-card .sg-diagnostics-error {
-    color: var(--danger, #ff8f8f);
+    color: var(--danger);
 }
 
 .sg-diagnostics-actions {
@@ -305,10 +305,10 @@
 
 .sg-hold-button {
     min-height: 48px;
-    border: 1px solid rgba(72, 143, 224, 0.35);
+    border: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
     border-radius: 12px;
-    color: #94c9ff;
-    background: rgba(40, 112, 202, 0.1);
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 10%, transparent);
     font: inherit;
     font-size: 0.82rem;
     font-weight: 650;
@@ -317,7 +317,7 @@
 }
 
 .sg-hold-button:hover:not(:disabled) {
-    border-color: rgba(92, 171, 255, 0.65);
+    border-color: color-mix(in srgb, var(--info) 65%, transparent);
     background: rgba(40, 112, 202, 0.17);
 }
 
@@ -377,12 +377,12 @@
     justify-content: space-between;
     gap: 16px;
     padding: 12px 16px;
-    border-color: rgba(224, 174, 84, 0.36);
-    background: rgba(224, 174, 84, 0.08);
+    border-color: color-mix(in srgb, var(--warning) 36%, transparent);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
 .sg-status-warning strong {
-    color: #e8bf75;
+    color: var(--warning);
     font-size: 0.8rem;
 }
 
@@ -394,7 +394,7 @@
 }
 
 .sg-privacy-note strong {
-    color: #8fc7ff;
+    color: var(--info);
     font-size: 0.78rem;
 }
 
@@ -415,10 +415,10 @@
     justify-content: space-between;
     gap: 16px;
     padding: 12px 14px;
-    border: 1px solid rgba(239, 143, 143, 0.34);
+    border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
     border-radius: var(--radius-md);
-    color: #ef9d9d;
-    background: rgba(181, 63, 63, 0.09);
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 9%, transparent);
 }
 
 .sg-panel-error p {

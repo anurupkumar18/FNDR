@@ -11,7 +11,7 @@ export function syncAuxiliaryAppearance(): void {
     const storedPalette = localStorage.getItem(STORAGE_KEYS.palette);
 
     document.documentElement.setAttribute("data-theme", theme);
-    applyPalette(resolveStoredPalette(storedPalette), theme);
+    applyPalette(resolveStoredPalette(storedPalette, theme), theme);
 }
 
 export function installAuxiliaryAppearanceSync(): () => void {

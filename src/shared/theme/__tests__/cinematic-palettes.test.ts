@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
     applyPalette,
+    getDefaultPalette,
     getWallpaperAuroraColors,
     getWallpaperInkColors,
+    listOptionalPalettes,
     PALETTES,
     removePalette,
     rgbToHex, resolveStoredPalette } from "../cinematic-palettes";
@@ -64,9 +66,15 @@ describe("getWallpaperInkColors", () => {
         expect(ink.primary).toBe(PALETTES.system.light.textPrimary);
     });
 
-    it("defaults to System and retires the amber Old Film palette", () => {
-        expect(resolveStoredPalette(null)).toBe("system");
-        expect(resolveStoredPalette("film")).toBe("system");
+    it("defaults to the Film and Paper pair while preserving an explicit optional palette", () => {
+        expect(getDefaultPalette("dark")).toBe("film");
+        expect(getDefaultPalette("light")).toBe("paper");
+        expect(resolveStoredPalette(null, "dark")).toBe("film");
+        expect(resolveStoredPalette(null, "light")).toBe("paper");
+        expect(resolveStoredPalette("film")).toBe("film");
         expect(resolveStoredPalette("matrix")).toBe("matrix");
+        expect(listOptionalPalettes()).toContain("matrix");
+        expect(listOptionalPalettes()).not.toContain("film");
+        expect(listOptionalPalettes()).not.toContain("paper");
     });
 });

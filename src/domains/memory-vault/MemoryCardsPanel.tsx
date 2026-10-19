@@ -25,6 +25,7 @@ import { matchesPerspective, type Perspective } from "./perspectiveFilter";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
@@ -153,7 +154,7 @@ export function MemoryCardsPanel({
     const [showVaultMenu, setShowVaultMenu] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [reloadCount, setReloadCount] = useState(0);
+    const [reloadKey, setReloadKey] = useState(0);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
     const [vaultQuery, setVaultQuery] = useState("");
@@ -361,7 +362,7 @@ export function MemoryCardsPanel({
         return () => {
             cancelled = true;
         };
-    }, [isVisible, appFilter, reloadCount]);
+    }, [isVisible, appFilter, reloadKey]);
 
     useEffect(() => {
         if (!isVisible || !isVaultFeature) return;
@@ -831,10 +832,7 @@ export function MemoryCardsPanel({
                 </section>
                 )}
                 {loading && cards.length === 0 && (
-                    <div className="memory-cards-state" role="status">
-                        <ThinkingIndicator state="searching" size="md" />
-                        <p>Loading memory cards...</p>
-                    </div>
+                    <PanelState kind="loading" title="Loading memories" description="Reading saved memories from this Mac." />
                 )}
 
                 {error && filteredCards.length > 0 && (
@@ -844,27 +842,11 @@ export function MemoryCardsPanel({
                 )}
 
                 {error && filteredCards.length === 0 && (
-                    <div className="memory-cards-state" role="alert">
-                        <p>Memories could not be loaded: {error}</p>
-                        <button type="button" className="ui-action-btn" onClick={() => setReloadCount((count) => count + 1)}>
-                            Try again
-                        </button>
-                    </div>
+                    <PanelState kind="error" title="Memories could not load" description={error} action={{ label: "Try again", onAction: () => setReloadKey((key) => key + 1) }} />
                 )}
 
                 {!loading && !error && filteredCards.length === 0 && (
-                    <div className="memory-cards-state">
-                        {filtersActive ? (
-                            <>
-                                <p>No memories match these filters.</p>
-                                <button type="button" className="ui-action-btn" onClick={clearFilters}>
-                                    Clear filters
-                                </button>
-                            </>
-                        ) : (
-                            <p>No memories yet. While capture is on, FNDR saves moments from your work here.</p>
-                        )}
-                    </div>
+                    <PanelState kind="empty" title={filtersActive ? "No memories match these filters" : "No memories yet"} description={filtersActive ? "Try different search or filter settings." : "New memories will appear after FNDR captures useful screen context."} action={filtersActive ? { label: "Clear filters", onAction: clearFilters } : { label: "Show connections", onAction: () => setShowConnections(true) }} />
                 )}
 
                 {filteredCards.length > 0 && (

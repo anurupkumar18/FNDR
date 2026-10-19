@@ -263,7 +263,7 @@
 
 .memory-journey__stages li[data-status="failed"],
 .memory-journey__stages li[data-status="skipped"] {
-    border-left-color: var(--warning, #d99938);
+    border-left-color: var(--warning);
 }
 
 .memory-journey__stage-dot {
@@ -413,7 +413,7 @@
     border: 1px solid rgba(255, 107, 107, 0.3);
     border-radius: 8px;
     background: rgba(255, 107, 107, 0.08);
-    color: #ffb3b3;
+    color: var(--danger);
     padding: 10px 12px;
     font-size: 12px;
 }
