@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Onboarding } from "./Onboarding";
-import type { ModelDownloadStatus } from "@/shared/ipc/onboarding";
+import type { ModelDownloadStatus, OnboardingState } from "@/shared/ipc/onboarding";
 import type { ActivityTraceEvidence } from "@/shared/activity/activityTrace";
 
 const listAvailableModels = vi.fn();
@@ -83,7 +83,7 @@ beforeEach(() => {
         microphone: "not_determined",
         speech_recognition: "not_determined",
     });
-    saveOnboardingState.mockResolvedValue(undefined);
+    saveOnboardingState.mockImplementation(async (state: OnboardingState) => state);
     recordOnboardingFunnelEvent.mockResolvedValue(undefined);
     ttsStatus.mockResolvedValue({ state: "not_installed", downloadedBytes: 0, totalBytes: 330_000_000 });
     ttsInstall.mockResolvedValue({ state: "downloading", downloadedBytes: 0, totalBytes: 330_000_000 });
@@ -355,6 +355,22 @@ describe("Onboarding persistence", () => {
         expect(onComplete).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole("button", { name: "Skip imports" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    });
+
+    it("keeps model setup open when the saved state rejects completion after a model skip", async () => {
+        const incomplete: OnboardingState = {
+            step: "bring_past", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: false, model_id: null, display_name: null,
+        };
+        getOnboardingState.mockResolvedValue(incomplete);
+        saveOnboardingState.mockResolvedValueOnce({ ...incomplete, step: "model_download" });
+        const onComplete = vi.fn();
+        render(<Onboarding onComplete={onComplete} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Skip imports" }));
+
+        expect(await screen.findByRole("heading", { name: "Select your local AI model" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
     });
 
     it("shows the observed System Settings handoff without implying a grant", async () => {

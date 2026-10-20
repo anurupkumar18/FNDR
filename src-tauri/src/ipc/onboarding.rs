@@ -147,7 +147,11 @@ pub async fn get_onboarding_state(app: AppHandle) -> Result<OnboardingState, Str
 }
 
 #[tauri::command]
-pub async fn save_onboarding_state(app: AppHandle, state: OnboardingState, skipped: Option<bool>) -> Result<(), String> {
+pub async fn save_onboarding_state(
+    app: AppHandle,
+    state: OnboardingState,
+    skipped: Option<bool>,
+) -> Result<OnboardingState, String> {
     let path = onboarding_path(&app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -174,7 +178,7 @@ pub async fn save_onboarding_state(app: AppHandle, state: OnboardingState, skipp
     ) {
         tracing::warn!(%error, "Could not record local onboarding transition");
     }
-    Ok(())
+    Ok(normalized_state)
 }
 
 /// Persist the user's preferred local LLM/VLM choice and (when the model

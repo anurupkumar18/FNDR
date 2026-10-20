@@ -990,16 +990,17 @@ export function Onboarding({ onComplete }: OnboardingProps) {
         async (next: OnboardingState, skipped = false) => {
             setSaveError(null);
             try {
-                if (skipped) await saveOnboardingState(next, true);
-                else await saveOnboardingState(next);
+                const saved = skipped
+                    ? await saveOnboardingState(next, true)
+                    : await saveOnboardingState(next);
+                setState(saved);
+                if (saved.step === "complete") {
+                    onComplete(saved);
+                }
             } catch {
                 setSaveError("FNDR couldn't save your setup. Please try again.");
                 void recordOnboardingFunnelEvent("error", state?.step).catch(() => undefined);
                 return;
-            }
-            setState(next);
-            if (next.step === "complete") {
-                onComplete(next);
             }
         },
         [onComplete, state]

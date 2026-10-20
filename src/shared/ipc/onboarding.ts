@@ -27,8 +27,8 @@ export async function getOnboardingState(): Promise<OnboardingState> {
     return invoke<OnboardingState>("get_onboarding_state");
 }
 
-export async function saveOnboardingState(state: OnboardingState, skipped?: boolean): Promise<void> {
-    return invoke("save_onboarding_state", { state, skipped: skipped ?? null });
+export async function saveOnboardingState(state: OnboardingState, skipped?: boolean): Promise<OnboardingState> {
+    return invoke<OnboardingState>("save_onboarding_state", { state, skipped: skipped ?? null });
 }
 
 export type OnboardingFunnelEventKind =

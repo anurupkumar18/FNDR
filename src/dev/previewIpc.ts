@@ -1086,7 +1086,10 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Preview save_onboarding_state requires a state payload.");
                 }
                 previewOnboardingState = { ...previewOnboardingState, ...(state as OnboardingState) };
-                return undefined;
+                if (!previewOnboardingState.model_downloaded && previewOnboardingState.step === "complete") {
+                    previewOnboardingState.step = "model_download";
+                }
+                return { ...previewOnboardingState };
             }
             case "get_status":
                 return { ...previewCaptureStatus, pipeline: { ...previewCaptureStatus.pipeline } };
