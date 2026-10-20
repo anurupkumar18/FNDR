@@ -45,7 +45,7 @@ describe("journeys through the real app shell", () => {
         expect(await screen.findByRole("heading", { name: "Lock FNDR with Touch ID" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
         expect(await screen.findByRole("heading", { name: "Select your local AI model" })).toBeInTheDocument();
-        fireEvent.click(await screen.findByRole("button", { name: /^Skip for now/ }));
+        fireEvent.click(await screen.findByRole("button", { name: /Use Qwen3-VL 2B/ }));
         expect(await screen.findByRole("heading", { name: "Grant a few permissions" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
         fireEvent.click(await screen.findByRole("button", { name: "Skip imports" }));

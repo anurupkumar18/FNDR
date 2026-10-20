@@ -11,6 +11,9 @@ import {
 } from "@/shared/ipc/tauri";
 import type { MemoryCard, SearchResult } from "@/shared/ipc/tauri";
 
+const recordOnboardingFunnelEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/shared/ipc/onboarding", () => ({ recordOnboardingFunnelEvent }));
+
 vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     findVisuallySimilarMemories: vi.fn().mockResolvedValue([]),
@@ -417,11 +420,13 @@ describe("MemoryCardsPanel", () => {
             { ...card(1), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/7", timestamp: VAULT_NOW - HOUR },
             { ...card(2), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/8", timestamp: VAULT_NOW - 2 * HOUR },
         ]);
+        vi.mocked(reopenMemory).mockResolvedValue({ kind: "opened" });
 
         renderVault();
 
         fireEvent.click(await screen.findByRole("button", { name: "Open source: Read the rubric" }));
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-1");
+        await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("reopen_succeeded"));
 
         fireEvent.click(screen.getByRole("button", { name: /^1 more moment/ }));
         fireEvent.click(screen.getAllByRole("button", { name: "Open source: Read the rubric" })[1]);

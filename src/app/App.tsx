@@ -34,7 +34,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "@/shared/ipc/tauri";
-import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
+import { getOnboardingState, recordOnboardingFunnelEvent, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import { SidebarDrawer } from "./SidebarDrawer";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
@@ -247,7 +247,10 @@ function App() {
             .trim();
 
         setQuery(normalized);
-        if (normalized) appendToSearchHistory(normalized);
+        if (normalized) {
+            appendToSearchHistory(normalized);
+            void recordOnboardingFunnelEvent("search_submitted").catch(() => undefined);
+        }
         if (typeof nextValue === "string") {
             setQueryDraft(nextValue);
         }
@@ -708,7 +711,10 @@ function App() {
                                 isLoading={isLoading}
                                 query={query}
                                 selectedResultId={selectedResult?.id ?? null}
-                                onSelectResult={setSelectedResult}
+                                onSelectResult={(result) => {
+                                    setSelectedResult(result);
+                                    void recordOnboardingFunnelEvent("result_selected").catch(() => undefined);
+                                }}
                                 evalUi={EVAL_UI}
                             />
                         </section>
