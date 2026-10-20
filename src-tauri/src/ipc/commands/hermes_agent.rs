@@ -471,7 +471,7 @@ fn configure_uv_command(command: &mut Command, state: &AppState) -> Result<(), S
     Ok(())
 }
 
-fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
+pub(crate) fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
     if let Some(path) = detect_uv_executable(state) {
         return Ok(path);
     }
@@ -1802,11 +1802,11 @@ mod tests {
     fn an_answer_reports_what_hermes_did_on_the_way_once_each_in_order() {
         // The shape the pinned gateway returned in the 2026-10-07 live check.
         let response = serde_json::json!({ "output": [
-            { "type": "function_call", "name": "mcp_fndr_memory_search_full_context", "arguments": "{}", "call_id": "a" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_search", "arguments": "{}", "call_id": "a" },
             { "type": "function_call_output", "call_id": "a", "output": "..." },
             { "type": "function_call", "name": "todo", "arguments": "{}", "call_id": "b" },
             { "type": "function_call_output", "call_id": "b", "output": "..." },
-            { "type": "function_call", "name": "mcp_fndr_memory_timeline", "arguments": "{}", "call_id": "c" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_timeline", "arguments": "{}", "call_id": "c" },
             { "type": "function_call", "name": "terminal", "arguments": "{}", "call_id": "d" },
             { "type": "message", "content": [{ "type": "output_text", "text": "Done." }] }
         ]});

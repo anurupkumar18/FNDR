@@ -11,6 +11,7 @@ import {
     setBlocklist,
 } from "@/shared/ipc/tauri";
 import { ControlPanel } from "./ControlPanel";
+import { downloadModel, getAppleModelStatus, listAvailableModels, setAppleModelEnabled } from "@/shared/ipc/onboarding";
 
 const checkUpdateMock = vi.fn();
 
@@ -27,6 +28,10 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ({
+    getActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    setActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    listActionApprovals: vi.fn().mockResolvedValue([]),
+    resolveActionApproval: vi.fn().mockResolvedValue(undefined),
     PRIVACY_ALERTS_EVENT: "privacy://alerts",
     CAPTURE_STATUS_EVENT: "capture://status",
     deleteAllData: vi.fn(),
@@ -81,6 +86,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
     getRetentionDays: vi.fn().mockResolvedValue(7),
+    notchDoSkills: vi.fn().mockResolvedValue([]),
+    notchDoRuns: vi.fn().mockResolvedValue([]),
     pauseCapture: vi.fn(),
     resumeCapture: vi.fn(),
     reclaimMemoryStorage: vi.fn(),
@@ -94,6 +101,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
 }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
+    getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
+    setAppleModelEnabled: vi.fn(),
     deleteAiModel: vi.fn(),
     downloadModel: vi.fn(),
     getModelDownloadStatus: vi.fn().mockResolvedValue({
@@ -137,6 +146,27 @@ function openTab(name: string) {
 }
 
 describe("ControlPanel", () => {
+    it("shows the Apple text model switch and saves an opt out", async () => {
+        vi.mocked(getAppleModelStatus).mockResolvedValueOnce({ availability: "available", enabled: true });
+        vi.mocked(setAppleModelEnabled).mockResolvedValueOnce({ availability: "available", enabled: false });
+        render(<ControlPanel status={null} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+
+        const toggle = await screen.findByRole("switch", { name: "Use Apple on-device model" });
+        await waitFor(() => expect(toggle).toBeChecked());
+        fireEvent.click(toggle);
+        await waitFor(() => expect(setAppleModelEnabled).toHaveBeenCalledWith(false));
+        await waitFor(() => expect(toggle).not.toBeChecked());
+    });
+
+    it("names the backend that handled the last text call", () => {
+        render(<ControlPanel status={{ ...statusWithEmbedder("real", false), last_text_backend: "apple_foundation" }} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+        expect(screen.getByText(/Last text backend: Apple on-device model/)).toBeInTheDocument();
+    });
+
     it("ignores an earlier settings load after reopening and saving consent", async () => {
         let finishFirstLoad!: (apps: string[]) => void;
         vi.mocked(getBlocklist).mockImplementationOnce(() => new Promise<string[]>((resolve) => {
@@ -298,17 +328,40 @@ describe("ControlPanel", () => {
         expect(screen.getByText(/private mode ended/i)).toBeInTheDocument();
     });
 
-    it("reapplies the active cinematic palette when switching theme", () => {
+    it("uses the Film and Paper pair by default and switches between it with the theme", () => {
         localStorage.setItem("fndr-theme", "dark");
-        localStorage.setItem("fndr-palette", "system");
         render(<ControlPanel status={null} compact={true} />);
+
+        expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
+            '--cp-active-palette: "film"',
+        );
 
         fireEvent.click(screen.getByRole("button", { name: /switch to light mode/i }));
 
         expect(document.documentElement).toHaveAttribute("data-theme", "light");
         expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
+            '--cp-active-palette: "paper"',
+        );
+        expect(document.getElementById("cinematic-palette-vars")?.textContent).toContain(
             '--cp-active-mode: "light"',
         );
+    });
+
+    it("keeps cinematic palettes behind optional customization in Settings", () => {
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+
+        const defaults = screen.getByRole("radiogroup", { name: "Film & Paper" });
+        expect(within(defaults).getByRole("radio", { name: "Film" })).toBeInTheDocument();
+        expect(within(defaults).getByRole("radio", { name: "Paper" })).toBeInTheDocument();
+
+        const optionalSummary = screen.getByText("Optional cinematic palettes");
+        const optionalPalettes = optionalSummary.closest("details");
+        expect(optionalPalettes).not.toHaveAttribute("open");
+
+        fireEvent.click(optionalSummary);
+        expect(optionalPalettes).toHaveAttribute("open");
+        expect(screen.getByRole("radio", { name: "The Matrix" })).toBeInTheDocument();
     });
 
     it("lets the user change the home background and tells the wallpaper layer", () => {
@@ -349,7 +402,7 @@ describe("ControlPanel", () => {
         expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
         expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
         expect(screen.queryByText(/auto-fill/i)).toBeNull();
-        expect(screen.queryByText(/mcp server/i)).toBeNull();
+        expect(screen.queryByText(/start mcp server|stop mcp server|mcp server status/i)).toBeNull();
     });
 
     it("groups settings into five tabs, each holding its own people-first sections", async () => {
@@ -442,6 +495,38 @@ describe("ControlPanel", () => {
         openTab("Capture");
         openTab("Privacy");
         expect(screen.getByRole("textbox", { name: /app or website/i })).toHaveValue("bank.example");
+    });
+
+    it("lets people download an optional model from Settings", async () => {
+        vi.mocked(listAvailableModels).mockResolvedValueOnce([{
+            id: "qwen3-vl-2b",
+            name: "Qwen3-VL 2B",
+            description: "Adds richer visual understanding to search.",
+            size_bytes: 1_600_000_000,
+            size_label: "1.6 GB",
+            quality_label: "Higher visual detail",
+            speed_label: "Fast",
+            ram_gb: 4,
+            recommended: false,
+            required: false,
+            filename: "qwen3-vl-2b.gguf",
+            download_url: "https://models.example.test/qwen3-vl-2b.gguf",
+        }]);
+        render(<ControlPanel status={null} compact={true} />);
+        fireEvent.click(screen.getByRole("button", { name: /open settings/i }));
+        openTab("AI");
+
+        const model = await screen.findByText("Qwen3-VL 2B");
+        const option = model.closest(".model-download-option");
+        expect(option).not.toBeNull();
+        fireEvent.click(within(option as HTMLElement).getByRole("button", { name: "Get it" }));
+
+        await waitFor(() => expect(downloadModel).toHaveBeenCalledWith(
+            "qwen3-vl-2b",
+            "https://models.example.test/qwen3-vl-2b.gguf",
+            "qwen3-vl-2b.gguf",
+        ));
+        expect(await screen.findByRole("status")).toHaveTextContent(/is downloading/i);
     });
 
     it("shows a read-only warning when capture cannot use its embedding model", async () => {

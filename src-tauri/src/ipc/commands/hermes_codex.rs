@@ -400,7 +400,7 @@ mod tests {
         let yaml = hermes_mcp_yaml("http://127.0.0.1:5123/mcp", "t0k\"en");
         assert!(yaml.contains("url: \"http://127.0.0.1:5123/mcp\""));
         assert!(yaml.contains("Authorization: \"Bearer t0k\\\"en\""));
-        assert!(yaml.contains("include: [\"memory.search_full_context\""));
+        assert!(yaml.contains("include: [\"fndr.search\""));
         assert!(!yaml.contains("remember"));
         assert!(!yaml.contains("agent.run"));
     }

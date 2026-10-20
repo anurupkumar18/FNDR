@@ -10,7 +10,7 @@ const theme = storedTheme === "light" ? "light" : "dark";
 const storedPalette = localStorage.getItem(STORAGE_KEYS.palette);
 
 document.documentElement.setAttribute("data-theme", theme);
-applyPalette(resolveStoredPalette(storedPalette), theme);
+applyPalette(resolveStoredPalette(storedPalette, theme), theme);
 
 // Immersive mode was merged into the default shell; clear legacy key.
 localStorage.removeItem(STORAGE_KEYS.appMode);

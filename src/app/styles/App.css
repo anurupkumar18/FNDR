@@ -585,21 +585,18 @@
     flex-shrink: 0;
 }
 
-/* The first screen is the hero, centered. A strip of what follows shows
-   blurred underneath so the page reads as having more behind it. */
+/* Keep the query prominent while leaving recent work visible on Home. */
 .home-hero-fold {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 100%;
-    min-height: 70vh;
-    min-height: calc(100cqh - 88px);
-    padding: 72px 0 24px;
+    padding: var(--s-7) 0 0;
     box-sizing: border-box;
 }
 
 .home-hero-stage:not(:has(.home-work)) .home-hero-fold {
-    min-height: 100cqh;
+    min-height: calc(100cqh - 40px);
 }
 
 .search-shell {

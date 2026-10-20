@@ -427,6 +427,48 @@ unsafe fn focused_is_secure(pid: i32) -> bool {
     secure
 }
 
+/// The focused field's text, unless it is a secure field.
+unsafe fn focused_value(pid: i32) -> Option<String> {
+    let application = AXUIElementCreateApplication(pid);
+    if application.is_null() {
+        return None;
+    }
+    let value = match ax_copy_attr_value(application, "AXFocusedUIElement") {
+        Ok(focused) if !focused.is_null() => {
+            let value = (!is_secure(focused))
+                .then(|| ax_string_attr(focused, "AXValue"))
+                .flatten();
+            CFRelease(focused);
+            value
+        }
+        _ => None,
+    };
+    CFRelease(application);
+    value
+}
+
+/// How long an app gets to take a paste before FNDR reads the field back.
+const PASTE_SETTLE: Duration = Duration::from_millis(250);
+
+/// Notch Do's paste step: pastes `text` into the focused field of the running
+/// app named `app` the way the operator's `type_text` does (frontmost first,
+/// never into a secure field), then reads the field back. `Ok(None)` when the
+/// field shows FNDR no text.
+pub(crate) fn paste_into_app(app: &str, text: &str) -> Result<Option<String>, String> {
+    let mut desktop = AxDesktop;
+    let wanted = app.trim();
+    let target = desktop
+        .list_apps()
+        .into_iter()
+        .find(|running| {
+            running.name.eq_ignore_ascii_case(wanted) || running.bundle.eq_ignore_ascii_case(wanted)
+        })
+        .ok_or_else(|| format!("{wanted} is not open."))?;
+    desktop.type_text(&target, None, text)?;
+    std::thread::sleep(PASTE_SETTLE);
+    Ok(unsafe { focused_value(target.pid) })
+}
+
 const MODIFIERS: [(&[&str], &str); 4] = [
     (&["cmd", "command", "super", "meta"], "command down"),
     (&["ctrl", "control"], "control down"),

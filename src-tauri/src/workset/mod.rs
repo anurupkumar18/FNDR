@@ -171,34 +171,34 @@ pub async fn open_and_arrange(
     outcomes
 }
 
-/// The saved set a request names, resolved now: `None` when it names none.
-/// A named set is planned from what FNDR saved, with no search and no model.
-pub async fn resolve_named(state: &AppState, request: &str) -> Option<Resolution> {
-    let sets = match named::load(&state.state_store) {
-        Ok(sets) => sets,
-        Err(error) => {
-            tracing::warn!(%error, "workset:named_load_failed");
-            return None;
-        }
-    };
-    let names: Vec<String> = sets.iter().map(|set| set.name.clone()).collect();
-    let set = &sets[crate::operator::plan::named_set_asked_for(request, &names)?];
+/// The person's saved sets, for `operator::plan::route`. A store that
+/// cannot be read has none.
+pub fn saved_sets(state: &AppState) -> Vec<named::SavedSet> {
+    named::load(&state.state_store).unwrap_or_else(|error| {
+        tracing::warn!(%error, "workset:named_load_failed");
+        Vec::new()
+    })
+}
+
+/// A saved set, resolved now from what FNDR saved, with no search and no
+/// model.
+pub async fn resolve_saved(state: &AppState, set: &named::SavedSet) -> Resolution {
     if private(state) {
-        return Some(Resolution::None {
+        return Resolution::None {
             why: "FNDR is private right now, so it does not open saved sets.".to_string(),
-        });
+        };
     }
     let records = match state.store.get_memories_by_ids(&set.memory_ids).await {
         Ok(records) => records,
         Err(error) => {
-            return Some(Resolution::None {
+            return Resolution::None {
                 why: format!("FNDR could not read its memories: {error}"),
-            })
+            }
         }
     };
     let blocklist = state.config.read().blocklist.clone();
     let shown = named::present(set, &records, &blocklist);
-    Some(if shown.items.is_empty() {
+    if shown.items.is_empty() {
         Resolution::None {
             why: format!(
                 "Nothing in \u{201c}{}\u{201d} can be reopened now: its memories were deleted or are private.",
@@ -207,7 +207,7 @@ pub async fn resolve_named(state: &AppState, request: &str) -> Option<Resolution
         }
     } else {
         Resolution::Best(named::as_work_set(&shown))
-    })
+    }
 }
 
 /// Words in a request that say when, for the search's time filter.
@@ -408,14 +408,30 @@ mod tests {
                 "the blocklisted chat drops out"
             );
 
-            match resolve_named(&state, "set up capstone demo prep side by side").await {
-                Some(Resolution::Best(set)) => {
+            let named_in = |request: &str| {
+                let sets = saved_sets(&state);
+                let names: Vec<String> = sets.iter().map(|set| set.name.clone()).collect();
+                let known = crate::operator::plan::Known {
+                    saved_sets: &names,
+                    skills: &[],
+                    is_app: &|_| false,
+                };
+                match crate::operator::plan::route(request, &known) {
+                    crate::operator::plan::Route::SavedSet { index, .. } => {
+                        Some(sets[index].clone())
+                    }
+                    _ => None,
+                }
+            };
+            let set = named_in("set up capstone demo prep side by side").expect("names the set");
+            match resolve_saved(&state, &set).await {
+                Resolution::Best(set) => {
                     assert_eq!(set.title, "Capstone demo prep");
                     assert_eq!(set.items.len(), 1);
                 }
                 other => panic!("expected the saved set, got {other:?}"),
             }
-            assert!(resolve_named(&state, "open Safari").await.is_none());
+            assert!(named_in("open Safari").is_none());
 
             note_opened(
                 &state,
@@ -443,8 +459,9 @@ mod tests {
             );
             assert_eq!(routines::log(&state.state_store).unwrap().len(), 1);
             assert!(routines::current(&state).await.unwrap().is_empty());
-            match resolve_named(&state, "set up capstone demo prep").await {
-                Some(Resolution::None { why }) => assert!(why.contains("private"), "{why}"),
+            let set = named_in("set up capstone demo prep").expect("names the set");
+            match resolve_saved(&state, &set).await {
+                Resolution::None { why } => assert!(why.contains("private"), "{why}"),
                 other => panic!("expected a refusal, got {other:?}"),
             }
         });

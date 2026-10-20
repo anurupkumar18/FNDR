@@ -555,9 +555,9 @@ async fn same_day_candidates(store: &Store, record: &MemoryRecord) -> Vec<SameDa
     match store.get_memories_in_range(day_start, day_end).await {
         Ok(records) => records
             .into_iter()
-            // A note must not influence another memory's review through
-            // neighboring evidence, even though the note itself is skipped.
-            .filter(|r| r.id != record.id && !r.is_agent_note())
+            // A leaf must not influence another memory's review through
+            // neighboring evidence, even though the leaf itself is skipped.
+            .filter(|r| r.id != record.id && !r.is_leaf_row())
             .take(MAX_SAME_DAY_CANDIDATES * 2)
             .map(|r| SameDayCandidate {
                 display_title: pick_candidate_title(&r),

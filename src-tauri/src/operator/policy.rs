@@ -212,32 +212,10 @@ const MEDIA_APPS: &[&str] = &[
     "quicktime player",
 ];
 
-const BROWSERS: &[&str] = &[
-    "safari",
-    "com.apple.safari",
-    "google chrome",
-    "chrome",
-    "com.google.chrome",
-    "arc",
-    "company.thebrowser.browser",
-    "dia",
-    "company.thebrowser.dia",
-    "firefox",
-    "org.mozilla.firefox",
-    "brave browser",
-    "com.brave.browser",
-    "microsoft edge",
-    "opera",
-    "vivaldi",
-    "orion",
-    "zen",
-];
-
 /// Labels that send, delete or spend money. Matched as whole words.
 const NEVER_LABELS: &[&str] = &[
     "send",
     "delete",
-    "remove",
     "trash",
     "erase",
     "buy",
@@ -256,8 +234,12 @@ const NEVER_LABELS: &[&str] = &[
     "transfer",
 ];
 
-/// Labels that submit or commit something on the person's behalf.
+/// Labels that submit or commit something on the person's behalf. "Remove"
+/// is here, not refused: removing a song from a queue or a filter from a
+/// table loses nothing, and the person sees the label before saying yes
+/// (owner decision, 2026-10-14).
 const CONFIRM_LABELS: &[&str] = &[
+    "remove",
     "submit",
     "sign in",
     "log in",
@@ -375,6 +357,10 @@ pub fn is_media_app(app: &str) -> bool {
 /// Whether an app is one Notch Do never reads or operates in any way.
 pub fn is_sensitive_app(app: &str) -> bool {
     in_list(&[app_key(app)], SENSITIVE_APPS)
+}
+
+fn is_browser(names: &[String]) -> bool {
+    names.iter().any(|name| crate::browsers::is_browser(name))
 }
 
 fn has_word(text: &str, words: &[&str]) -> bool {
@@ -552,7 +538,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                     decision(Risk::Confirm, "the click target has no label FNDR can read")
                 }
                 Some(label)
-                    if in_list(&names, BROWSERS)
+                    if is_browser(&names)
                         && (is_link_or_tab(label)
                             || is_search_field(label)
                             || has_word(label, PLAYBACK_LABELS)) =>
@@ -562,7 +548,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                         "follows a link, a tab or a search box in a browser",
                     )
                 }
-                Some(_) if in_list(&names, BROWSERS) => {
+                Some(_) if is_browser(&names) => {
                     decision(Risk::Confirm, "clicks a control on a web page")
                 }
                 Some(_) => decision(Risk::Confirm, "clicks outside media apps and browsers"),
@@ -621,15 +607,17 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 }
             } else if media {
                 decision(Risk::Runs, "a playback key")
-            } else if in_list(&names, BROWSERS) && BROWSER_RUN_KEYS.contains(&key.as_str()) {
+            } else if is_browser(&names) && BROWSER_RUN_KEYS.contains(&key.as_str()) {
                 decision(Risk::Runs, "a navigation key")
-            } else if in_list(&names, BROWSERS) {
+            } else if is_browser(&names) {
                 decision(Risk::Confirm, "a key that can close, save or change a page")
             } else {
                 decision(Risk::Confirm, "a key press outside media apps and browsers")
             }
         }
         "drag" => decision(Risk::Confirm, "drags"),
+        // A step FNDR carries out itself; the person sees the exact text first.
+        "paste" => decision(Risk::Confirm, "puts text into an app"),
         _ => decision(Risk::Never, "unknown tool"),
     }
 }

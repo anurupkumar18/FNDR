@@ -4,6 +4,7 @@ import { CommandPalette, type PanelKey } from "@/domains/command-palette/Command
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
 import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
 import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
+import { OutputsPanel } from "@/domains/outputs/OutputsPanel";
 import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
@@ -21,6 +22,7 @@ interface AppPanelsProps {
     activePanel: MountedPanelKey | null;
     appNames: string[];
     appToasts: AppToast[];
+    developerMode: boolean;
     isCapturePaused: boolean;
     isPrivateMode: boolean;
     query: string;
@@ -33,6 +35,7 @@ interface AppPanelsProps {
     onDeleteMemory: (memoryId: string) => void;
     onDismissToast: (toastId: string) => void;
     onGoHome: () => void;
+    onOpenSettings: () => void;
     onMemoryDeleted: (memoryId: string) => void;
     onOpenPanel: (panel: PanelKey) => void;
     onRunQuery: (query: string) => void;
@@ -48,6 +51,7 @@ export function AppPanels({
     activePanel,
     appNames,
     appToasts,
+    developerMode,
     isCapturePaused,
     isPrivateMode,
     query,
@@ -60,6 +64,7 @@ export function AppPanels({
     onDeleteMemory,
     onDismissToast,
     onGoHome,
+    onOpenSettings,
     onMemoryDeleted,
     onOpenPanel,
     onRunQuery,
@@ -97,6 +102,13 @@ export function AppPanels({
                             onClose={onClosePanel}
                             onOpenMemoryById={onOpenMemoryById}
                         />
+                    </PanelErrorBoundary>
+                )}
+            </PanelPresence>
+            <PanelPresence open={activePanel === "outputs"}>
+                {(present) => (
+                    <PanelErrorBoundary panelName="Daily outputs" onClose={onClosePanel}>
+                        <OutputsPanel isVisible={present} onClose={onClosePanel} onOpenMemoryById={onOpenMemoryById} />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>
@@ -162,12 +174,14 @@ export function AppPanels({
                     query,
                     onOpenPanel,
                     onGoHome,
+                    onOpenSettings,
                     onSearch: onRunQuery,
                     onSearchApp,
                     onClearSearch,
                     onDeleteMemory,
                     isCapturePaused,
                 }}
+                developerMode={developerMode}
             />
             <AppToasts toasts={appToasts} onAction={onToastAction} onDismiss={onDismissToast} />
             <McpApprovalPrompt />

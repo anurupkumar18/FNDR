@@ -27,7 +27,49 @@ fn main() {
     if let Err(err) = build_auth_helper() {
         panic!("failed to build native authentication helper: {err}");
     }
+    if let Err(err) = build_foundation_helper() {
+        panic!("failed to build native Foundation Models helper: {err}");
+    }
     tauri_build::build();
+}
+
+fn build_foundation_helper() -> io::Result<()> {
+    let target = env::var("TARGET").unwrap_or_default();
+    if target != "aarch64-apple-darwin" {
+        return Ok(());
+    }
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let source = manifest_dir.join("helpers/fndr-foundation/main.swift");
+    let output = manifest_dir
+        .join("binaries")
+        .join(format!("fndr-foundation-{target}"));
+    println!("cargo:rerun-if-changed={}", source.display());
+    if output_is_fresh(&source, &output)? {
+        return Ok(());
+    }
+    fs::create_dir_all(
+        output
+            .parent()
+            .expect("Foundation Models helper has a parent"),
+    )?;
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-parse-as-library",
+            "-target",
+            "arm64-apple-macos13.0",
+            "-O",
+            source.to_string_lossy().as_ref(),
+            "-o",
+            output.to_string_lossy().as_ref(),
+        ])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "xcrun swiftc exited with {status}"
+        )));
+    }
+    Ok(())
 }
 
 fn build_auth_helper() -> io::Result<()> {

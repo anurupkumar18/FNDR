@@ -84,10 +84,19 @@ describe("HomeHero", () => {
         renderHero();
 
         expect(screen.getByRole("search")).toBeInTheDocument();
-        expect(screen.getByPlaceholderText("What shall we uncover tonight?")).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("Search memories")).toBeInTheDocument();
         expect(screen.getByText("Let's dive into your memories.")).toBeInTheDocument();
         expect(screen.getByText(/search saved memories by topic, app, person, or time/i)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Enter the reel" })).not.toBeInTheDocument();
+    });
+
+    it("shows one submit action only when a query can be sent", () => {
+        const { onHeroSearch } = renderHero();
+        expect(screen.queryByRole("button", { name: "Submit search" })).not.toBeInTheDocument();
+
+        fireEvent.change(screen.getByRole("textbox", { name: "Search your memories" }), { target: { value: "beta notes" } });
+        fireEvent.click(screen.getByRole("button", { name: "Submit search" }));
+        expect(onHeroSearch).toHaveBeenCalledWith("beta notes");
     });
 
     it("uses the shared home-search toggle voice session", () => {
@@ -134,15 +143,15 @@ describe("HomeHero", () => {
     });
 
     it.each([
-        ["2026-10-09T16:30:00", "Good Evening, Anurup! Let's get productive.", "Good Evening, Anurup!", "What happened today?"],
-        ["2026-10-09T16:30:00", "Good Afternoon, Anurup! Let's get productive.", "Good Evening, Anurup!", "What happened today?"],
-        ["2026-10-09T13:00:00", "Good Afternoon, Anurup! Ready?", "Good Afternoon, Anurup!", "What shall we uncover this afternoon?"],
-        ["2026-10-09T09:00:00", "", "Good Morning, Anurup!", "What did you work on this morning?"],
-        ["2026-10-09T02:00:00", "", "Good Night, Anurup!", "What shall we uncover tonight?"],
-    ])("at %s the greeting and the search placeholder name the same time of day", (at, greeting, title, placeholder) => {
+        ["2026-10-09T16:30:00", "Good Evening, Anurup! Let's get productive.", "Good Evening, Anurup!"],
+        ["2026-10-09T16:30:00", "Good Afternoon, Anurup! Let's get productive.", "Good Evening, Anurup!"],
+        ["2026-10-09T13:00:00", "Good Afternoon, Anurup! Ready?", "Good Afternoon, Anurup!"],
+        ["2026-10-09T09:00:00", "", "Good Morning, Anurup!"],
+        ["2026-10-09T02:00:00", "", "Good Night, Anurup!"],
+    ])("at %s the greeting matches the current time of day while search stays plainly labeled", (at, greeting, title) => {
         render(<HomeHero userName="Anurup" now={new Date(at)} greeting={greeting} onHeroSearch={vi.fn()} />);
         expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(title);
-        expect(screen.getByPlaceholderText(placeholder)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("Search memories")).toBeInTheDocument();
     });
 
     it("keeps typed search available when shared voice is unavailable", () => {

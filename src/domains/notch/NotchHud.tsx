@@ -7,6 +7,7 @@ import {
     type MemoryCard,
     NOTCH_HUD_GEOMETRY_EVENT,
     NOTCH_HUD_HOVER_EVENT,
+    NOTCH_HUD_DO_EVENT,
     NOTCH_HUD_SUMMON_EVENT,
     type NotchHudGeometry,
     fndrAnswer,
@@ -317,6 +318,16 @@ export function NotchHud() {
             return;
         }
         setModeState("do");
+        openPanel();
+    });
+
+    // A request typed in the command bar opens Do and is planned there, so it
+    // gets the same card, policy, Stop and journal as one spoken here.
+    const [handedRequest, setHandedRequest] = useState<{ id: number; text: string } | null>(null);
+    useTauriEvent<string>(NOTCH_HUD_DO_EVENT, (text) => {
+        if (!text.trim()) return;
+        setModeState("do");
+        setHandedRequest({ id: Date.now(), text });
         openPanel();
     });
 
@@ -731,7 +742,11 @@ export function NotchHud() {
                                 />
                             ) : null}
                             {mode === "do" && operateEnabled ? (
-                                <NotchOperator active={stage === "open"} interruptRef={doInterruptRef} />
+                                <NotchOperator
+                                    active={stage === "open"}
+                                    interruptRef={doInterruptRef}
+                                    request={handedRequest}
+                                />
                             ) : (
                             <>
                             <VoiceBeam

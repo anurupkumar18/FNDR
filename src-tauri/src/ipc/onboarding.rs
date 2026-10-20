@@ -35,6 +35,10 @@ extern "C" {
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
 
+#[cfg(target_os = "macos")]
+#[link(name = "Speech", kind = "framework")]
+extern "C" {}
+
 use crate::{load_ai_engines, models, AppState};
 
 // ---------------------------------------------------------------------------
@@ -56,6 +60,8 @@ pub enum OnboardingStep {
     Permissions,
     /// Model download / selection
     ModelDownload,
+    /// Optional local imports and guided retrieval
+    BringPast,
     /// Indexing started, showing live counter
     IndexingStarted,
     /// Onboarding complete — show main app
@@ -275,24 +281,50 @@ fn parse_biometric_helper_output(output: &str) -> Result<bool, String> {
 // Permission checks (macOS-specific)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionState {
+    NotDetermined,
+    Restricted,
+    Denied,
+    Granted,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PermissionsStatus {
-    pub screen_recording: bool,
-    pub accessibility: bool,
-    pub microphone: bool,
+    pub screen_recording: PermissionState,
+    pub accessibility: PermissionState,
+    pub microphone: PermissionState,
+    pub speech_recognition: PermissionState,
 }
 
 #[tauri::command]
 pub async fn check_permissions() -> Result<PermissionsStatus, String> {
-    let screen = check_screen_recording_permission();
-    let accessibility = check_accessibility_permission();
+    let screen = bool_permission_state(check_screen_recording_permission());
+    let accessibility = bool_permission_state(check_accessibility_permission());
     let microphone = check_microphone_permission();
+    let speech_recognition = check_speech_recognition_permission();
 
     Ok(PermissionsStatus {
         screen_recording: screen,
         accessibility,
         microphone,
+        speech_recognition,
     })
+}
+
+fn bool_permission_state(granted: bool) -> PermissionState {
+    if granted { PermissionState::Granted } else { PermissionState::Denied }
+}
+
+fn av_authorization_state(status: i64) -> PermissionState {
+    match status {
+        0 => PermissionState::NotDetermined,
+        1 => PermissionState::Restricted,
+        2 => PermissionState::Denied,
+        3 => PermissionState::Granted,
+        _ => PermissionState::Denied,
+    }
 }
 
 pub(crate) fn check_screen_recording_permission() -> bool {
@@ -324,7 +356,7 @@ fn check_accessibility_permission() -> bool {
     output.map(|o| o.status.success()).unwrap_or(false)
 }
 
-fn check_microphone_permission() -> bool {
+fn check_microphone_permission() -> PermissionState {
     // Call +[AVCaptureDevice authorizationStatusForMediaType:] via the ObjC runtime.
     // The AVFoundation framework is linked above.
     // AVAuthorizationStatus: notDetermined=0, restricted=1, denied=2, authorized=3.
@@ -336,7 +368,7 @@ fn check_microphone_permission() -> bool {
 
         let Some(cls) = AnyClass::get("AVCaptureDevice") else {
             // AVFoundation unavailable (very old macOS) — treat as unknown/false
-            return false;
+            return PermissionState::Denied;
         };
 
         // AVMediaTypeAudio constant value is the string literal "soun"
@@ -345,11 +377,28 @@ fn check_microphone_permission() -> bool {
         let status: i64 =
             unsafe { objc2::msg_send![cls, authorizationStatusForMediaType: media_type] };
 
-        status == 3 // AVAuthorizationStatusAuthorized
+        av_authorization_state(status)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        true
+        PermissionState::Granted
+    }
+}
+
+fn check_speech_recognition_permission() -> PermissionState {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::runtime::AnyClass;
+
+        let Some(cls) = AnyClass::get("SFSpeechRecognizer") else {
+            return PermissionState::Denied;
+        };
+        let status: i64 = unsafe { objc2::msg_send![cls, authorizationStatus] };
+        av_authorization_state(status)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionState::Granted
     }
 }
 
@@ -612,15 +661,21 @@ pub async fn download_model(
     download_url: String,
     filename: String,
 ) -> Result<(), String> {
+    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
+    if let Some(definition) = models::model_by_id(&model_id) {
+        let available = available_disk_bytes(&app_data_dir)?;
+        let required = definition.size_bytes.saturating_add(definition.size_bytes / 10);
+        if available < required {
+            return Err(format!(
+                "Not enough free disk space for {}. Free up at least {} more before downloading.",
+                definition.name,
+                required.saturating_sub(available),
+            ));
+        }
+    }
     if DOWNLOAD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("A download is already in progress".into());
     }
-
-    let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| {
-        // Reset the flag so future downloads are not permanently blocked
-        DOWNLOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
-        e.to_string()
-    })?;
     let dest_path = models::models_dir(app_data_dir.as_path()).join(&filename);
     let temp_path = models::partial_model_path(app_data_dir.as_path(), &filename);
 
@@ -657,6 +712,26 @@ pub async fn download_model(
     });
 
     Ok(())
+}
+
+fn available_disk_bytes(path: &std::path::Path) -> Result<u64, String> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+            return Err(format!("Could not check free disk space: {}", std::io::Error::last_os_error()));
+        }
+        Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(u64::MAX)
+    }
 }
 
 /// Download every file a model needs: pinned extra files first (they are
@@ -704,6 +779,28 @@ pub async fn get_model_download_status() -> Result<ModelDownloadStatus, String> 
 }
 
 #[tauri::command]
+pub fn get_apple_model_status(
+    state: State<'_, Arc<AppState>>,
+) -> crate::inference::foundation::AppleModelStatus {
+    crate::inference::foundation::status(state.app_data_dir.as_path())
+}
+
+#[tauri::command]
+pub async fn set_apple_model_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<crate::inference::foundation::AppleModelStatus, String> {
+    crate::inference::foundation::write_setting(state.app_data_dir.as_path(), enabled)
+        .map_err(|error| error.to_string())?;
+    let config = state.config.read().clone();
+    let loaded = load_ai_engines(state.app_data_dir.as_path(), &config).await;
+    state.replace_ai_engines(loaded.inference);
+    Ok(crate::inference::foundation::status(
+        state.app_data_dir.as_path(),
+    ))
+}
+
+#[tauri::command]
 pub async fn refresh_ai_models(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -711,19 +808,19 @@ pub async fn refresh_ai_models(
     let app_data_dir = crate::config::fndr_app_data_dir(app.path()).map_err(|e| e.to_string())?;
     let config = state.inner().config.read().clone();
     let preferred_model_id = models::inference_preferred_model_id(app_data_dir.as_path(), &config);
-    let ai_model_available =
-        models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
-            .is_some();
     let loaded_ai = load_ai_engines(app_data_dir.as_path(), &config).await;
+    let ai_model_available = loaded_ai.inference.is_some()
+        || models::resolve_model(preferred_model_id.as_deref(), Some(app_data_dir.as_path()))
+            .is_some();
 
     let loaded_model_id = loaded_ai
         .inference
         .as_ref()
         .map(|engine| engine.model_id().to_string());
-    let loaded_model_path = loaded_ai
-        .inference
-        .as_ref()
-        .map(|engine| engine.model_path().display().to_string());
+    let loaded_model_path = loaded_ai.inference.as_ref().and_then(|engine| {
+        (!engine.model_path().as_os_str().is_empty())
+            .then(|| engine.model_path().display().to_string())
+    });
     let ai_model_loaded = loaded_ai.inference.is_some();
     let vlm_loaded = crate::inference::pixel_vlm_loaded();
 
@@ -1029,7 +1126,13 @@ pub async fn delete_ai_model(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_biometric_helper_output, system_settings_url};
+    use super::{available_disk_bytes, parse_biometric_helper_output, system_settings_url};
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_available_disk_space_before_model_downloads() {
+        assert!(available_disk_bytes(&std::env::temp_dir()).unwrap() > 0);
+    }
 
     #[test]
     fn resolves_voice_permission_settings_panes() {

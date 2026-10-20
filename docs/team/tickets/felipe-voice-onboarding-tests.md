@@ -288,6 +288,7 @@ Pairing: the Swift helper (VO-03) is new ground; pair with Kunj for one session 
 **Do.**
 1. After onboarding, a short guided moment: "Work for a few minutes, then try: search for something you just read, or hold the key and say 'open' plus an app name."
 2. Empty states on Home, Search, and Vault that teach the next action instead of saying "No results."
+3. Use the proposed activation sequence in [ADR 033](../../decisions/033-activation-and-onboarding-target.md) to guide the first safe capture, search, and source reopen. Record the two-user check separately from the five-user target until the decision is accepted.
 
 **Done when.** Two outside users reach a successful first search within 10 minutes without help (PD-13 sessions).
 
@@ -301,6 +302,8 @@ Pairing: the Swift helper (VO-03) is new ground; pair with Kunj for one session 
 - depends: OB-01
 
 **Do.** Record step start and finish times, skips, and errors to a local, content-free log that `make vault-health` or a small script can summarize; nothing leaves the Mac.
+
+Use [ADR 033](../../decisions/033-activation-and-onboarding-target.md) for the proposed activation-proxy events and full denominator. Keep that local proxy separate from observed success in PD-13 until the decision is accepted.
 
 **Done when.** A summary from three test runs.
 

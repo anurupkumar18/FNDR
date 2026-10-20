@@ -77,13 +77,12 @@ pub use openclicky_bridge::*;
 mod computer_use;
 mod hermes_codex;
 mod setup_center;
+mod hand_off;
 mod work_set;
 pub use computer_use::*;
 pub use setup_center::*;
+pub use hand_off::*;
 pub use work_set::*;
-
-mod agent;
-pub use agent::*;
 
 mod peer;
 pub use peer::*;
@@ -94,8 +93,14 @@ pub use graph::*;
 mod glasses_import;
 pub use glasses_import::*;
 
+mod import;
+pub use import::*;
+
 mod daily_review;
 pub use daily_review::*;
+
+mod daily_outputs;
+pub use daily_outputs::*;
 
 pub mod debug;
 pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
@@ -103,12 +108,15 @@ pub use debug::{get_memory_timeline_thread, inspect_memory_pipeline};
 pub mod retrieval;
 pub use retrieval::{
     fndr_answer, fndr_build_context_pack, fndr_get_memory_source_statements,
-    fndr_get_memory_subgraph, fndr_get_related_memories, fndr_quality_status, fndr_search,
+    fndr_get_related_memories, fndr_quality_status, fndr_search,
     fndr_timeline,
 };
 
 mod companion;
 pub use companion::*;
+
+mod mcp_connect;
+pub use mcp_connect::*;
 
 mod screen_guide;
 pub use screen_guide::*;
@@ -125,6 +133,9 @@ pub use memory_journey::*;
 mod quality_lab;
 #[cfg(debug_assertions)]
 pub use quality_lab::*;
+
+mod actions;
+pub use actions::*;
 
 // Privacy proof IPC command
 pub use crate::privacy_proof::*;

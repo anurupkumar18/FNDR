@@ -3,7 +3,7 @@ import { Stats, getStats } from "@/shared/ipc/tauri";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./StatsPanel.css";
-import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
@@ -628,19 +628,11 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                     />
                 )}
                 {loading && !stats && (
-                    <div className="stats-page-state">
-                        <ThinkingIndicator state="working" size="md" />
-                        <p>Loading stats...</p>
-                    </div>
+                    <PanelState kind="loading" title="Loading activity stats" description="Reading local capture activity." />
                 )}
 
                 {!loading && error && !stats && (
-                    <div className="stats-page-state" role="alert">
-                        <p>{error}</p>
-                        <button type="button" className="ui-action-btn" onClick={() => void loadStats(() => true)}>
-                            Try again
-                        </button>
-                    </div>
+                    <PanelState kind="error" title="Activity stats could not load" description={error} action={{ label: "Try again", onAction: () => void loadStats(() => true) }} />
                 )}
 
                 {error && stats && (
@@ -651,10 +643,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                 )}
 
                 {!loading && stats && stats.total_records === 0 && (
-                    <div className="stats-page-state stats-empty-state">
-                        <h3>No captured activity yet</h3>
-                        <p>Stats will appear after FNDR stores local memories from your work.</p>
-                    </div>
+                    <PanelState kind="empty" title="No captured activity yet" description="Stats will appear after FNDR stores local memories from your work." />
                 )}
 
                 {stats && stats.total_records > 0 && (

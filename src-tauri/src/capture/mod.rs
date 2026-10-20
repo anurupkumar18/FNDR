@@ -4,7 +4,7 @@
 //! Apple Vision text, embeds cleaned chunks, and batches memory records into
 //! LanceDB.
 
-mod admission;
+pub(crate) mod admission;
 pub mod clipboard;
 mod dedupe;
 pub mod enrich_policy;
@@ -19,7 +19,11 @@ pub use dedupe::{
     dhash_9x8, hamming, is_aba, luma_9x8_from_rgba, DedupeMatchKind, DedupeVerdict,
     PerceptualHasher,
 };
-pub use sampling::AdaptiveSampler;
+pub use macos::bgra_to_png;
+pub use sampling::{
+    content_input_idle_seconds, AdaptiveSampler, CaptureTrigger, ScreenObservation, TriggerGate,
+    TriggerPolicy,
+};
 
 /// Convenience wrapper: return just the frontmost app name on macOS.
 /// Used by the proactive notification system outside the capture crate.
@@ -2010,12 +2014,48 @@ fn finish_memory_journey_skip(
     state.emit_memory_journey_status();
 }
 
+/// Sleep while capture is paused. Resuming is a person's click, so a second of
+/// latency is invisible and halves the wakeups of the old 500 ms poll.
+const PAUSED_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Sleep after the person has been away past `deep_idle_seconds`.
+const DEEP_IDLE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+static CAPTURE_FRAME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn capture_frame_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    CAPTURE_FRAME_LOCK.lock().await
+}
+
+/// The daily storage task may run only while capture is paused or deep idle,
+/// and only after any frame already in flight has finished.
+pub fn try_idle_maintenance_guard(
+    capturing: bool,
+    capture_fps: f64,
+) -> Option<tokio::sync::MutexGuard<'static, ()>> {
+    if capturing && (!capture_fps.is_finite() || capture_fps > 0.0) {
+        return None;
+    }
+    CAPTURE_FRAME_LOCK.try_lock().ok()
+}
+
+fn trigger_counter(trigger: CaptureTrigger) -> &'static str {
+    match trigger {
+        CaptureTrigger::Startup => "capture.trigger.startup",
+        CaptureTrigger::AppSwitch => "capture.trigger.app_switch",
+        CaptureTrigger::WindowChange => "capture.trigger.window_change",
+        CaptureTrigger::InputSettled => "capture.trigger.input_settled",
+        CaptureTrigger::Fallback => "capture.trigger.fallback",
+    }
+}
+
 pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Initializing capture pipeline...");
 
     // Initialize components
     let mut hasher = PerceptualHasher::new();
     let sampler = AdaptiveSampler::new();
+    let mut trigger_gate = TriggerGate::new();
+    let loop_started = Instant::now();
     let ocr = OcrEngine::new()?;
     // CLIP image embedding model lives next to the BGE assets; resolved once per
     // process. The first stored frame absorbs the ~80-200 ms session load; every
@@ -2223,7 +2263,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
 
         // Check if paused
         if !state.is_capturing() {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(PAUSED_POLL_INTERVAL).await;
             continue;
         }
 
@@ -2251,14 +2291,10 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         // Calculate sleep duration based on FPS
         let fps = sampler.get_current_fps(&config);
         if fps <= 0.0 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(DEEP_IDLE_POLL_INTERVAL).await;
             continue;
         }
         let sleep_duration = Duration::from_secs_f64(1.0 / fps);
-
-        // We're past the "paused" / "deep idle" gates and intend to look at a
-        // frame this tick — count it for the storage-rate denominator.
-        state.capture_stats.record_evaluated();
 
         // Get active application info
         let context_started = Instant::now();
@@ -2266,6 +2302,33 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
         let app_name = app_context.app_name.clone();
         let window_title = app_context.window_title.clone();
         runtime_metrics::since_ms("capture.context_ms", context_started);
+
+        // Event-driven capture: this poll only reads window metadata. Pixels,
+        // hashing and OCR wait for an app switch, a window change, typing or
+        // scrolling that went quiet, or the fallback timer.
+        if config.capture_pipeline.event_driven {
+            let observed = ScreenObservation {
+                bundle_id: app_context.bundle_id.as_deref(),
+                window_title: &window_title,
+                url: app_context.browser_url.as_deref(),
+                input_idle_secs: content_input_idle_seconds(),
+            };
+            let policy = TriggerPolicy::from_config(&config);
+            match trigger_gate.decide(loop_started.elapsed().as_secs_f64(), &observed, &policy) {
+                Some(trigger) => runtime_metrics::bump(trigger_counter(trigger)),
+                None => {
+                    runtime_metrics::bump("capture.gate_skipped");
+                    tokio::time::sleep(sleep_duration).await;
+                    continue;
+                }
+            }
+        }
+
+        let _frame_guard = capture_frame_guard().await;
+
+        // The gate let this tick through to look at a frame: count it for the
+        // storage-rate denominator.
+        state.capture_stats.record_evaluated();
         #[cfg(debug_assertions)]
         let mut memory_journey_id = {
             let target_app_class = if app_context.browser_url.is_some() {
@@ -2475,15 +2538,16 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
                 format!("Visited {}", domain)
             };
             let memory_context = format!("URL-only surface capture for {} at {}", domain, snippet);
+            let document_path = macos::document_path_for(&app_context);
             let app_deep_link = crate::memory::reopen::app_deep_link_for(
                 app_context.bundle_id.as_deref(),
                 &window_title,
-                app_context.document_path.as_deref(),
+                document_path.as_deref(),
             );
             let mut reopen_target = build_reopen_target(
                 url.as_deref(),
                 app_deep_link.as_deref(),
-                macos::preferred_reopen_file_path(app_context.document_path.as_deref(), &[]),
+                macos::preferred_reopen_file_path(document_path.as_deref(), &[]),
                 app_context.bundle_id.as_deref(),
                 &app_name,
                 now.timestamp_millis(),
@@ -3864,16 +3928,17 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             &prior_chain,
             &config.memory_quality,
         );
+        let document_path = macos::document_path_for(&app_context);
         let app_deep_link = crate::memory::reopen::app_deep_link_for(
             app_context.bundle_id.as_deref(),
             &window_title,
-            app_context.document_path.as_deref(),
+            document_path.as_deref(),
         );
         let mut reopen_target = build_reopen_target(
             url.as_deref(),
             app_deep_link.as_deref(),
             macos::preferred_reopen_file_path(
-                app_context.document_path.as_deref(),
+                document_path.as_deref(),
                 structured_memory
                     .as_ref()
                     .map(|memory| memory.files_touched.as_slice())
@@ -4835,7 +4900,7 @@ async fn merge_or_append_memory_record(
         if let Some(anchor_id) = continuity_index.get(anchor).cloned() {
             if let Some(batch_idx) = batch
                 .iter()
-                .position(|record| record.id == anchor_id && !record.is_agent_note())
+                .position(|record| record.id == anchor_id && !record.is_leaf_row())
             {
                 let merge_write_started = Instant::now();
                 let merged = merge_memory_records(
@@ -4868,7 +4933,7 @@ async fn merge_or_append_memory_record(
                 .await
                 .map_err(|e| e.to_string())?;
             runtime_metrics::since_ms("mem.merge_search_ms", merge_search_started);
-            if let Some(existing) = existing.filter(|record| !record.is_agent_note()) {
+            if let Some(existing) = existing.filter(|record| !record.is_leaf_row()) {
                 let merge_write_started = Instant::now();
                 let merged =
                     merge_memory_records(existing.clone(), incoming.clone(), text_embedder, engine)
@@ -5087,14 +5152,14 @@ pub async fn replay_memory_records(
 }
 
 pub(crate) fn eligible_for_story_merge(record: &MemoryRecord) -> bool {
-    !record.is_agent_note()
+    !record.is_leaf_row()
         && (record.clean_text.trim().len() >= 36 || record.snippet.trim().len() >= 18)
 }
 
 fn best_batch_merge_target(batch: &[MemoryRecord], incoming: &MemoryRecord) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
-        if candidate.is_agent_note() {
+        if candidate.is_leaf_row() {
             continue;
         }
         let scored = score_memory_candidate(incoming, candidate);
@@ -5124,7 +5189,7 @@ fn best_batch_lexical_merge_target(
 ) -> Option<usize> {
     let mut best: Option<(usize, MergeScore)> = None;
     for (index, candidate) in batch.iter().enumerate() {
-        if candidate.is_agent_note() {
+        if candidate.is_leaf_row() {
             continue;
         }
         if incoming.app_name != candidate.app_name {
@@ -5166,7 +5231,7 @@ async fn best_persisted_merge_target(
 
     let best_same_app = same_app_candidates
         .iter()
-        .filter(|candidate| !candidate.is_agent_note())
+        .filter(|candidate| !candidate.is_leaf_row())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate(incoming, candidate);
@@ -5193,7 +5258,7 @@ async fn best_persisted_merge_target(
 
     let best_cross_app = cross_app_candidates
         .iter()
-        .filter(|candidate| !candidate.is_agent_note())
+        .filter(|candidate| !candidate.is_leaf_row())
         .filter(|candidate| candidate.id != incoming.id)
         .filter(|candidate| candidate.app_name != incoming.app_name)
         .filter_map(|candidate| {
@@ -5235,7 +5300,7 @@ async fn best_persisted_lexical_merge_target(
 
     let best = candidates
         .iter()
-        .filter(|candidate| !candidate.is_agent_note())
+        .filter(|candidate| !candidate.is_leaf_row())
         .filter(|candidate| candidate.id != incoming.id)
         .filter_map(|candidate| {
             let scored = score_search_candidate_lexical(incoming, candidate);
@@ -6176,7 +6241,7 @@ fn same_domain(left: Option<&str>, right: Option<&str>) -> bool {
 }
 
 pub(crate) fn continuity_anchor_for_memory(record: &MemoryRecord) -> Option<String> {
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     continuity_anchor(
@@ -6695,6 +6760,19 @@ fn should_text_heavy_override(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn maintenance_waits_for_idle_and_an_unoccupied_frame() {
+        assert!(super::try_idle_maintenance_guard(true, 0.5).is_none());
+        let frame = super::capture_frame_guard().await;
+        assert!(super::try_idle_maintenance_guard(true, 0.0).is_none());
+        drop(frame);
+        let maintenance = super::try_idle_maintenance_guard(true, 0.0)
+            .expect("deep idle leaves the frame lock available");
+        assert!(super::try_idle_maintenance_guard(false, 0.0).is_none());
+        drop(maintenance);
+        assert!(super::try_idle_maintenance_guard(false, 0.5).is_some());
+    }
+
     #[test]
     fn accessibility_text_replaces_ocr_only_at_two_hundred_characters() {
         assert!(!super::prefer_ax_text(0));
@@ -7001,6 +7079,24 @@ mod tests {
     #[test]
     fn capture_keeps_agent_notes_separate_from_persisted_continuity_anchor() {
         assert_capture_keeps_agent_note_separate(true, true);
+    }
+
+    #[test]
+    fn imported_items_cannot_be_screen_merge_candidates() {
+        let mut imported = merge_test_record("imported-item");
+        imported.source_type = "import:mail".into();
+        imported.session_key = "import:mail:synthetic-id".into();
+        let incoming = merge_test_record("screen-capture");
+        assert!(!eligible_for_story_merge(&imported));
+        assert_eq!(continuity_anchor_for_memory(&imported), None);
+        assert_eq!(
+            best_batch_merge_target(&[imported.clone()], &incoming),
+            None
+        );
+        assert_eq!(
+            best_batch_lexical_merge_target(&[imported], &incoming),
+            None
+        );
     }
 
     #[test]

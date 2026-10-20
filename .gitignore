@@ -67,6 +67,7 @@ apps/ios/FNDRKit/.build/
 build/
 src-tauri/binaries/fndr-speech-*
 src-tauri/binaries/fndr-auth-*
+src-tauri/binaries/fndr-foundation-*
 src-tauri/binaries/FNDR Speech Helper.app/
 
 # iOS / Xcode
@@ -94,3 +95,5 @@ fastlane/test_output/
 
 # Local browser-audit artifacts
 .playwright-cli/
+playwright-report/
+test-results/

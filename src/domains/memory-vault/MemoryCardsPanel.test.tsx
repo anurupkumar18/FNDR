@@ -15,11 +15,6 @@ vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     findVisuallySimilarMemories: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
-    fndrGetMemorySubgraph: vi.fn().mockResolvedValue({
-        seed_ids: [],
-        node_count: 0,
-        edge_count: 0,
-    }),
     fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrGetRelatedMemories: vi.fn().mockResolvedValue([]),
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),
@@ -110,7 +105,8 @@ describe("MemoryCardsPanel", () => {
         renderVault();
 
         const alert = await screen.findByRole("alert");
-        expect(alert).toHaveTextContent("Memories could not be loaded: store busy");
+        expect(within(alert).getByRole("heading", { name: "Memories could not load" })).toBeInTheDocument();
+        expect(alert).toHaveTextContent("store busy");
         fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
 
         expect(await screen.findByText("Memory 1")).toBeInTheDocument();
@@ -125,14 +121,14 @@ describe("MemoryCardsPanel", () => {
         fireEvent.change(screen.getByRole("searchbox", { name: "Filter memories by text" }), {
             target: { value: "nothing like this" },
         });
-        expect(screen.getByText("No memories match these filters.")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "No memories match these filters" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
         expect(screen.getByText("Memory 1")).toBeInTheDocument();
 
         cleanup();
         vi.mocked(listMemoryCards).mockResolvedValue([]);
         renderVault();
-        expect(await screen.findByText(/No memories yet\. While capture is on/)).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: "No memories yet" })).toBeInTheDocument();
     });
 
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {

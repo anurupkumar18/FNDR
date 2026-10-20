@@ -52,3 +52,5 @@ The first run (same ten requests) had three faults, each now a test in `workset/
 ## Open question
 
 Most of the owner's memories reopen only to an app, because Dia captures carry no URL and Finder captures no folder path. Work sets will mostly open apps until capture records those targets.
+
+Update 2026-10-15: capture now reads the front Finder window's folder (AppleScript, one macOS prompt), and Dia counts as a browser, so new Finder and Dia memories can reopen to the folder and the page. Not yet measured on a fresh copy.

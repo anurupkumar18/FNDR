@@ -11,9 +11,8 @@ import {
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./DailySummaryPanel.css";
-import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
-import { Icon } from "@/shared/components/atoms/Icon";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     beginActivityTrace,
@@ -495,19 +494,11 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
                 <div className="daily-summary-content">
                     {loading && (
-                        <div className="daily-summary-state">
-                            <ThinkingIndicator state="composing" size="md" />
-                            <p>Clustering the day&apos;s local memories...</p>
-                        </div>
+                        <PanelState kind="loading" title="Preparing daily summary" description="Clustering this day’s local memories." />
                     )}
 
                     {!loading && error && (
-                        <div className="daily-summary-state error-state" role="alert">
-                            <p>{error}</p>
-                            <button type="button" className="ui-action-btn" onClick={() => void handleGenerate()}>
-                                Try again
-                            </button>
-                        </div>
+                        <PanelState kind="error" title="Daily summary could not load" description={error} action={{ label: "Try again", onAction: () => void handleGenerate() }} />
                     )}
 
                     {!loading && !error && summary && summaryDateStr === dateStr && (
@@ -615,10 +606,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                     )}
 
                     {!loading && !error && (!summary || summaryDateStr !== dateStr) && (
-                        <div className="daily-summary-state empty-state">
-                            <span className="shining-shield" aria-hidden="true"><Icon name="calendar" size={32} /></span>
-                            <p>Generate a summary for {displayDate(dateStr)} to review the memories FNDR recorded that day.</p>
-                        </div>
+                        <PanelState kind="empty" title="No daily summary yet" description={`Generate a summary for ${displayDate(dateStr)} using the button above to review the memories FNDR recorded that day.`} />
                     )}
                 </div>
             </div>

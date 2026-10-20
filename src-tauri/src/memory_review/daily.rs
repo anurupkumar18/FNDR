@@ -133,8 +133,8 @@ pub async fn run_daily_memory_review(
         .await
         .map_err(|err| err.to_string())?
         .into_iter()
-        // Agent notes are never review candidates (VS-68).
-        .filter(|record| !record.is_agent_note())
+        // Leaf rows are never review candidates.
+        .filter(|record| !record.is_leaf_row())
         .collect::<Vec<_>>();
 
     let scanned = records.len();

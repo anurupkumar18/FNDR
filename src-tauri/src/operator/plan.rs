@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const MAX_STEPS: usize = 8;
+/// The most a `paste` step puts into a field: a link, an address, a short
+/// paragraph, small enough to read in full on the approval card.
+pub const MAX_PASTE_CHARS: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +20,10 @@ pub enum StepAction {
     /// FNDR reopens a memory it resolved itself (ADR 027). Never planned by
     /// a model: the schema does not offer it and `parse_plan` refuses it.
     ReopenMemory,
+    /// FNDR pastes `text` into the focused field of `app` (or of the app in
+    /// front) once the person has tapped Allow on the exact text. Empty
+    /// `text` pastes what is on the clipboard, which an earlier step copied.
+    Paste,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +39,8 @@ pub enum StepCheck {
     None,
     /// The reopen core's typed outcome says the target opened.
     Reopened,
+    /// The focused field holds the pasted text.
+    Pasted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +55,10 @@ pub struct PlanStep {
     /// What `operate` should achieve, in the person's words.
     #[serde(default)]
     pub goal: String,
+    /// What a `paste` step puts into the focused field, exactly as the
+    /// person sees it before tapping Allow; empty for the clipboard.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
     pub check: StepCheck,
     /// The memory a `reopen_memory` step opens. Only FNDR's code sets it:
     /// it is never read from a model's plan.
@@ -71,14 +84,15 @@ pub fn plan_output_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["action", "label", "app", "url", "goal", "check"],
+                    "required": ["action", "label", "app", "url", "goal", "text", "check"],
                     "properties": {
-                        "action": { "type": "string", "enum": ["open_app", "open_url", "operate"] },
+                        "action": { "type": "string", "enum": ["open_app", "open_url", "operate", "paste"] },
                         "label": { "type": "string" },
                         "app": { "type": "string" },
                         "url": { "type": "string" },
                         "goal": { "type": "string" },
-                        "check": { "type": "string", "enum": ["frontmost", "media_playing", "page_loaded", "none"] }
+                        "text": { "type": "string" },
+                        "check": { "type": "string", "enum": ["frontmost", "media_playing", "page_loaded", "pasted", "none"] }
                     }
                 }
             }
@@ -103,22 +117,335 @@ pub fn step_report_schema() -> Value {
 /// written is refused here, before anything touches the Mac.
 const NOTHING_TO_DO: &str = "Nothing to do in that request.";
 
+/// Where a request goes, decided on this Mac before anything leaves it. The
+/// run and the evaluation suite (`operator::eval`) both ask this one function.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Route {
+    /// "Save this as <name>": the set this session opened last is saved.
+    SaveSet { name: String },
+    /// A set the person saved, by its index in their saved names.
+    SavedSet {
+        index: usize,
+        layout: Option<crate::operator::layout::Layout>,
+    },
+    /// A whole piece of work, resolved from memories with no model (ADR 027).
+    WorkSet {
+        layout: Option<crate::operator::layout::Layout>,
+    },
+    /// A saved skill, by its index in the saved skill names: its steps run
+    /// again with no planning.
+    Skill { index: usize },
+    /// Only opening apps, opening links and web searches: planned here by
+    /// `local_plan`, carried out with no Codex session.
+    Local { plan: Plan },
+    /// The cloud planner turn, with memory snippets only when the request
+    /// points at the past.
+    Planner { memory_snippets: bool },
+}
+
+/// What a request is routed against, all of it on this Mac.
+pub struct Known<'a> {
+    /// The names of the person's saved sets.
+    pub saved_sets: &'a [String],
+    /// The names of the person's saved skills.
+    pub skills: &'a [String],
+    /// Whether a name is an app installed on this Mac.
+    pub is_app: &'a dyn Fn(&str) -> bool,
+}
+
+pub fn route(request: &str, known: &Known) -> Route {
+    if let Some(name) = save_set_name(request) {
+        return Route::SaveSet { name };
+    }
+    if let Some(index) = crate::operator::skills::skill_asked_for(request, known.skills) {
+        return Route::Skill { index };
+    }
+    let layout = layout_asked_for(request);
+    if let Some(index) = named_set_asked_for(request, known.saved_sets) {
+        return Route::SavedSet { index, layout };
+    }
+    if asks_for_work_set(request) {
+        return Route::WorkSet { layout };
+    }
+    if let Some(plan) = local_plan(request, known.is_app) {
+        return Route::Local { plan };
+    }
+    Route::Planner {
+        memory_snippets: refers_to_past(request),
+    }
+}
+
+/// The plan without steps that change nothing: opening the app that is
+/// already in front right before operating it. The planner adds one for
+/// "summarize this page" (3 of 23 recorded answers, 2026-10-14), and each
+/// costs a launch, a wait and a check.
+pub fn settled(mut plan: Plan, in_front: Option<&str>) -> Plan {
+    let Some(front) = in_front.map(str::trim).filter(|app| !app.is_empty()) else {
+        return plan;
+    };
+    let mut index = 0;
+    while index + 1 < plan.steps.len() {
+        let (step, next) = (&plan.steps[index], &plan.steps[index + 1]);
+        let opens_front =
+            step.action == StepAction::OpenApp && step.app.trim().eq_ignore_ascii_case(front);
+        let then_operates =
+            next.action == StepAction::Operate && next.app.trim().eq_ignore_ascii_case(front);
+        if opens_front && then_operates {
+            plan.steps.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+    plan
+}
+
+/// Words that open an app or a link.
+const OPEN_VERBS: &[&str] = &[
+    "open",
+    "launch",
+    "start",
+    "go to",
+    "switch to",
+    "bring up",
+    "show",
+];
+
+/// Words that ask for a web search; the rest of the clause is the query.
+const SEARCH_VERBS: &[&str] = &[
+    "look up",
+    "search the web for",
+    "search google for",
+    "search online for",
+    "search for",
+    "google",
+];
+
+/// Words before a request that change nothing.
+const REQUEST_LEAD: &[&str] = &["please", "can you", "could you", "hey fndr", "fndr"];
+
+/// A search query for a URL: unreserved characters kept, spaces as `+`,
+/// every other byte as `%XX`.
+fn query_encoded(query: &str) -> String {
+    query
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// "github.com in Safari": the text before a browser named at the end, and
+/// that browser, when it is one and is installed.
+fn in_browser(text: &str, is_app: &dyn Fn(&str) -> bool) -> Option<(String, String)> {
+    let at = text.to_ascii_lowercase().rfind(" in ")?;
+    let (head, place) = (text[..at].trim(), text[at + 4..].trim());
+    (!head.is_empty() && crate::browsers::is_browser(place) && is_app(place))
+        .then(|| (head.to_string(), place.to_string()))
+}
+
+/// A clause that opens an app, opens a link or searches the web, as a step.
+/// None for anything else, so the request goes to the planner.
+fn local_step(clause: &str, is_app: &dyn Fn(&str) -> bool) -> Option<PlanStep> {
+    let mut clause = clause
+        .trim()
+        .trim_end_matches(['.', '!', '?'])
+        .trim()
+        .to_string();
+    loop {
+        let lower = clause.to_lowercase();
+        let Some(lead) = REQUEST_LEAD
+            .iter()
+            .find(|lead| lower.starts_with(&format!("{lead} ")))
+        else {
+            break;
+        };
+        clause = clause[lead.len()..].trim().to_string();
+    }
+    let lower = clause.to_lowercase();
+    let after = |verb: &str| -> Option<String> {
+        lower
+            .starts_with(&format!("{verb} "))
+            .then(|| clause[verb.len()..].trim().to_string())
+            .filter(|rest| !rest.is_empty())
+    };
+    if let Some(query) = SEARCH_VERBS.iter().find_map(|verb| after(verb)) {
+        let (query, browser) = match in_browser(&query, is_app) {
+            Some((query, browser)) => (query, browser),
+            None => (query, String::new()),
+        };
+        let encoded = query_encoded(&query);
+        let label = format!(
+            "Look up {}",
+            query
+                .split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        return Some(PlanStep {
+            action: StepAction::OpenUrl,
+            label,
+            app: browser,
+            url: format!("https://www.google.com/search?q={encoded}"),
+            goal: String::new(),
+            text: String::new(),
+            check: StepCheck::PageLoaded,
+            item: None,
+        });
+    }
+    let target = OPEN_VERBS.iter().find_map(|verb| after(verb))?;
+    let (target, browser) = match in_browser(&target, is_app) {
+        Some((target, browser)) => (target, browser),
+        None => (target, String::new()),
+    };
+    // "in Notes", "on my phone": a place the planner has to reason about.
+    if target
+        .split_whitespace()
+        .any(|word| matches!(word.to_lowercase().as_str(), "in" | "on" | "with" | "from"))
+    {
+        return None;
+    }
+    let target = target
+        .strip_prefix("the ")
+        .or_else(|| target.strip_prefix("The "))
+        .unwrap_or(&target)
+        .trim();
+    let target = target
+        .strip_suffix(" app")
+        .or_else(|| target.strip_suffix(" App"))
+        .unwrap_or(target)
+        .trim();
+    let looks_like_link = !target.contains(' ')
+        && (target.starts_with("http://")
+            || target.starts_with("https://")
+            || target.rsplit_once('.').is_some_and(|(host, tld)| {
+                !host.is_empty() && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())
+            }));
+    if looks_like_link {
+        let url = if target.starts_with("http") {
+            target.to_string()
+        } else {
+            format!("https://{target}")
+        };
+        return Some(PlanStep {
+            action: StepAction::OpenUrl,
+            label: format!("Open {target}"),
+            app: browser,
+            url,
+            goal: String::new(),
+            text: String::new(),
+            check: StepCheck::PageLoaded,
+            item: None,
+        });
+    }
+    // A browser is named only for a link: "open Notes in Safari" goes on.
+    (browser.is_empty() && is_app(target)).then(|| PlanStep {
+        action: StepAction::OpenApp,
+        label: format!("Open {target}"),
+        app: target.to_string(),
+        url: String::new(),
+        goal: String::new(),
+        text: String::new(),
+        check: StepCheck::Frontmost,
+        item: None,
+    })
+}
+
+/// A request made only of opening apps, opening links and web searches,
+/// planned on this Mac with no model: "open Notes", "look up looped
+/// transformers", "open Notes, then look up the weather in Paris". None for
+/// anything that has to operate an app, refers to the past, or asks for
+/// something Notch Do never does; those go to the planner.
+pub fn local_plan(request: &str, is_app: &dyn Fn(&str) -> bool) -> Option<Plan> {
+    if asks_for_something_never_done(request) || refers_to_past(request) {
+        return None;
+    }
+    let mut clauses = Vec::new();
+    let mut rest = request.trim().to_string();
+    // A clause ends at a comma, "and", "then" or "and then" only when an
+    // opening or search verb follows, so "look up salt and pepper" stays one.
+    'split: loop {
+        let lower = rest.to_lowercase();
+        for (at, _) in lower.match_indices([',', ' ']) {
+            let tail = lower[at..].trim_start_matches([',', ' ']);
+            let tail = tail
+                .strip_prefix("and then ")
+                .or_else(|| tail.strip_prefix("then "))
+                .or_else(|| tail.strip_prefix("and "))
+                .unwrap_or(tail);
+            let joined =
+                lower[at..].trim_start_matches([',', ' ']) != tail || lower[at..].starts_with(',');
+            let opens = OPEN_VERBS
+                .iter()
+                .chain(SEARCH_VERBS)
+                .any(|verb| tail.starts_with(&format!("{verb} ")));
+            if joined && opens && at > 0 {
+                clauses.push(rest[..at].to_string());
+                let skip = lower.len() - tail.len();
+                rest = rest[skip..].to_string();
+                continue 'split;
+            }
+        }
+        clauses.push(rest);
+        break;
+    }
+    let steps = clauses
+        .iter()
+        .map(|clause| local_step(clause, is_app))
+        .collect::<Option<Vec<_>>>()?;
+    (!steps.is_empty() && steps.len() <= MAX_STEPS).then_some(Plan { steps })
+}
+
+/// Whether a finished run must say it left something out.
+pub fn leaves_something_out(request: &str) -> bool {
+    asks_for_something_never_done(request)
+}
+
+/// Words that ask for something Notch Do never does wherever they stand.
+const NEVER_ANYWHERE: &str = r"(?i)\b(send|sends|sending|forward|delete|deletes|deleting|erase|trash|buy|buys|purchase|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b";
+
+/// Words that ask for it only as the verb a request or a clause starts with:
+/// "text Sam", "email the team", "reply to Ana", "order a pizza", "pay the
+/// bill". As nouns ("this email", "the text of", "paste a reply", "in order",
+/// "the pay range doc") they are what the person wants to read, open or paste.
+const NEVER_AS_VERB: &[&str] = &["text", "message", "email", "reply", "order", "pay"];
+
+/// Words before a clause's verb that change nothing.
+const CLAUSE_LEAD: &[&str] = &[
+    "please", "can", "could", "would", "you", "hey", "fndr", "and", "then", "also", "just", "now",
+];
+
 /// Whether the request's words ask for something Notch Do never does.
 fn asks_for_something_never_done(request: &str) -> bool {
     static NEVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let never = NEVER.get_or_init(|| {
-        regex::Regex::new(
-            r"(?i)\b(send|sends|sending|email|message|text|reply|delete|deletes|remove|erase|trash|buy|purchase|pay|order|checkout|password|passcode|sign\s+in|log\s+in|terminal|system\s+settings)\b",
-        )
-        .expect("never-tier pattern compiles")
-    });
-    never.is_match(request)
+    let never = NEVER
+        .get_or_init(|| regex::Regex::new(NEVER_ANYWHERE).expect("never-tier pattern compiles"));
+    if never.is_match(request) {
+        return true;
+    }
+    let lower = request.to_lowercase();
+    lower
+        .split([',', ';', '.', '!', '?'])
+        .flat_map(|clause| clause.split(" and ").flat_map(|part| part.split(" then ")))
+        .any(|clause| {
+            let words: Vec<&str> = clause
+                .split(|c: char| !c.is_alphanumeric() && c != '\'')
+                .filter(|word| !word.is_empty())
+                .skip_while(|word| CLAUSE_LEAD.contains(word))
+                .collect();
+            words.len() >= 2 && NEVER_AS_VERB.contains(&words[0])
+        })
 }
 
 /// What a finished run adds when the request also asked for something Notch
 /// Do never does. The planner leaves that part out, so without this a run
 /// for "buy it" would end in a plain "Done".
-pub const LEFT_OUT: &str = "Left out: Notch Do does not send, delete, buy, enter passwords or change settings.";
+pub const LEFT_OUT: &str =
+    "Left out: Notch Do does not send, delete, buy, enter passwords or change settings.";
 
 pub fn with_left_out_note(summary: String, request: &str) -> String {
     if asks_for_something_never_done(request) {
@@ -164,6 +491,10 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 if !(lower.starts_with("https://") || lower.starts_with("http://")) {
                     return Err(format!("Step \"{}\" is not a web link.", step.label));
                 }
+                // A link opens in the browser it names, else in the default one.
+                if !crate::browsers::is_browser(&step.app) {
+                    step.app.clear();
+                }
             }
             StepAction::ReopenMemory => {
                 return Err(format!(
@@ -171,7 +502,21 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                     step.label
                 ));
             }
+            StepAction::Paste => {
+                step.text = step.text.trim().to_string();
+                if step.text.chars().count() > MAX_PASTE_CHARS {
+                    return Err(format!(
+                        "Step \"{}\" pastes more than {MAX_PASTE_CHARS} characters.",
+                        step.label
+                    ));
+                }
+                // Whatever the model said, a paste is checked by reading the field.
+                step.check = StepCheck::Pasted;
+            }
             _ => {}
+        }
+        if step.action != StepAction::Paste {
+            step.text.clear();
         }
         if step.label.is_empty() {
             step.label = match step.action {
@@ -179,6 +524,8 @@ pub fn parse_plan(text: &str) -> Result<Plan, String> {
                 StepAction::OpenUrl => "Open the page".to_string(),
                 StepAction::Operate => step.goal.clone(),
                 StepAction::ReopenMemory => String::new(),
+                StepAction::Paste if step.app.is_empty() => "Paste the text".to_string(),
+                StepAction::Paste => format!("Paste into {}", step.app),
             };
         }
     }
@@ -221,6 +568,34 @@ pub fn asks_for_work_set(request: &str) -> bool {
         .expect("work-set pattern compiles")
     });
     pattern.is_match(request) && !asks_for_something_never_done(request)
+}
+
+/// Whether a request asks for finished work: a document, sheet or deck made
+/// from what FNDR remembers ("do the readout Dana asked for", "put together a
+/// comparison of the three quotes"). Decided on the Mac; such a request
+/// becomes a hand-off draft and never reaches the Notch Do planner (ADR 032).
+pub fn asks_for_hand_off(request: &str) -> bool {
+    static HAND_OFF: std::sync::OnceLock<(regex::Regex, regex::Regex)> = std::sync::OnceLock::new();
+    let (asks, other_job) = HAND_OFF.get_or_init(|| {
+        let deliverable = r"(readout|report|write-?up|summary|brief(ing)?|memo|deck|slides|slide\s+deck|presentation|spreadsheet|sheet|table|comparison|plan|one-?pager|analysis|doc|document|outline|proposal|faq|budget|timeline|agenda|update)s?";
+        let asks = regex::Regex::new(&format!(
+            r"(?ix)
+            \b(hand\s+(this|it|that|these)\s+off|hand\s+off\s+(the|my|this|that)\b|take\s+(it|this)\s+from\s+here|take\s+(this|it)\s+off\s+my\s+plate)
+            | \bdo\s+(the|my|that|this|our)\s+([\w'-]+\s+){{0,4}}?{deliverable}\b
+            | \b(make|write(\s+up)?|draft|prepare|put\s+together|create|build|produce)\s+(me\s+)?(a|an|the|my|that|this|our)\s+([\w'-]+\s+){{0,4}}?{deliverable}
+              (\s+(for|about|on|of|from|with|that|which|comparing|covering|summari[sz]ing|by|to)\b|\s*[.!?]?\s*$)"
+        ))
+        .expect("hand-off pattern compiles");
+        // Reminders, mail and messages are Notch Do's, and sending is never done.
+        let other_job = regex::Regex::new(
+            r"(?i)\b(remind(er)?s?|alarms?|timers?|e-?mails?|messages?|texts?|repl(y|ies)|tweets?|posts?)\b",
+        )
+        .expect("other-job pattern compiles");
+        (asks, other_job)
+    });
+    asks.is_match(request)
+        && !other_job.is_match(request)
+        && !asks_for_something_never_done(request)
 }
 
 /// Lowercase words of a request, without punctuation.
@@ -405,6 +780,7 @@ pub fn from_work_set(set: &crate::workset::WorkSet) -> Plan {
                 app: item.app_name.clone(),
                 url: String::new(),
                 goal: String::new(),
+                text: String::new(),
                 check: StepCheck::Reopened,
                 item: Some(item.clone()),
             })
@@ -452,6 +828,7 @@ pub fn verify_reopen(outcome: &crate::memory::reopen::ReopenOutcome) -> Verdict 
         ),
         O::Blocked { .. } => verdict(false, "FNDR does not open that kind of link"),
         O::NoTarget => verdict(false, "FNDR has no place to reopen for this memory"),
+        O::Unavailable => verdict(false, "This source is unavailable to reopen right now"),
     }
 }
 
@@ -489,24 +866,8 @@ fn same_app(wanted: &str, seen: &Observation) -> bool {
 }
 
 fn is_browser(seen: &Observation) -> bool {
-    let name = seen.frontmost_app.to_lowercase();
-    let bundle = seen.frontmost_bundle.to_lowercase();
-    [
-        "safari", "chrome", "arc", "dia", "firefox", "brave", "edge", "opera", "vivaldi", "orion",
-        "zen",
-    ]
-    .iter()
-    .any(|browser| name.contains(browser))
-        || [
-            "com.apple.safari",
-            "com.google.chrome",
-            "company.thebrowser",
-            "org.mozilla",
-            "com.brave",
-            "com.microsoft.edgemac",
-        ]
-        .iter()
-        .any(|prefix| bundle.starts_with(prefix))
+    crate::browsers::is_browser(&seen.frontmost_app)
+        || crate::browsers::is_browser(&seen.frontmost_bundle)
 }
 
 /// Search words in a link's query (`q=looped+transformers`).
@@ -613,7 +974,25 @@ const REPORTED_ONLY: &str = "Playback could not be read; went by the operator's 
 /// model's word that it was done. Only a frontmost app, playing media and an
 /// open page can be seen; every other step is a report.
 pub fn checked_by_fndr(step: &PlanStep, verdict: &Verdict) -> bool {
-    verdict.ok && step.check != StepCheck::None && verdict.detail != REPORTED_ONLY
+    verdict.ok
+        && step.check != StepCheck::None
+        && verdict.detail != REPORTED_ONLY
+        && verdict.detail != PASTE_UNREAD
+}
+
+const PASTE_UNREAD: &str = "Pasted; the field does not show its text to FNDR";
+
+/// Whether a paste landed, from the focused field's text read right after
+/// it (`None` when the field exposes none, as some apps' editors do).
+pub fn verify_paste(app: &str, text: &str, field: Option<&str>) -> Verdict {
+    let flat = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    match field {
+        Some(field) if flat(field).contains(&flat(text)) => {
+            verdict(true, format!("Pasted into {app}"))
+        }
+        Some(_) => verdict(false, format!("The field in {app} does not show the text")),
+        None => verdict(true, PASTE_UNREAD),
+    }
 }
 
 pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
@@ -648,6 +1027,12 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
             None => verdict(seen.reported_done == Some(true), REPORTED_ONLY),
         },
         StepCheck::PageLoaded => {
+            if !step.app.is_empty() && !same_app(&step.app, seen) {
+                return verdict(
+                    false,
+                    format!("{} is not in front ({} is)", step.app, seen.frontmost_app),
+                );
+            }
             if !is_browser(seen) {
                 return verdict(
                     false,
@@ -676,12 +1061,71 @@ pub fn verify(step: &PlanStep, seen: &Observation) -> Verdict {
             _ => verdict(false, "The operator could not finish this step"),
         },
         StepCheck::Reopened => verdict(false, "A reopen is judged by its outcome"),
+        StepCheck::Pasted => verdict(false, "A paste is judged by reading the field"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hand_off_requests_are_recognised() {
+        for request in [
+            "do the readout Dana asked for",
+            "Do the Q4 onboarding readout for me",
+            "take it from here",
+            "hand this off",
+            "hand off the vendor comparison",
+            "take this off my plate",
+            "put together a comparison of the three quotes",
+            "write a one-page brief on the vendor call",
+            "make a deck for the client meeting",
+            "make me a spreadsheet comparing the three vendors",
+            "draft a memo about the pricing change",
+            "prepare a summary of this week's standups",
+            "create a budget from the receipts I downloaded",
+            "write up a report on the survey results",
+            "make the slides for Monday",
+            "prepare the agenda for tomorrow's sync",
+            "build a timeline of the project from my notes",
+            "write a status update.",
+            "draft an FAQ from the support notes",
+            "make a one-pager on the launch",
+        ] {
+            assert!(asks_for_hand_off(request), "{request}");
+        }
+    }
+
+    #[test]
+    fn other_requests_are_not_hand_offs() {
+        for request in [
+            "open the readout",
+            "pull up everything on the readout",
+            "run my Monday setup",
+            "what did Dana ask for",
+            "make a reminder to send the deck at 9",
+            "write an email to Dana",
+            "reply to Marco",
+            "make the presentation full screen",
+            "open the slides",
+            "play the song from yesterday",
+            "summarize this page",
+            "create a new note",
+            "make the text bigger",
+            "do the dishes",
+            "open github.com in Safari",
+            "paste it here",
+            "show me the report I was reading",
+            "delete the old report",
+            "send the deck to Marco",
+            "plan my day",
+            "the report is late",
+            "make a table reservation for two",
+        ] {
+            assert!(!asks_for_hand_off(request), "{request}");
+        }
+    }
 
     #[test]
     fn an_empty_plan_for_something_notch_do_never_does_says_so() {
@@ -786,9 +1230,72 @@ mod tests {
             app: app.into(),
             url: url.into(),
             goal: "g".into(),
+            text: String::new(),
             check,
             item: None,
         }
+    }
+
+    #[test]
+    fn a_browser_named_after_text_that_lowercases_longer_is_still_found() {
+        // "İ" is two bytes and lowercases to three, so an index into a
+        // lowercased copy cuts the original in the wrong place, or inside a
+        // character.
+        let installed = |app: &str| app.eq_ignore_ascii_case("Safari");
+        let plan = local_plan("look up İstanbul weather in Safari", &installed).unwrap();
+        assert_eq!(plan.steps[0].app, "Safari");
+        assert!(
+            plan.steps[0].url.contains("q=%C4%B0stanbul+weather"),
+            "{}",
+            plan.steps[0].url
+        );
+    }
+
+    #[test]
+    fn a_paste_is_checked_by_reading_the_field_names_its_app_and_may_paste_what_was_copied() {
+        let paste = |text: &str, app: &str| {
+            format!(
+                r#"{{"steps":[{{"action":"paste","label":"","app":"{app}","url":"","goal":"","text":"{text}","check":"none"}}]}}"#
+            )
+        };
+        let plan = parse_plan(&paste("https://zoom.us/j/123", "Notes")).unwrap();
+        assert_eq!(
+            plan.steps[0].check,
+            StepCheck::Pasted,
+            "the model's check is not taken"
+        );
+        assert_eq!(plan.steps[0].label, "Paste into Notes");
+        assert_eq!(
+            parse_plan(&paste("hi", "")).unwrap().steps[0].label,
+            "Paste the text"
+        );
+        let copied = parse_plan(&paste("  ", "Notes")).unwrap();
+        assert!(
+            copied.steps[0].text.is_empty(),
+            "empty text pastes what was copied"
+        );
+        assert!(parse_plan(&paste(&"x".repeat(MAX_PASTE_CHARS + 1), "Notes")).is_err());
+        let open = parse_plan(
+            r#"{"steps":[{"action":"open_app","label":"","app":"Notes","url":"","goal":"","text":"stray","check":"frontmost"}]}"#,
+        )
+        .unwrap();
+        assert!(open.steps[0].text.is_empty(), "only a paste keeps text");
+
+        let link = "https://zoom.us/j/123";
+        assert!(verify_paste("Notes", link, Some(&format!("Call:\n{link}  "))).ok);
+        let missing = verify_paste("Notes", link, Some("Call:"));
+        assert!(!missing.ok);
+        let unread = verify_paste("Slack", link, None);
+        assert!(unread.ok);
+        let pasted = step(StepAction::Paste, "Notes", "", StepCheck::Pasted);
+        assert!(
+            !checked_by_fndr(&pasted, &unread),
+            "a field FNDR cannot read is not a check"
+        );
+        assert!(checked_by_fndr(
+            &pasted,
+            &verify_paste("Notes", link, Some(link))
+        ));
     }
 
     #[test]
@@ -1168,6 +1675,7 @@ mod tests {
                 target: "javascript:x".into(),
             },
             O::NoTarget,
+            O::Unavailable,
         ] {
             let verdict = verify_reopen(&failed);
             assert!(!verdict.ok, "{failed:?}");

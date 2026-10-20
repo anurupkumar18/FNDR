@@ -32,6 +32,7 @@ const READERS: Record<string, string> = {
     "context_runtime/mod.rs": "shown: authorizes direct reads before projection",
     // Shown to the person.
     "briefing.rs": "shown: result_is_permitted and the quality gate",
+    "outputs/gather.rs": "shown: quality gate and result_is_permitted, then only own-screen memories and eligible events",
     "ipc/commands/search.rs": "shown: authorize_direct_results",
     "ipc/commands/stats.rs": "shown: result_is_permitted or memory_is_permitted on every read",
     "ipc/commands/quality.rs": "shown in diagnostics: memory_is_visible or memory_is_permitted",
@@ -41,6 +42,7 @@ const READERS: Record<string, string> = {
     "proactive_signals/eval.rs": "internal: an ignored evaluation on a profile copy, through resume::admits",
     "workset/mod.rs": "shown: workset::rank::eligible (memory_is_visible and memory_is_permitted); opening checks the blocklist again",
     "mcp/mod.rs": "served to agents: load_memories_for_results (memory_is_visible); the health check reads one timestamp",
+    "mcp/recall.rs": "served to agents: provenance::open_rows calls result_is_permitted and the privacy gate before projection",
     // Never shown as read: linking, repair, review and indexing.
     "capture/clipboard.rs": "internal: links a clipboard copy to the newest capture",
     "capture/mod.rs": "internal: duplicate and merge detection at capture",
@@ -48,6 +50,8 @@ const READERS: Record<string, string> = {
     "graph/legacy.rs": "internal: graph edges between captures",
     "ipc/commands/graph.rs": "internal: graph backfill",
     "ipc/commands/maintenance.rs": "internal: reindex and repair",
+    "ipc/commands/privacy.rs": "internal: range deletion preview returns counts only and never serves memory content",
+    "privacy/export.rs": "export: applies memory_is_visible before sealing any memory content",
     "memory_review/backfill.rs": "internal: review queue",
     "memory_review/daily.rs": "internal: review queue",
     "memory_review/pipeline.rs": "internal: review queue",
@@ -80,5 +84,19 @@ describe("bulk memory reads", () => {
 
     it("the list names only files that still read", () => {
         expect(Object.keys(READERS).filter((path) => !readers.includes(path))).toEqual([]);
+    });
+});
+
+describe("agent memory text boundaries", () => {
+    it("keeps import trust handling in each reader that prepares agent text", () => {
+        const readers: Record<string, RegExp> = {
+            "context_runtime/composer.rs": /untrusted::frame\(&record\.source_type/,
+            "operator/memory.rs": /untrusted::origin_label\(&result\.source_type/,
+            "agent/context.rs": /is_untrusted_source\(&memory\.source_type/,
+        };
+        for (const [path, guard] of Object.entries(readers)) {
+            const source = readFileSync(`${ROOT}/${SRC}/${path}`, "utf8") as string;
+            expect(source, path).toMatch(guard);
+        }
     });
 });

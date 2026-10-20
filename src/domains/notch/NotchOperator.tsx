@@ -13,6 +13,8 @@ import {
     setNotchEscapeMonitor,
     voiceOutStatus,
     type ComputerUseEvent,
+    notchDoRateRun,
+    notchDoSaveSkill,
 } from "@/shared/ipc/tauri";
 import { openSystemSettings } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
@@ -43,6 +45,8 @@ interface NotchOperatorProps {
     /** Filled with the one interrupt (Esc, Alt+N): true when it stopped a run or cut speech. */
     interruptRef?: MutableRefObject<(() => boolean) | null>;
     registry?: SpeechRegistry;
+    /** A request typed in the command bar: planned once, at once, with no listening first. */
+    request?: { id: number; text: string } | null;
 }
 
 /** A run is planning, waiting on its card or chooser, or acting. */
@@ -67,14 +71,16 @@ const QUIET_PHASES = ["listening", "heard", "silence", "mic_denied", "voice_unav
  * It talks while it works through the speech registry (`notchSpeech.ts`);
  * every spoken line is also the caption on screen.
  */
-export function NotchOperator({ active, interruptRef, registry = speechRegistry }: NotchOperatorProps) {
+export function NotchOperator({ active, interruptRef, registry = speechRegistry, request = null }: NotchOperatorProps) {
     const [state, dispatch] = useReducer(doRunReducer, initialDoState);
     const [draft, setDraft] = useState("");
     const [caption, setCaption] = useState("");
     const [providerStatus, setProviderStatus] = useState(() => {
         const id = registry.activeProvider();
-        return id ? providerLine(id, "") : "";
+        return id ? providerLine(id) : "";
     });
+    /** Why the voices before this one were passed over, for the tooltip. */
+    const [providerWhy, setProviderWhy] = useState("");
     const [usage, setUsage] = useState<string | null>(null);
     const stateRef = useRef(state);
     stateRef.current = state;
@@ -276,7 +282,11 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
 
     // Who is speaking, and how much of the plan is used.
     useEffect(
-        () => registry.onProviderChange((id, reason) => setProviderStatus(providerLine(id, reason))),
+        () =>
+            registry.onProviderChange((id, reason) => {
+                setProviderStatus(providerLine(id));
+                setProviderWhy(reason === "preferred" ? "" : reason);
+            }),
         [registry],
     );
     useEffect(() => {
@@ -296,8 +306,15 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
         [voiceOut],
     );
 
-    // Opening the notch starts listening; closing it ends any run, the microphone and the voice call.
+    // Opening the notch starts listening, unless it opened for a typed request,
+    // which is planned at once; closing it ends any run, the microphone and the voice call.
+    const takenRequest = useRef<number | null>(null);
     useEffect(() => {
+        if (active && request && request.id !== takenRequest.current) {
+            takenRequest.current = request.id;
+            if (!runInProgress(stateRef.current)) void plan(request.text);
+            return;
+        }
         if (active) {
             if (!runInProgress(stateRef.current)) dispatch({ type: "listening" });
             return;
@@ -309,7 +326,8 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
         void spotRef.current?.cancel();
         void realtimeRef.current?.close();
         if (runInProgress(stateRef.current)) void stopRun();
-    }, [active, stopRun, voiceOut]);
+        // A new request, not a new callback, is what reruns this.
+    }, [active, request?.id, stopRun, voiceOut]);
 
     // Quitting closes the voice call too.
     useEffect(() => {
@@ -606,6 +624,10 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
                 <p className="notch-operator-heard">{resultNote(state.steps)}</p>
             ) : null}
 
+            {state.phase === "finished" && state.runId && !state.workSet ? (
+                <RunFeedback key={state.runId} runId={state.runId} worked={state.result?.ok === true} />
+            ) : null}
+
             {state.phase === "running" && state.actions.length > 0 ? (
                 <ul className="notch-operator-log" aria-label="Actions">
                     {state.actions.map((action) => (
@@ -699,7 +721,9 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
             </div>
 
             {providerStatus || usage ? (
-                <p className="notch-operator-provider">{[providerStatus, usage].filter(Boolean).join(" · ")}</p>
+                <p className="notch-operator-provider" title={providerWhy || undefined}>
+                    {[providerStatus, usage].filter(Boolean).join(" · ")}
+                </p>
             ) : null}
 
             <form
@@ -721,6 +745,76 @@ export function NotchOperator({ active, interruptRef, registry = speechRegistry 
                     onChange={(event) => setDraft(event.target.value)}
                 />
             </form>
+        </div>
+    );
+}
+
+/**
+ * After a run: did it work? A run that did not becomes a draft case for
+ * Notch Do's evaluation suite; one that did can be saved as a skill and run
+ * again by saying its name.
+ */
+function RunFeedback({ runId, worked }: { runId: string; worked: boolean }) {
+    const [rated, setRated] = useState<"worked" | "wrong" | null>(null);
+    const [name, setName] = useState("");
+    const [saved, setSaved] = useState<string | null>(null);
+    const [problem, setProblem] = useState<string | null>(null);
+
+    const rate = async (didWork: boolean) => {
+        setProblem(null);
+        try {
+            await notchDoRateRun(runId, didWork);
+            setRated(didWork ? "worked" : "wrong");
+        } catch (reason) {
+            setProblem(message(reason));
+        }
+    };
+
+    const save = async () => {
+        const wanted = name.trim();
+        if (!wanted) return;
+        setProblem(null);
+        try {
+            setSaved(await notchDoSaveSkill(runId, wanted));
+        } catch (reason) {
+            setProblem(message(reason));
+        }
+    };
+
+    return (
+        <div className="notch-operator-feedback" aria-label="Run feedback">
+            {rated === null ? (
+                <div className="notch-operator-approval-actions">
+                    <span>Did that work?</span>
+                    <button type="button" className="notch-operator-btn" onClick={() => void rate(true)}>
+                        Worked
+                    </button>
+                    <button type="button" className="notch-operator-btn" onClick={() => void rate(false)}>
+                        Didn&apos;t work
+                    </button>
+                </div>
+            ) : null}
+            {rated === "wrong" ? <p>Kept as a case for FNDR&apos;s Notch Do tests: the request and its plan, no screen text.</p> : null}
+            {rated === "worked" && worked && saved === null ? (
+                <form
+                    className="notch-operator-type"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        void save();
+                    }}
+                >
+                    <input
+                        className="notch-input"
+                        value={name}
+                        placeholder="Save as a skill, e.g. Monday setup"
+                        aria-label="Skill name"
+                        maxLength={60}
+                        onChange={(event) => setName(event.target.value)}
+                    />
+                </form>
+            ) : null}
+            {saved ? <p>Saved. Say &ldquo;{saved}&rdquo; to run it again.</p> : null}
+            {problem ? <p role="alert">{problem}</p> : null}
         </div>
     );
 }

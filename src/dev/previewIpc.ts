@@ -19,6 +19,8 @@ import type {
     ResumeThread,
     Task,
     WeeklyWrapped,
+    NotchDoRun,
+    NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
 
@@ -333,6 +335,20 @@ const previewModels: ModelInfo[] = [
 ];
 
 const previewTasks: Task[] = [
+    {
+        id: "task-q4-readout",
+        title: "Own the Q4 onboarding survey readout",
+        description: "can you own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday",
+        source_app: "Memory:Mail",
+        source_memory_id: "memory-q4-mail",
+        created_at: previewNow - 75 * 60 * 1000,
+        due_date: null,
+        is_completed: false,
+        is_dismissed: false,
+        task_type: "Followup",
+        linked_urls: [],
+        linked_memory_ids: ["memory-q4-mail"],
+    },
     {
         id: "task-share-audit",
         title: "Share the UI audit with the capstone team",
@@ -798,6 +814,44 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     };
     let previewCards = clonePreview(previewMemoryCards);
     let tasks = clonePreview(previewTasks);
+    // Hand-off (ADR 032): starts without the document tools so the install
+    // step is visible; a started job plays a short scripted run.
+    let handOffToolchain: "missing" | "installed" = "missing";
+    let handOffRunning = false;
+    const handOffItems = [
+        { kind: "memory", memoryId: "memory-q4-mail", label: "Mail: Q4 onboarding readout", appName: "Mail", capturedAt: previewNow - 75 * 60 * 1000 },
+        { kind: "memory", memoryId: "memory-churn-notes", label: "Notes: churn hypotheses", appName: "Notes", capturedAt: previewNow - 50 * 60 * 1000 },
+        { kind: "file", memoryId: "memory-q4-csv", label: "q4-onboarding-survey.csv", appName: "Finder", capturedAt: previewNow - 70 * 60 * 1000, bytes: 15_184 },
+    ] as const;
+    const handOffDraftFor = (taskText: string, taskMemoryId: string | null, goal: string, memoryIds?: string[], fileMemoryIds?: string[]) => {
+        const items = handOffItems.map((item) => ({
+            ...item,
+            ticked: item.kind === "memory"
+                ? (memoryIds ?? [item.memoryId]).includes(item.memoryId)
+                : (fileMemoryIds ?? [item.memoryId]).includes(item.memoryId),
+        }));
+        const rendered = `TASK\n"${taskText}"\n\nOUTPUT\n${goal}\n\nEVIDENCE\n${items.filter((i) => i.ticked).map((i) => i.memoryId).join("\n")}`;
+        const fileBytes = items.filter((i) => i.ticked && i.kind === "file").reduce((sum, i) => sum + ("bytes" in i ? i.bytes : 0), 0);
+        return { taskText, taskMemoryId, goal, items, rendered, estimateBytes: rendered.length + fileBytes };
+    };
+    const handOffRecord = (status: string, reason: string | null) => ({
+        id: "preview-hand-off",
+        createdAtMs: Date.now() - 140_000,
+        request: "Own a one-page Q4 onboarding survey readout with the top three churn drivers by Thursday",
+        goal: "doc",
+        memoryIds: ["memory-q4-mail", "memory-churn-notes"],
+        fileMemoryIds: ["memory-q4-csv"],
+        folder: "~/Documents/FNDR Hand-offs/2026-10-16 Own a one-page Q4 onboarding survey readout with the top",
+        status,
+        reason,
+        finishedAtMs: Date.now(),
+        bytesSent: 62_156,
+        checked: status === "ready" ? 3 : 0,
+        unsupported: 0,
+        notChecked: 0,
+        deliverables: status === "ready" ? ["out/q4-onboarding-survey-readout.docx"] : [],
+        rating: null,
+    });
     let nextTaskId = 1;
     let screenGuideSettings: ScreenGuideSettings = {
         enabled: true,
@@ -834,8 +888,13 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         }
     };
     const releasedScreenGuideGenerations = new Set<number>();
+    const previewOnboardingStep = (): OnboardingState["step"] => {
+        const requested = new URLSearchParams(window.location.search).get("onboarding");
+        const steps = ["welcome", "privacy_promise", "model_download", "bring_past"] as const;
+        return steps.find((step) => step === requested) ?? "complete";
+    };
     let previewOnboardingState: OnboardingState = {
-        step: "complete",
+        step: previewOnboardingStep(),
         biometric_enabled: false,
         screen_permission: true,
         accessibility_permission: true,
@@ -843,9 +902,99 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         model_id: "qwen3-vl-2b",
         display_name: "Anurup",
     };
+    let previewVoiceSession: string | null = null;
+    let previewVoiceSessionCount = 0;
     let previewBlocklist = ["1Password", "bank.example"];
+    const importKinds = ["browser", "file", "calendar", "mail", "slack", "git"];
+    const importConsent = new Set<string>();
+    const importStatuses = new Map<string, { source: string; state: string; window_days: number; scanned: number; stored: number; updated: number; duplicates: number; redacted: number; skipped: number; skip_reasons: Record<string, number>; started_at_ms: number; finished_at_ms: number | null; error: string | null }>();
+    let firstImportAnswerMs: number | null = null;
+    const importStatusFor = (source: string) => importStatuses.get(source) ?? {
+        source, state: "idle", window_days: 30, scanned: 0, stored: 0, updated: 0,
+        duplicates: 0, redacted: 0, skipped: 0, skip_reasons: {}, started_at_ms: 0,
+        finished_at_ms: null, error: null,
+    };
     let previewAgentNotesEnabled = false;
+    const previewParam = (name: string) => new URLSearchParams(window.location.search).get(name);
+    const previewApprovalCard = {
+        id: "preview-approval",
+        caller: "Notch Do",
+        surface: "computer_use" as const,
+        tool: "paste_text",
+        title: "Paste a reply into Mail",
+        target: "Mail, Re: Atlas plan",
+        args: [{ name: "text", value: "Thanks, I will review the Atlas plan today and send comments by Wednesday." }],
+        reason: "You asked Notch Do to reply to Dana.",
+        undo: { kind: "unavailable" as const, reason: "The text is typed into another app, so FNDR cannot take it back." },
+        status: "pending" as const,
+        detail: null,
+        created_at_ms: Date.now(),
+        expires_at_ms: Date.now() + 60_000,
+    };
+    const previewOutputDoc = () => ({
+        id: "preview-output",
+        kind: "standup" as const,
+        title: "Standup, Thursday",
+        start_ms: Date.now() - 86_400_000,
+        end_ms: Date.now(),
+        generated_at_ms: Date.now(),
+        model_polished: false,
+        sections: [
+            { heading: "Yesterday", lines: [
+                { text: "Reviewed the Home hierarchy and the accessibility checklist in Figma.", project: "FNDR", citations: [{ kind: "memory" as const, id: "1", memory_id: "preview-1" }] },
+                { text: "Merged the retrieval gate change and checked Recall at 5 stayed at 1.00.", project: "FNDR", citations: [{ kind: "memory" as const, id: "2", memory_id: "preview-2" }, { kind: "memory" as const, id: "3", memory_id: "preview-3" }] },
+            ] },
+            { heading: "Today", lines: [
+                { text: "Run the keyboard-only pass on the new panels.", project: "FNDR", citations: [{ kind: "memory" as const, id: "4", memory_id: "preview-4" }] },
+            ] },
+            { heading: "Blockers", lines: [] },
+        ],
+    });
+    const previewMcpStatus = () => ({
+        running: true,
+        endpoint: "http://127.0.0.1:49152/mcp",
+        actionsBlocked: false,
+        keepRunning: true,
+        hideMore: false,
+        clients: [
+            { id: "claude_code" as const, name: "Claude Code", state: "connected" as const, detected: true, configPath: "~/.claude.json", detail: null, missingTool: null },
+            { id: "claude_desktop" as const, name: "Claude Desktop", state: "not_connected" as const, detected: true, configPath: "~/Library/Application Support/Claude/claude_desktop_config.json", detail: null, missingTool: null },
+            { id: "cursor" as const, name: "Cursor", state: "conflict" as const, detected: true, configPath: "~/.cursor/mcp.json", detail: "An entry named fndr already exists that FNDR did not write.", missingTool: null },
+        ],
+    });
+    let previewActionSettings = { actions_kill_switch: false, confirm_unnamed_apps: false };
     let previewNotchDoMuted: boolean | null = null;
+    const previewSkills: NotchDoSkill[] = [{
+        id: "preview-skill-1",
+        name: "Monday setup",
+        request: "open Notes, Slack and the sprint board",
+        steps: ["Open Notes", "Open Slack", "Open linear.app/team/sprint"],
+        savedAt: "2026-10-13T15:00:00Z",
+    }];
+    let previewRuns: NotchDoRun[] = [
+        {
+            runId: "preview-run-1",
+            at: "2026-10-15T15:20:00Z",
+            request: "open Notes and look up the weather in Paris",
+            plannedBy: "local",
+            steps: ["Open Notes", "Search the web for the weather in Paris"],
+            ok: true,
+            summary: "Done: Open Notes, Search the web for the weather in Paris.",
+            rating: null,
+            repeatable: true,
+        },
+        {
+            runId: "preview-run-2",
+            at: "2026-10-15T14:05:00Z",
+            request: "add the next song to the queue in Spotify",
+            plannedBy: "planner",
+            steps: ["Add the next song to the queue"],
+            ok: false,
+            summary: "Stopped at the first step.",
+            rating: null,
+            repeatable: false,
+        },
+    ];
     let previewPrivacyAlerts: PrivacyAlert[] = [];
     let codexSignedIn = false;
     let calendarMeetingPrep = false;
@@ -879,6 +1028,53 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
 
     return async (command: string, payload?: unknown) => {
         switch (command) {
+            case "import_list_sources":
+                return importKinds.map((kind) => ({
+                    id: kind, kind, label: kind, permissions: [],
+                    row_count: previewCards.filter((card) => card.source_type === `import:${kind}`).length,
+                    status: importStatusFor(kind),
+                }));
+            case "import_get_consent":
+                return importConsent.has(requiredString(payload, "source", command));
+            case "import_set_consent": {
+                const source = requiredString(payload, "source", command);
+                if (!importKinds.includes(source)) throw new Error("Unknown import source");
+                if (payloadRecord(payload)?.enabled === true) importConsent.add(source);
+                else importConsent.delete(source);
+                return undefined;
+            }
+            case "import_start": {
+                const source = requiredString(payload, "source", command);
+                if (!importConsent.has(source)) throw new Error("Import requires consent for this source.");
+                const windowDays = Number(payloadRecord(payload)?.windowDays) || 30;
+                if (source === "browser" && !previewCards.some((card) => card.id === "preview-import-browser")) {
+                    previewCards.push({ ...previewMemoryCards[0], id: "preview-import-browser",
+                        title: "Atlas planning notes", source_type: "import:browser",
+                        reopen_target: "https://example.test/atlas-plan" });
+                }
+                const stored = source === "browser" ? 1 : 0;
+                const status = { ...importStatusFor(source), state: "done", window_days: windowDays,
+                    scanned: stored, stored, started_at_ms: Date.now(), finished_at_ms: Date.now() };
+                importStatuses.set(source, status);
+                return status;
+            }
+            case "import_status":
+                return importStatusFor(requiredString(payload, "source", command));
+            case "import_cancel":
+                return true;
+            case "import_forget": {
+                const source = requiredString(payload, "source", command);
+                const before = previewCards.length;
+                previewCards = previewCards.filter((card) => card.source_type !== `import:${source}`);
+                importConsent.delete(source);
+                importStatuses.delete(source);
+                return before - previewCards.length;
+            }
+            case "import_record_first_answer":
+                firstImportAnswerMs ??= Number(payloadRecord(payload)?.elapsedMs) || 0;
+                return undefined;
+            case "import_first_answer_ms":
+                return firstImportAnswerMs;
             case "get_onboarding_state":
                 return { ...previewOnboardingState };
             case "save_onboarding_state": {
@@ -894,6 +1090,24 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "get_status":
                 return { ...previewCaptureStatus, pipeline: { ...previewCaptureStatus.pipeline } };
+            case "voice_start": {
+                if (previewVoiceSession) throw new Error("A preview voice session is already active.");
+                const args = payloadRecord(payload);
+                if (typeof args?.surface !== "string" || typeof args?.mode !== "string") {
+                    throw new Error("Preview voice_start requires a surface and mode.");
+                }
+                previewVoiceSession = `preview-voice-${++previewVoiceSessionCount}`;
+                return { sessionId: previewVoiceSession };
+            }
+            case "voice_stop":
+                if (payloadRecord(payload)?.sessionId !== previewVoiceSession) {
+                    throw new Error("Preview voice_stop requires the active session.");
+                }
+                previewVoiceSession = null;
+                return undefined;
+            case "voice_cancel":
+                if (payloadRecord(payload)?.sessionId === previewVoiceSession) previewVoiceSession = null;
+                return undefined;
             case "pause_capture":
                 previewCaptureStatus = { ...previewCaptureStatus, is_paused: true };
                 await emitPreviewEventIfAvailable(CAPTURE_STATUS_EVENT, previewCaptureStatus);
@@ -947,6 +1161,107 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "list_action_approvals":
+                return previewParam("approval") === "pending" ? [previewApprovalCard] : [];
+            case "get_encryption_statement":
+                return {
+                    filevault: "on",
+                    encrypted: [
+                        "The few screenshots FNDR saves are sealed with a key in your Keychain.",
+                        "Exports you save from FNDR are sealed the same way.",
+                    ],
+                    not_encrypted: [
+                        "The memory database is not encrypted by FNDR. FileVault protects it while your Mac is off.",
+                        "Text you copy out of FNDR is as private as the place you paste it.",
+                    ],
+                };
+            case "generate_daily_output":
+                return previewOutputDoc();
+            case "render_daily_output":
+                return "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy [1]\n";
+            case "output_destination_status":
+                return { slack_webhook: true, linear_api_key: false, linear_team_id: false };
+            case "list_output_allowed_destinations":
+                return [];
+            case "propose_daily_output_send":
+                return {
+                    approval_id: "preview-send",
+                    tool: "outputs.post_slack",
+                    action: "Post to Slack",
+                    destination: "hooks.slack.com/services/T0/B0/...",
+                    title: "Standup, Thursday",
+                    body: "Standup, Thursday\n\nYesterday\n- Reviewed the Home hierarchy and the accessibility checklist in Figma. [1]\n- Merged the retrieval gate change. [2][3]\n\nToday\n- Run the keyboard-only pass on the new panels. [4]",
+                    bytes: 247,
+                    expires_at_ms: Date.now() + 60_000,
+                    trimmed: false,
+                };
+            case "send_daily_output_allowed":
+                return null;
+            case "resolve_daily_output_send":
+                return payloadRecord(payload)?.approved === true
+                    ? { tool: "outputs.post_slack", destination: "hooks.slack.com/services/T0/B0/...", detail: "Posted", trust_id: "preview-trust" }
+                    : null;
+            case "trust_output_destination":
+                return "Always allowed.";
+            case "mcp_connect_status":
+                return previewMcpStatus();
+            case "mcp_connect_preview": {
+                const client = previewMcpStatus().clients.find(
+                    (entry) => entry.id === payloadRecord(payload)?.clientId,
+                );
+                if (!client) throw new Error("Preview connection setup requires a known client.");
+                const text = JSON.stringify({ mcpServers: { fndr: { url: previewMcpStatus().endpoint } } }, null, 2);
+                return {
+                    title: `Connect ${client.name} to FNDR`,
+                    path: client.configPath,
+                    text,
+                    maskedText: text,
+                    command: null,
+                };
+            }
+            case "resolve_action_approval":
+                throw new Error("No action is waiting for approval in preview.");
+            case "get_action_settings":
+                return { ...previewActionSettings };
+            case "set_action_settings": {
+                const settings = payloadRecord(payload)?.settings;
+                if (typeof settings !== "object" || settings === null ||
+                    !("actions_kill_switch" in settings) || typeof settings.actions_kill_switch !== "boolean" ||
+                    !("confirm_unnamed_apps" in settings) || typeof settings.confirm_unnamed_apps !== "boolean") {
+                    throw new Error("Preview action settings require boolean values.");
+                }
+                previewActionSettings = {
+                    actions_kill_switch: settings.actions_kill_switch,
+                    confirm_unnamed_apps: settings.confirm_unnamed_apps,
+                };
+                return { ...previewActionSettings };
+            }
+            case "notch_do_skills":
+                return previewSkills.map((skill) => ({ ...skill }));
+            case "notch_do_runs":
+                return previewRuns.map((run) => ({ ...run }));
+            case "notch_do_rate_run": {
+                const { runId, worked } = payload as { runId: string; worked: boolean };
+                previewRuns = previewRuns.map((run) => run.runId === runId
+                    ? { ...run, rating: worked ? "worked" : "did_not_work", repeatable: worked && run.repeatable }
+                    : run);
+                return undefined;
+            }
+            case "notch_do_save_skill": {
+                const { runId, name } = payload as { runId: string; name: string };
+                const run = previewRuns.find((each) => each.runId === runId);
+                if (!run?.repeatable) throw new Error("Only a run that worked can be saved as a skill.");
+                previewSkills.push({ id: `preview-skill-${previewSkills.length + 1}`, name, request: run.request, steps: run.steps, savedAt: new Date().toISOString() });
+                return name;
+            }
+            case "notch_do_delete_skill": {
+                const { id } = payload as { id: string };
+                const index = previewSkills.findIndex((skill) => skill.id === id);
+                if (index >= 0) previewSkills.splice(index, 1);
+                return index >= 0;
+            }
+            case "notch_do_request":
+                throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
             case "get_notch_do_muted":
                 return previewNotchDoMuted;
             case "set_notch_do_muted": {
@@ -1011,6 +1326,9 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "list_available_models":
                 return previewModels.map((model) => ({ ...model }));
+            case "get_apple_model_status":
+            case "set_apple_model_enabled":
+                return { availability: "unsupported_os", enabled: false };
             case "fndr_quality_status":
                 return {
                     stored_count: previewCaptureStatus.pipeline.stored_total,
@@ -1148,19 +1466,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     .slice(0, Math.max(0, limit))
                     .map((card) => clonePreview(card));
             }
-            case "fndr_get_memory_subgraph": {
-                const seedIds =
-                    typeof payload === "object" && payload !== null && "seedIds" in payload
-                        ? (payload as { seedIds?: unknown }).seedIds
-                        : [];
-                return {
-                    seed_ids: Array.isArray(seedIds)
-                        ? seedIds.filter((id): id is string => typeof id === "string")
-                        : [],
-                    node_count: 3,
-                    edge_count: 2,
-                };
-            }
             case "find_visually_similar_memories":
                 return clonePreview(previewSimilarResults);
             case "fndr_build_context_pack": {
@@ -1224,8 +1529,11 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return `FNDR previewed 126 local captures on ${displayPreviewDate(dateStr)}. Visual Studio Code was the leading app. You have ${openFollowups} open follow-up${openFollowups === 1 ? "" : "s"}.`;
             }
             case "get_daily_summary_followups":
+                // Like the backend (stats.rs): a suggestion nobody accepted is
+                // not work the person is carrying.
                 return clonePreview(tasks.filter((task) => (
                     task.task_type === "Followup" && !task.is_completed && !task.is_dismissed
+                    && !task.source_app.startsWith("Memory:") && task.source_app.toLowerCase() !== "auto"
                 )));
             case "generate_daily_briefing":
                 return "Your preview briefing: finish the keyboard walkthrough, share the UI audit, and run native permission checks in the Tauri app.";
@@ -1539,7 +1847,6 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     latest_pack_tokens_used: 0,
                 };
             case "list_recent_context_packs":
-            case "list_agent_audit_runs":
                 return [];
             case "fndr_subscribe":
             case "fndr_unsubscribe":
@@ -1801,6 +2108,65 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             case "codex_logout":
                 codexSignedIn = false;
                 return clonePreview(previewCodexSignedOut);
+            case "hand_off_status":
+                return { toolchain: handOffToolchain, running: null };
+            case "hand_off_install_toolchain":
+                await new Promise((resolve) => window.setTimeout(resolve, 1200));
+                handOffToolchain = "installed";
+                return { toolchain: handOffToolchain, running: null };
+            case "hand_off_draft": {
+                const source = (payloadRecord(payload)?.source ?? {}) as { kind?: string; value?: string };
+                const task = tasks.find((candidate) => candidate.id === source.value);
+                const text = task?.description.trim() || task?.title || source.value || "Hand this off";
+                return handOffDraftFor(text, task?.source_memory_id ?? null, "doc");
+            }
+            case "hand_off_update_draft": {
+                const choice = payloadRecord(payload) ?? {};
+                return handOffDraftFor(
+                    String(choice.taskText ?? ""),
+                    (choice.taskMemoryId as string | null) ?? null,
+                    String(choice.goal ?? "doc"),
+                    (choice.memoryIds as string[]) ?? [],
+                    (choice.fileMemoryIds as string[]) ?? [],
+                );
+            }
+            case "hand_off_start": {
+                if (handOffToolchain !== "installed") throw new Error("Install the document tools first (about 200 MB).");
+                handOffRunning = true;
+                const script: [number, unknown][] = [
+                    [700, { kind: "readFile", name: "q4-onboarding-survey.csv" }],
+                    [1400, { kind: "ranCode", ok: true, ms: 1200 }],
+                    [2100, { kind: "ranCode", ok: true, ms: 900 }],
+                    [2800, { kind: "wroteFile", path: "work/readout-spec.json" }],
+                    [3500, { kind: "wroteFile", path: "out/q4-onboarding-survey-readout.docx" }],
+                    [4200, { kind: "answered", text: "{}" }],
+                ];
+                for (const [delay, event] of script) {
+                    window.setTimeout(() => {
+                        if (handOffRunning) void emitPreviewEventIfAvailable("hand_off://progress", event);
+                    }, delay);
+                }
+                window.setTimeout(() => {
+                    if (!handOffRunning) return;
+                    handOffRunning = false;
+                    void emitPreviewEventIfAvailable("hand_off://finished", { record: handOffRecord("ready", null), error: null });
+                }, 4800);
+                return null;
+            }
+            case "hand_off_stop":
+                if (!handOffRunning) throw new Error("No hand-off is working.");
+                handOffRunning = false;
+                window.setTimeout(() => {
+                    void emitPreviewEventIfAvailable("hand_off://finished", {
+                        record: handOffRecord("stopped", "Stopped. What it wrote is kept in the folder."),
+                        error: null,
+                    });
+                }, 300);
+                return null;
+            case "hand_off_open":
+                return null;
+            case "hand_off_rate":
+                return { ...handOffRecord("ready", null), rating: payloadRecord(payload)?.worked ? "worked" : "did_not_work" };
             default:
                 throw new Error(`Unhandled UI preview command: ${command}`);
         }

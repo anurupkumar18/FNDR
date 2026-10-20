@@ -174,10 +174,20 @@ export function installNotchVoices(
     return realtime;
 }
 
-/** The status line under the notch's caption: who is speaking. */
-export function providerLine(id: SpeechProviderId, reason: string): string {
-    if (id === "codex_realtime") return "Speaking with your ChatGPT plan";
-    return reason && reason !== "preferred" ? `On-device voice (${reason})` : "On-device voice";
+/** The status line under the notch's caption: whose voice is speaking.
+ *  Why a voice before it was passed over is diagnosis, not status: it is
+ *  kept for the line's tooltip, and the plan's limit has its own warning. */
+export function providerLine(id: SpeechProviderId): string {
+    switch (id) {
+        case "codex_realtime":
+            return "Speaking with your ChatGPT plan";
+        case "local_neural":
+            return "FNDR's natural voice";
+        case "system_enhanced":
+            return "Mac voice";
+        case "webview_basic":
+            return "Basic system voice";
+    }
 }
 
 /** A warning near the plan's usage limit, or null. */

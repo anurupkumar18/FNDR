@@ -1,0 +1,194 @@
+@import "../../shared/theme/receipts.css";
+
+.import-sources {
+    display: grid;
+    gap: var(--s-5);
+    max-width: 620px;
+    color: var(--rc-text);
+    font-family: var(--font-body);
+}
+.import-sources h2,
+.import-sources h3,
+.import-sources p { margin: 0; }
+.import-sources h2 {
+    font: 650 var(--t-h2)/1.1 var(--font-display);
+    letter-spacing: -0.022em;
+}
+.import-sources .import-lede {
+    max-width: 52ch;
+    color: var(--rc-text-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+}
+.import-sources [role="alert"] { color: var(--rc-clay); font-size: 13px; }
+.import-sources [role="status"] { color: var(--rc-text-2); font-size: 13px; }
+
+/* The ledger: one ruled list, no card per source. */
+.import-source-grid {
+    display: grid;
+    border-top: 1px solid var(--rc-line);
+}
+.import-source-card {
+    position: relative;
+    display: grid;
+    gap: 8px;
+    padding: 16px 0 15px;
+    border-bottom: 1px solid var(--rc-line);
+}
+.import-source-card > label:first-child {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 22px;
+    align-items: start;
+    cursor: pointer;
+}
+.import-source-text { display: grid; gap: 4px; }
+.import-line { display: flex; align-items: baseline; min-width: 0; }
+.import-line strong {
+    font: 600 15px/1.25 var(--font-display);
+    letter-spacing: -0.012em;
+    white-space: nowrap;
+}
+.import-count { font-size: 12.5px; }
+.import-line .rcpt-leader { border-bottom-color: color-mix(in srgb, var(--rc-text-2) 38%, transparent); }
+.import-source-text > small { color: var(--rc-text-2); font-size: 13px; line-height: 1.45; max-width: 54ch; }
+.import-source-text > .import-needs {
+    color: color-mix(in srgb, var(--rc-text-2) 75%, transparent);
+    font-size: 12px;
+}
+.import-source-card .fndr-switch { margin-top: 1px; }
+
+.import-source-extra {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 18px;
+    font-size: 12.5px;
+    color: var(--rc-text-2);
+}
+.import-source-extra:empty { display: none; }
+.import-source-extra { justify-content: space-between; }
+.import-row-actions { display: flex; align-items: center; gap: 4px 18px; margin-left: auto; }
+.import-window { display: flex; align-items: center; gap: 8px; }
+.import-window input {
+    width: 4.4em;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--rc-line-strong);
+    border-radius: var(--film-radius-sm);
+    background: var(--rc-surface);
+    color: var(--rc-text);
+    font: 400 13px/1 var(--font-body);
+    font-variant-numeric: tabular-nums;
+}
+.import-last { font-variant-numeric: tabular-nums; }
+
+/* A hairline that sweeps while a source is being read. */
+.import-scanning {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    overflow: hidden;
+}
+.import-scanning::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 28%;
+    background: var(--rc-accent);
+    animation: import-sweep 1.5s var(--film-ease-develop) infinite;
+}
+@keyframes import-sweep { from { transform: translateX(-100%); } to { transform: translateX(360%); } }
+@media (prefers-reduced-motion: reduce) {
+    .import-scanning::after { animation: none; width: 100%; opacity: 0.5; }
+}
+:root[data-motion="off"] .import-scanning::after { animation: none; width: 100%; opacity: 0.5; }
+
+.import-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+
+/* The payoff: one field, three suggestions, a result that opens. */
+.import-guided-search {
+    display: grid;
+    gap: 12px;
+    padding-top: var(--s-5);
+    border-top: 1px solid var(--rc-line);
+}
+.import-guided-search h3 { font: 650 19px/1.2 var(--font-display); letter-spacing: -0.016em; }
+.import-guided-search p { color: var(--rc-text-2); font-size: 13.5px; }
+.import-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.import-pill {
+    max-width: 100%;
+    padding: 6px 12px;
+    border: 1px solid var(--rc-line-strong);
+    border-radius: var(--film-radius-pill);
+    background: transparent;
+    color: var(--rc-text);
+    font: 450 13px/1.2 var(--font-body);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color var(--film-dur-fast) var(--film-ease-shutter),
+        background-color var(--film-dur-fast) var(--film-ease-shutter);
+}
+.import-pill:hover { border-color: var(--rc-accent); background: color-mix(in srgb, var(--rc-accent) 10%, transparent); }
+.import-pill:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.import-query { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.import-query label { position: relative; display: block; }
+.import-query .rcpt-field { height: 44px; font-size: 15px; }
+.import-search { height: 44px; }
+.import-result {
+    display: block;
+    width: 100%;
+    padding: 13px 2px;
+    border: 0;
+    border-bottom: 1px solid var(--rc-line);
+    background: none;
+    color: var(--rc-text);
+    font: 550 15px/1.3 var(--font-display);
+    letter-spacing: -0.01em;
+    text-align: left;
+    cursor: pointer;
+}
+.import-result:hover { color: var(--rc-accent); }
+.import-result:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+.import-sources [role="alertdialog"] {
+    position: fixed;
+    z-index: 10000;
+    inset: 22vh auto auto 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+    width: min(90vw, 440px);
+    padding: 22px;
+    border: 1px solid var(--rc-line-strong);
+    border-radius: 14px;
+    background: var(--rc-raised);
+    color: var(--rc-text);
+    box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.46), 0 24px 60px rgb(0 0 0 / 0.35);
+}
+.import-sources [role="alertdialog"] p { flex-basis: 100%; font-size: 15px; line-height: 1.45; margin-bottom: 8px; }
+.import-remove {
+    height: 36px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: var(--film-radius-md);
+    background: var(--rc-clay-solid);
+    color: #fff;
+    font: 600 13px/1 var(--font-body);
+    cursor: pointer;
+}
+.import-remove:hover { filter: brightness(1.1); }
+.import-remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+@media (max-width: 520px) {
+    .import-line { flex-wrap: wrap; }
+    .import-line .rcpt-leader { display: none; }
+    .import-count { flex-basis: 100%; }
+    .import-query { grid-template-columns: 1fr; }
+}

@@ -17,7 +17,7 @@ import "@/domains/workspace/FocusModePanel.css";
 import { useSearch } from "@/shared/hooks/useSearch";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
-import { POLL_INTERVALS, TOAST } from "@/shared/utils/config";
+import { POLL_INTERVALS, STORAGE_KEYS, TOAST } from "@/shared/utils/config";
 import { createClientId } from "@/shared/utils/id";
 import {
     CAPTURE_STATUS_EVENT,
@@ -44,41 +44,39 @@ function nextToastId(): string {
     return createClientId("fndr-toast");
 }
 
-export const SIDEBAR_GROUPS = [
-    {
-        label: "Memory",
-        items: [
-            { key: "memoryCards", text: "Memory Vault" },
-            { key: "ask", text: "Search & Ask FNDR" },
-        ],
-    },
-    {
-        label: "Reflect",
-        items: [
-            { key: "dailySummary", text: "Daily Summary" },
-            { key: "stats", text: "Stats" },
-            { key: "todo", text: "To-dos" },
-            { key: "wrapped", text: "FNDR Wrapped" },
-        ],
-    },
-    {
-        label: "Trust",
-        items: [{ key: "privacyProof", text: "Privacy Activity" }],
-    },
-    {
-        // ADR-023: everything outside the five destinations is Labs. Notch
-        // Do has no entry here; its switch in Screen Guide carries the tag.
-        label: "Labs",
-        items: [
-            { key: "agent", text: "Hermes Agent" },
-            { key: "screenGuide", text: "Screen Guide" },
-            { key: "engineMetrics", text: "Engine diagnostics" },
-        ],
-    },
-] as const satisfies ReadonlyArray<{
-    label: string;
-    items: ReadonlyArray<{ key: MountedPanelKey; text: string }>;
-}>;
+type SidebarItem =
+    | { text: string; key: MountedPanelKey }
+    | { text: string; action: "home" | "settings" };
+
+const PRIMARY_SIDEBAR_ITEMS = [
+    { action: "home", text: "Home" },
+    { key: "ask", text: "Search & Ask FNDR" },
+    { key: "memoryCards", text: "Memory Vault" },
+    { key: "dailySummary", text: "Daily Brief" },
+    { action: "settings", text: "Trust & Settings" },
+] as const satisfies readonly SidebarItem[];
+
+const LAB_SIDEBAR_ITEMS = [
+    { key: "screenGuide", text: "Screen Guide" },
+    { key: "agent", text: "Hermes Agent" },
+    { key: "outputs", text: "Daily outputs" },
+    { key: "stats", text: "Stats" },
+    { key: "todo", text: "To-dos" },
+    { key: "wrapped", text: "FNDR Wrapped" },
+    { key: "privacyProof", text: "Privacy Activity" },
+] as const satisfies readonly SidebarItem[];
+
+/** Visible navigation follows ADR 023. Engine diagnostics is intentionally
+ * absent until someone explicitly enables Developer Mode in Settings. */
+export function getSidebarGroups(developerMode: boolean) {
+    const labs = developerMode
+        ? [...LAB_SIDEBAR_ITEMS, { key: "engineMetrics" as const, text: "Engine diagnostics" }]
+        : LAB_SIDEBAR_ITEMS;
+    return [
+        { label: "Navigate", items: PRIMARY_SIDEBAR_ITEMS },
+        { label: "Labs (experimental)", items: labs },
+    ] as const;
+}
 
 function App() {
     const [queryDraft, setQueryDraft] = useState("");
@@ -93,6 +91,10 @@ function App() {
     const [activePanel, setActivePanel] = useState<MountedPanelKey | null>(null);
     const [memoryVaultFocusId, setMemoryVaultFocusId] = useState<string | null>(null);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [developerMode, setDeveloperMode] = useState(
+        () => localStorage.getItem(STORAGE_KEYS.developerMode) === "true",
+    );
     const [appToasts, setAppToasts] = useState<AppToast[]>([]);
     const toastTimersRef = useRef<Map<string, number>>(new Map());
     const sidebarButtonRef = useRef<HTMLButtonElement>(null);
@@ -107,6 +109,12 @@ function App() {
     const [displayName, setDisplayName] = useState<string | null>(null);
     const [now, setNow] = useState(() => new Date());
     const handleUnlock = useCallback(() => setBiometricUnlocked(true), []);
+    const sidebarGroups = useMemo(() => getSidebarGroups(developerMode), [developerMode]);
+
+    const handleDeveloperModeChange = useCallback((enabled: boolean) => {
+        localStorage.setItem(STORAGE_KEYS.developerMode, String(enabled));
+        setDeveloperMode(enabled);
+    }, []);
 
     const searchAllowed = true;
     const { results, isLoading, error, activityTrace: searchActivityTrace } = useSearch(
@@ -553,6 +561,10 @@ function App() {
                         status={status}
                         compact={true}
                         evalUi={EVAL_UI}
+                        isOpen={isSettingsOpen}
+                        onOpenChange={setIsSettingsOpen}
+                        developerMode={developerMode}
+                        onDeveloperModeChange={handleDeveloperModeChange}
                     />
                 </div>
 
@@ -568,37 +580,51 @@ function App() {
                 >
                     <div className="sidebar-brand"></div>
 
-                    <div className="sidebar-group">
-                        <button
-                            type="button"
-                            className={`sidebar-item ${isHomeActive ? "active" : ""}`}
-                            aria-current={isHomeActive ? "page" : undefined}
-                            onClick={goHome}
-                        >
-                            Home
-                        </button>
-                    </div>
-
-                    {SIDEBAR_GROUPS.map((group) => (
+                    {sidebarGroups.map((group) => (
                         <div key={group.label} className="sidebar-group">
                             <div className="sidebar-label">{group.label}</div>
-                            {group.items.map(({ key, text }) => (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    className={`sidebar-item ${activePanel === key ? "active" : ""}`}
-                                    aria-current={activePanel === key ? "page" : undefined}
-                                    onClick={() => {
-                                        if (activePanel === key) {
-                                            closeActivePanel();
-                                        } else {
-                                            handleOpenPanel(key);
-                                        }
-                                    }}
-                                >
-                                    {text}
-                                </button>
-                            ))}
+                            {group.items.map((item) => {
+                                if ("action" in item) {
+                                    const isHome = item.action === "home";
+                                    return (
+                                        <button
+                                            key={item.action}
+                                            type="button"
+                                            className={`sidebar-item ${isHome && isHomeActive ? "active" : ""}`}
+                                            aria-current={isHome && isHomeActive ? "page" : undefined}
+                                            onClick={() => {
+                                                if (isHome) {
+                                                    goHome();
+                                                } else {
+                                                    setIsSettingsOpen(true);
+                                                    setIsSidebarOpen(false);
+                                                }
+                                            }}
+                                        >
+                                            {item.text}
+                                        </button>
+                                    );
+                                }
+
+                                const { key, text } = item;
+                                return (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        className={`sidebar-item ${activePanel === key ? "active" : ""}`}
+                                        aria-current={activePanel === key ? "page" : undefined}
+                                        onClick={() => {
+                                            if (activePanel === key) {
+                                                closeActivePanel();
+                                            } else {
+                                                handleOpenPanel(key);
+                                            }
+                                        }}
+                                    >
+                                        {text}
+                                    </button>
+                                );
+                            })}
                         </div>
                     ))}
 
@@ -703,6 +729,7 @@ function App() {
                     activePanel={activePanel}
                     appNames={appNames}
                     appToasts={appToasts}
+                    developerMode={developerMode}
                     isCapturePaused={(status?.is_paused ?? false) || (status?.is_incognito ?? false)}
                     isPrivateMode={status?.is_incognito ?? false}
                     query={query}
@@ -719,6 +746,7 @@ function App() {
                     onDeleteMemory={handleMemoryDeleted}
                     onDismissToast={dismissToast}
                     onGoHome={goHome}
+                    onOpenSettings={() => setIsSettingsOpen(true)}
                     onMemoryDeleted={handleMemoryDeleted}
                     onOpenPanel={handleOpenPanel}
                     onRunQuery={handleSearchSubmit}

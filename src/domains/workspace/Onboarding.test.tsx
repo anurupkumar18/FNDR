@@ -9,17 +9,20 @@ const downloadModel = vi.fn();
 const saveOnboardingState = vi.fn();
 const getOnboardingState = vi.fn();
 const checkPermissions = vi.fn();
+const openSystemSettings = vi.fn();
 const refreshAiModels = vi.fn();
+const getAppleModelStatus = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState: (...args: unknown[]) => getOnboardingState(...args),
     saveOnboardingState: (...args: unknown[]) => saveOnboardingState(...args),
     requestBiometricAuth: vi.fn(),
     checkPermissions: (...args: unknown[]) => checkPermissions(...args),
-    openSystemSettings: vi.fn(),
+    openSystemSettings: (...args: unknown[]) => openSystemSettings(...args),
     listAvailableModels: (...args: unknown[]) => listAvailableModels(...args),
     downloadModel: (...args: unknown[]) => downloadModel(...args),
     refreshAiModels: (...args: unknown[]) => refreshAiModels(...args),
+    getAppleModelStatus: (...args: unknown[]) => getAppleModelStatus(...args),
 }));
 
 const downloadStatusValue: ModelDownloadStatus & {
@@ -43,10 +46,16 @@ const downloadStatusValue: ModelDownloadStatus & {
 
 const ttsStatus = vi.fn();
 const ttsInstall = vi.fn();
+const getPrivacyProof = vi.fn();
+const getEncryptionStatement = vi.fn();
 vi.mock("@/shared/ipc/tauri", () => ({
     ttsStatus: (...args: unknown[]) => ttsStatus(...args),
     ttsInstall: (...args: unknown[]) => ttsInstall(...args),
+    getPrivacyProof: (...args: unknown[]) => getPrivacyProof(...args),
+    getEncryptionStatement: (...args: unknown[]) => getEncryptionStatement(...args),
 }));
+vi.mock("@/domains/privacy-proof/PrivacyProof", () => ({ PrivacyProof: () => <div>Privacy Proof</div> }));
+vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: () => void }) => <button onClick={onContinue}>Skip imports</button> }));
 
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
     useModelDownloadStatus: () => downloadStatusValue,
@@ -67,14 +76,22 @@ beforeEach(() => {
         display_name: null,
     });
     checkPermissions.mockResolvedValue({
-        screen_recording: false,
-        accessibility: false,
-        microphone: false,
+        screen_recording: "not_determined",
+        accessibility: "not_determined",
+        microphone: "not_determined",
+        speech_recognition: "not_determined",
     });
     saveOnboardingState.mockResolvedValue(undefined);
     ttsStatus.mockResolvedValue({ state: "not_installed", downloadedBytes: 0, totalBytes: 330_000_000 });
     ttsInstall.mockResolvedValue({ state: "downloading", downloadedBytes: 0, totalBytes: 330_000_000 });
     refreshAiModels.mockResolvedValue({ ai_model_available: true });
+    getPrivacyProof.mockResolvedValue({ evaluated: 0, stored: 0, skipped_by_reason: {}, egress_requests: 0, egress_hosts: [] });
+    getAppleModelStatus.mockResolvedValue({ availability: "unsupported_os", enabled: false });
+    getEncryptionStatement.mockResolvedValue({
+        filevault: "off",
+        encrypted: ["The few screenshots FNDR saves are sealed with a Keychain key."],
+        not_encrypted: ["The memory database is not encrypted by FNDR."],
+    });
 });
 
 function qwenInfo(downloaded = false) {
@@ -162,6 +179,25 @@ describe("Onboarding voice download", () => {
 });
 
 describe("Onboarding model step", () => {
+    it("uses available Apple text inference without downloading Qwen and still offers Qwen", async () => {
+        getAppleModelStatus.mockResolvedValue({ availability: "available", enabled: true });
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("button", { name: /Continue with Apple on-device model/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Download Qwen3-VL · 2B/i })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /Continue with Apple on-device model/i }));
+        await waitFor(() => expect(saveOnboardingState).toHaveBeenCalledWith(
+            expect.objectContaining({
+                step: "permissions",
+                model_downloaded: true,
+                model_id: "apple-foundation",
+            }),
+        ));
+        expect(downloadModel).not.toHaveBeenCalled();
+    });
+
     it("auto-downloads the required embedder and offers only optional models as choices", async () => {
         listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo()]);
         downloadModel.mockResolvedValue(undefined);
@@ -290,6 +326,20 @@ describe("Onboarding model step", () => {
 });
 
 describe("Onboarding persistence", () => {
+    it("offers imports after permissions and allows skipping them", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "permissions", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: true, model_id: "minilm-l6-v2", display_name: null,
+        });
+        const onComplete = vi.fn();
+        render(<Onboarding onComplete={onComplete} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+        expect(await screen.findByRole("button", { name: "Skip imports" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Skip imports" }));
+        await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    });
+
     it("shows the observed System Settings handoff without implying a grant", async () => {
         getOnboardingState.mockResolvedValue({
             step: "permissions",
@@ -303,7 +353,7 @@ describe("Onboarding persistence", () => {
 
         render(<Onboarding onComplete={() => {}} />);
 
-        fireEvent.click((await screen.findAllByRole("button", { name: "Grant" }))[0]);
+        fireEvent.click((await screen.findAllByRole("button", { name: "Open Settings" }))[0]);
         const trace = await screen.findByRole("region", { name: "Permission check activity" });
         expect(trace).toHaveTextContent("System Settings opened");
         expect(trace).not.toHaveTextContent("Permission granted");
@@ -334,7 +384,54 @@ describe("Onboarding persistence", () => {
     });
 });
 
+describe("Onboarding permissions", () => {
+    it("shows granted, denied, and not-yet-granted states with the exact settings panes", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        checkPermissions.mockResolvedValue({
+            screen_recording: "granted",
+            accessibility: "denied",
+            microphone: "restricted",
+            speech_recognition: "not_determined",
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        await screen.findByRole("heading", { name: "Grant a few permissions" });
+        window.dispatchEvent(new Event("focus"));
+        await waitFor(() => expect(checkPermissions).toHaveBeenCalled());
+
+        expect(await screen.findByLabelText("Screen Recording: Granted")).toBeInTheDocument();
+        expect(screen.getByLabelText("Accessibility: Denied")).toBeInTheDocument();
+        expect(screen.getByLabelText("Microphone: Restricted")).toBeInTheDocument();
+        expect(screen.getByLabelText("Speech Recognition: Not granted yet")).toBeInTheDocument();
+
+        fireEvent.click(document.getElementById("ob-perm-accessibility")!);
+        expect(openSystemSettings).toHaveBeenCalledWith("accessibility");
+    });
+});
+
 describe("Onboarding privacy disclosures", () => {
+    it("shows Privacy Proof before any import or biometric choice", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: false, model_id: null, display_name: null,
+        });
+        render(<Onboarding onComplete={() => {}} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Get Started" }));
+        expect(await screen.findByText("Privacy Proof")).toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "Bring your past" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+        expect(await screen.findByRole("heading", { name: "Lock FNDR with Touch ID" })).toBeInTheDocument();
+    });
+
     it("introduces FNDR as local-first and names its network exceptions", async () => {
         getOnboardingState.mockResolvedValue({
             step: "welcome",
@@ -376,6 +473,23 @@ describe("Onboarding privacy disclosures", () => {
         expect(screen.queryByText(/doesn't share/i)).toBeNull();
         expect(screen.queryByText(/automatic privacy/i)).toBeNull();
         expect(screen.queryByText(/in one tap/i)).toBeNull();
+    });
+
+    it("places the privacy proof on the first-run privacy step", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "privacy_promise",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: "Privacy proof" })).toBeInTheDocument();
+        expect(await screen.findByText("FileVault is off")).toBeInTheDocument();
+        expect(screen.getByText(/memory database is not encrypted by FNDR/)).toBeInTheDocument();
     });
 
     it("describes screen capture as a capability rather than claiming every screen is stored", async () => {

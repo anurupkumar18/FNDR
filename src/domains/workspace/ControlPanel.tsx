@@ -1,6 +1,7 @@
 import { HOME_SECTIONS, setHomeSection, useHomeSections } from "@/shared/home/homeSections";
 import { SettingsTabList, SettingsTabPanel, type SettingsTab } from "./SettingsTabs";
 import { VoiceOutputSection } from "@/shared/voice/VoiceOutputSection";
+import { NotchDoSettings } from "@/domains/notch/NotchDoSettings";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -20,15 +21,22 @@ import {
 import {
     type ModelInfo,
     type OnboardingState,
+    type AppleModelStatus,
+    getAppleModelStatus,
     getOnboardingState,
     listAvailableModels,
+    downloadModel,
     saveOnboardingState,
+    setAppleModelEnabled,
 } from "@/shared/ipc/onboarding";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 import {
     applyPalette,
-    listPalettes,
+    CANONICAL_PALETTE_KEYS,
+    getDefaultPalette,
+    isCanonicalPalette,
+    listOptionalPalettes,
     PALETTES,
     resolveStoredPalette,
     type PaletteKey,
@@ -50,12 +58,17 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { PrivacyPanel } from "./PrivacyPanel";
+import { ActionApprovalPanel } from "@/domains/actions/ActionApprovalPanel";
 import "./ControlPanel.css";
 
 interface ControlPanelProps {
     status: CaptureStatus | null;
     compact?: boolean;
     evalUi?: boolean;
+    isOpen?: boolean;
+    onOpenChange?: (isOpen: boolean) => void;
+    developerMode?: boolean;
+    onDeveloperModeChange?: (enabled: boolean) => void;
 }
 
 type QualityStatus = {
@@ -173,8 +186,17 @@ export function ControlPanel({
     status,
     compact: _compact = false,
     evalUi: _evalUi = false,
+    isOpen: controlledIsOpen,
+    onOpenChange,
+    developerMode = false,
+    onDeveloperModeChange,
 }: ControlPanelProps) {
-    const [isOpen, setIsOpen] = useState(false);
+    const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(false);
+    const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
+    const setIsOpen = useCallback((next: boolean) => {
+        if (controlledIsOpen === undefined) setUncontrolledIsOpen(next);
+        onOpenChange?.(next);
+    }, [controlledIsOpen, onOpenChange]);
     const homeSections = useHomeSections();
     const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
     const [tabDirection, setTabDirection] = useState<"forward" | "back">("forward");
@@ -190,6 +212,10 @@ export function ControlPanel({
     const [profileBusy, setProfileBusy] = useState(false);
     const [profileMessage, setProfileMessage] = useState<string | null>(null);
     const [models, setModels] = useState<ModelInfo[]>([]);
+    const [modelsMessage, setModelsMessage] = useState<string | null>(null);
+    const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
+    const [appleModelBusy, setAppleModelBusy] = useState(false);
+    const [appleModelError, setAppleModelError] = useState<string | null>(null);
     const [qualityStatus, setQualityStatus] = useState<QualityStatus | null>(null);
     const [settingsError, setSettingsError] = useState<string | null>(null);
     const [agentNotesEnabled, setAgentNotesEnabledState] = useState<boolean | null>(null);
@@ -211,15 +237,18 @@ export function ControlPanel({
         setSettingsError(null);
         setAgentNotesEnabledState(null);
         setAgentNotesError(null);
+        setAppleModel(null);
+        setAppleModelError(null);
         const results = await Promise.allSettled([
             getBlocklist(),
             getOnboardingState(),
             listAvailableModels(),
             fndrQualityStatus(),
             getAgentNotesEnabled(),
+            getAppleModelStatus(),
         ] as const);
         if (version !== settingsLoadVersion.current) return;
-        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult] = results;
+        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult, appleResult] = results;
         const unavailable: string[] = [];
 
         if (blocklistResult.status === "fulfilled") {
@@ -248,6 +277,11 @@ export function ControlPanel({
             setAgentNotesEnabledState(agentNotesResult.value);
         } else {
             unavailable.push("assistant notes");
+        }
+        if (appleResult.status === "fulfilled") {
+            setAppleModel(appleResult.value);
+        } else {
+            unavailable.push("Apple model");
         }
 
         if (unavailable.length > 0) {
@@ -330,7 +364,7 @@ export function ControlPanel({
     }, [isOpen]);
 
     const [palette, setPalette] = useState<PaletteKey>(() =>
-        resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette)),
+        resolveStoredPalette(localStorage.getItem(STORAGE_KEYS.palette), theme),
     );
 
     const [wallpaper, setWallpaper] = useState<WallpaperId>(() => {
@@ -351,7 +385,11 @@ export function ControlPanel({
         );
     }, [theme, palette, wallpaper]);
 
-    const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+    const toggleTheme = () => {
+        const nextTheme = theme === "dark" ? "light" : "dark";
+        setTheme(nextTheme);
+        setPalette((current) => isCanonicalPalette(current) ? getDefaultPalette(nextTheme) : current);
+    };
 
     const toggleSettings = () => {
         if (isOpen) {
@@ -401,6 +439,21 @@ export function ControlPanel({
             setAgentNotesError(`Assistant notes update failed: ${String(error)}`);
         } finally {
             setAgentNotesBusy(false);
+        }
+    };
+
+    const handleToggleAppleModel = async () => {
+        if (!appleModel || appleModelBusy || appleModel.availability !== "available") return;
+        setAppleModelBusy(true);
+        setAppleModelError(null);
+        try {
+            const next = await setAppleModelEnabled(!appleModel.enabled);
+            settingsLoadVersion.current += 1;
+            setAppleModel(next);
+        } catch (error) {
+            setAppleModelError(`Apple model update failed: ${String(error)}`);
+        } finally {
+            setAppleModelBusy(false);
         }
     };
 
@@ -472,6 +525,16 @@ export function ControlPanel({
     const settingsTabs = SETTINGS_TABS.map((tab) =>
         tab.id === "privacy" ? { ...tab, badge: privacyAlertCount } : tab,
     );
+
+    const handleGetModel = async (model: ModelInfo) => {
+        setModelsMessage(null);
+        try {
+            await downloadModel(model.id, model.download_url, model.filename);
+            setModelsMessage(`${model.name} is downloading and will be ready in Settings when it finishes.`);
+        } catch {
+            setModelsMessage(`FNDR could not start ${model.name}. Check free disk space and try again.`);
+        }
+    };
 
     const stored = status?.pipeline.stored_total ?? qualityStatus?.stored_count ?? 0;
     const skipped = status?.pipeline.skipped_total ?? qualityStatus?.dropped_count ?? 0;
@@ -621,8 +684,9 @@ export function ControlPanel({
                                             { value: "dark", label: "Dark" },
                                         ]}
                                     />
-                                    <div className="palette-list" role="radiogroup" aria-label="Color palette">
-                                        {listPalettes().map((key) => {
+                                    <p className="appearance-sublabel" id="settings-default-palette-label">Film &amp; Paper</p>
+                                    <div className="palette-list" role="radiogroup" aria-labelledby="settings-default-palette-label">
+                                        {CANONICAL_PALETTE_KEYS.map((key) => {
                                             const option = PALETTES[key];
                                             const selected = key === palette;
                                             return (
@@ -644,6 +708,32 @@ export function ControlPanel({
                                             );
                                         })}
                                     </div>
+                                    <details className="palette-customization">
+                                        <summary>Optional cinematic palettes</summary>
+                                        <div className="palette-list" role="radiogroup" aria-label="Optional cinematic palettes">
+                                            {listOptionalPalettes().map((key) => {
+                                                const option = PALETTES[key];
+                                                const selected = key === palette;
+                                                return (
+                                                    <button
+                                                        key={key}
+                                                        type="button"
+                                                        role="radio"
+                                                        aria-checked={selected}
+                                                        className={`palette-option${selected ? " is-selected" : ""}`}
+                                                        onClick={() => setPalette(key)}
+                                                    >
+                                                        <span className="palette-swatch" aria-hidden="true">
+                                                            <span style={{ background: option[theme].bg }} />
+                                                            <span style={{ background: option[theme].surfaceRaised }} />
+                                                            <span style={{ background: option[theme].accent }} />
+                                                        </span>
+                                                        <span className="palette-name">{option.name}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </details>
                                     <p className="appearance-sublabel" id="settings-wallpaper-label">Background</p>
                                     <div className="wallpaper-list" role="radiogroup" aria-labelledby="settings-wallpaper-label">
                                         {listWallpapers().map((key) => {
@@ -670,6 +760,20 @@ export function ControlPanel({
                                         })}
                                     </div>
                                 </section>
+                                {onDeveloperModeChange && (
+                                    <section className="panel-section" aria-labelledby="settings-developer-mode-title">
+                                        <h3 id="settings-developer-mode-title">Developer Mode</h3>
+                                        <p className="section-hint">Show experimental diagnostics in Labs. Keep this off for normal use.</p>
+                                        <button
+                                            type="button"
+                                            className="ui-action-btn btn-secondary"
+                                            aria-pressed={developerMode}
+                                            onClick={() => onDeveloperModeChange(!developerMode)}
+                                        >
+                                            {developerMode ? "Developer Mode is on" : "Enable Developer Mode"}
+                                        </button>
+                                    </section>
+                                )}
                             </SettingsTabPanel>
                             <SettingsTabPanel idPrefix={TABS_ID} id="capture" active={settingsTab === "capture"} direction={tabDirection}>
                                 <section className="panel-section settings-section--capture" aria-labelledby="settings-capture-title">
@@ -827,11 +931,41 @@ export function ControlPanel({
                                         </p>
                                     )}
                                 </section>
+                                <section className="panel-section" aria-label="Action controls">
+                                    <ActionApprovalPanel embedded />
+                                </section>
+                                <NotchDoSettings />
                                 <section className="panel-section settings-section--models" aria-labelledby="settings-models-title">
                                     <h3 id="settings-models-title">Models</h3>
                                     <p className="section-hint">
                                         What intelligence is available locally, and why a feature may be limited.
                                     </p>
+                                    <p className="section-hint">
+                                        Last text backend: {status?.last_text_backend === "apple_foundation"
+                                            ? "Apple on-device model"
+                                            : status?.last_text_backend === "local_gguf"
+                                                ? "Downloaded Qwen model"
+                                                : status?.last_text_backend === "unavailable"
+                                                    ? "No text model available"
+                                                : "No text model call yet"}
+                                    </p>
+                                    <label className="settings-switch-row">
+                                        <span>Use Apple on-device model</span>
+                                        <input
+                                            type="checkbox"
+                                            role="switch"
+                                            className="settings-switch"
+                                            checked={appleModel?.enabled === true}
+                                            disabled={!appleModel || appleModelBusy || appleModel.availability !== "available"}
+                                            onChange={() => void handleToggleAppleModel()}
+                                        />
+                                    </label>
+                                    <p className="section-hint">
+                                        {appleModel?.availability === "available"
+                                            ? "Uses Apple's local model for extraction, snippets and answers when Qwen is not installed. Downloaded Qwen adds broader text and visual understanding."
+                                            : "Requires macOS 26 or later, a supported Mac, and Apple Intelligence turned on and ready."}
+                                    </p>
+                                    {appleModelError && <p className="settings-message settings-message--error" role="alert">{appleModelError}</p>}
                                     {status?.embedding_backend === "unavailable" && (
                                         <p className="model-error" role="alert">
                                             Capture is paused until the embedding model is available, so FNDR does not store memories with unusable embeddings.
@@ -846,6 +980,15 @@ export function ControlPanel({
                                             <li>No local models are ready. Finish model setup to enable AI features.</li>
                                         )}
                                     </ul>
+                                    {models.filter((model) => !model.required && model.download_url !== "already_downloaded").map((model) => (
+                                        <div key={model.id} className="model-download-option">
+                                            <span><strong>{model.name}</strong> · {model.size_label} · {model.description}</span>
+                                            <button type="button" className="ui-action-btn btn-secondary" onClick={() => void handleGetModel(model)}>
+                                                Get it
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {modelsMessage && <p className="section-hint" role="status">{modelsMessage}</p>}
                                 </section>
                                 <section className="panel-section settings-section--updates" aria-labelledby="settings-updates-title">
                                     <h3 id="settings-updates-title">Updates</h3>

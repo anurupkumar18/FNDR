@@ -9,6 +9,9 @@
 #   3. writes the merge as a commit object and pushes it to origin (GitLab and
 #      GitHub), then confirms both heads.
 #
+# The remote side is origin/main, or gh/main when GitHub is ahead of GitLab
+# (a push to GitHub alone); diverged remotes stop it before any check runs.
+#
 # The checkout fast-forwards later, once it is clean.
 #
 #   scripts/dev/publish-merged.sh [--frontend] [--rust] [--scripts] "what this publishes"
@@ -32,12 +35,34 @@ summary="${1:-}"
 [[ -n "$summary" ]] || { echo "Give a one-line summary of what this publishes." >&2; exit 2; }
 [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "Not on main." >&2; exit 1; }
 
-publish_once() {
+# The newest main both remotes can take: origin/main, or gh/main when GitHub
+# holds everything GitLab does and more (someone pushed to GitHub alone).
+# Stops when the two have diverged, because a push would be refused by one.
+remote_main() {
   git fetch -q origin
+  local gitlab github
+  gitlab="$(git rev-parse origin/main)"
+  if ! git remote get-url gh >/dev/null 2>&1; then
+    echo "$gitlab"
+    return 0
+  fi
+  git fetch -q gh
+  github="$(git rev-parse gh/main)"
+  if git merge-base --is-ancestor "$github" "$gitlab"; then
+    echo "$gitlab"
+  elif git merge-base --is-ancestor "$gitlab" "$github"; then
+    echo "$github"
+  else
+    echo "GitLab and GitHub main have diverged; merge gh/main and origin/main first." >&2
+    return 1
+  fi
+}
+
+publish_once() {
   head="$(git rev-parse HEAD)"
-  remote="$(git rev-parse origin/main)"
+  remote="$(remote_main)" || return 1
   if git merge-base --is-ancestor "$head" "$remote"; then
-    echo "Nothing to publish: origin/main already has every local commit."
+    echo "Nothing to publish: the remote main already has every local commit."
     return 0
   fi
 
@@ -71,8 +96,7 @@ publish_once() {
 Built without moving the shared checkout. Verified on an export of this tree: $verified.")"
   fi
   # The checks take minutes. If someone pushed meanwhile, start over on the new head.
-  git fetch -q origin
-  [[ "$(git rev-parse origin/main)" == "$remote" ]] || return 75
+  [[ "$(remote_main)" == "$remote" ]] || return 75
   git push origin "${commit}:refs/heads/main"
 }
 

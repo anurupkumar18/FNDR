@@ -12,9 +12,10 @@ export function resolvePreviewConfig(search: string): PreviewConfig {
     const requestedTheme = params.get("theme");
     const requestedPalette = params.get("palette");
 
+    const theme = requestedTheme === "light" ? "light" : "dark";
     return {
-        theme: requestedTheme === "light" ? "light" : "dark",
-        palette: resolveStoredPalette(requestedPalette),
+        theme,
+        palette: resolveStoredPalette(requestedPalette, theme),
         motion: params.get("motion") === "on" ? "on" : "off",
     };
 }

@@ -25,8 +25,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use super::codex_account::{
-    configured_mcp_server_names, is_plain_config_key, parse_account, ready_executable, AppServer,
-    account_model, read_only_feature_args, refresh_codex_features, with_model,
+    account_model, configured_mcp_server_names, is_plain_config_key, parse_account,
+    read_only_feature_args, ready_executable, refresh_codex_features, with_model, AppServer,
 };
 use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
 use crate::operator::journal::{redact, Journal, JournalEntry};
@@ -495,7 +495,6 @@ struct PendingApproval {
 
 pub(crate) struct Session {
     server: AppServer,
-    next_id: u64,
     planner_thread: String,
     operator_thread: String,
     /// The person said no to an action during the turn in progress.
@@ -560,20 +559,16 @@ impl Session {
             planner_thread: id(planner)?,
             operator_thread: id(operator)?,
             server,
-            next_id: 1_000,
             declined: false,
             last_report: None,
         })
     }
 
     async fn send_request(&mut self, method: &str, params: Value) -> Result<u64, RunError> {
-        self.next_id += 1;
-        let id = self.next_id;
         self.server
-            .write(json!({ "method": method, "id": id, "params": params }))
+            .send(method, params)
             .await
-            .map_err(RunError::Failed)?;
-        Ok(id)
+            .map_err(RunError::Failed)
     }
 
     async fn answer(&mut self, request_id: Value, approve: bool) -> Result<(), RunError> {
@@ -912,10 +907,21 @@ fn plan_request_text(
     text
 }
 
-/// The app the person is looking at, for the planner. Never an app FNDR may
-/// not read, and never FNDR itself.
-fn app_in_front(seen: &plan::Observation, guards: &Guards) -> Option<String> {
-    let app = seen.frontmost_app.trim();
+/// The app the person is looking at, for the planner and for a paste that
+/// names no app. While FNDR's own notch or command bar is in front, it is the
+/// app they were in when it opened (`looked_at`). Never an app FNDR may not
+/// read, and never FNDR itself.
+fn app_in_front(
+    seen: &plan::Observation,
+    guards: &Guards,
+    looked_at: Option<&str>,
+) -> Option<String> {
+    let front = seen.frontmost_app.trim();
+    let app = if crate::privacy::Blocklist::is_internal_app(front, Some(&seen.frontmost_bundle)) {
+        looked_at.unwrap_or_default().trim()
+    } else {
+        front
+    };
     (!app.is_empty() && !(guards.off_limits)(app)).then(|| app.to_string())
 }
 
@@ -956,6 +962,8 @@ struct RunContext {
     guards: Guards,
     /// The person's own words, to tell a link they asked for from one they did not.
     request: String,
+    /// Where the run's record is kept for rating and skills; none in tests.
+    runs: Option<Arc<crate::storage::StateStore>>,
 }
 
 /// A work set of more than this many reopens waits for Start (ADR 027).
@@ -980,6 +988,8 @@ fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
         StepAction::Operate => {
             !(guards.off_limits)(&step.app) && crate::operator::policy::is_media_app(&step.app)
         }
+        // The person sees the exact text and taps Allow at the step itself.
+        StepAction::Paste => false,
         StepAction::ReopenMemory => {
             plan.steps.len() <= MAX_AUTO_REOPENS
                 && plan
@@ -1044,15 +1054,35 @@ fn asks_no_more(declined_in_this_step: bool) -> bool {
     declined_in_this_step
 }
 
+/// What the approval card shows of copied text: all of a short one, the
+/// start and the length of a long one.
+fn paste_preview(text: &str) -> String {
+    const SHOWN: usize = 280;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= SHOWN {
+        format!("\u{201c}{flat}\u{201d}")
+    } else {
+        let start: String = flat.chars().take(SHOWN).collect();
+        format!(
+            "\u{201c}{}\u{2026}\u{201d} ({count} characters)",
+            start.trim_end()
+        )
+    }
+}
+
 /// Whether a failed step gets its second attempt. Asking again after the
-/// person declined would put the same question to them twice.
-fn worth_retrying(verdict: &plan::Verdict) -> bool {
-    !verdict.ok && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
+/// person declined would put the same question to them twice, and a second
+/// paste would put the text in twice.
+fn worth_retrying(step: &PlanStep, verdict: &plan::Verdict) -> bool {
+    !verdict.ok
+        && step.action != StepAction::Paste
+        && ![plan::LINK_DECLINED, plan::ACTION_DECLINED].contains(&verdict.detail.as_str())
 }
 
 /// One attempt at one step; returns what FNDR saw afterward.
 async fn attempt_step(
-    session: &mut Session,
+    session: Option<&mut Session>,
     ctx: &RunContext,
     observed: &mut Observed,
     commands: &mut mpsc::UnboundedReceiver<RunCommand>,
@@ -1073,7 +1103,7 @@ async fn attempt_step(
             detail,
         });
     };
-    if step.action != StepAction::OpenUrl && (ctx.guards.off_limits)(&step.app) {
+    if !step.app.is_empty() && (ctx.guards.off_limits)(&step.app) {
         native_entry(
             "open_app",
             json!({ "name": step.app }),
@@ -1130,7 +1160,7 @@ async fn attempt_step(
                     });
                 }
             }
-            if let Err(error) = native::open_url(&step.url) {
+            if let Err(error) = native::open_url_in(&step.url, &step.app) {
                 native_entry("open_url", args, "failed", Some(error.clone()));
                 return Ok(plan::Verdict {
                     ok: false,
@@ -1157,7 +1187,97 @@ async fn attempt_step(
             ok: false,
             detail: "A reopen runs only in a work set FNDR planned".to_string(),
         }),
+        StepAction::Paste => {
+            let app = if step.app.is_empty() {
+                app_in_front(
+                    &native::observe(None).await,
+                    &ctx.guards,
+                    native::app_looked_at().as_deref(),
+                )
+            } else {
+                Some(step.app.clone())
+            };
+            let Some(app) = app else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "No app is in front to paste into".to_string(),
+                });
+            };
+            // Empty text pastes what an earlier step copied.
+            let copied = step.text.is_empty();
+            let text = if copied {
+                match crate::capture::clipboard::copied_text() {
+                    Ok(text) => text,
+                    Err(detail) => return Ok(plan::Verdict { ok: false, detail }),
+                }
+            } else {
+                step.text.clone()
+            };
+            let args = json!({ "app": app, "text": text });
+            if (ctx.guards.off_limits)(&app)
+                || classify("paste", &args, observed).risk == Risk::Never
+            {
+                native_entry("paste", args, "blocked", None);
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: format!("FNDR does not paste into {app}"),
+                });
+            }
+            let summary = if copied {
+                format!("Paste what was copied into {app}: {}", paste_preview(&text))
+            } else {
+                format!("Paste \u{201c}{}\u{201d} into {app}", text.trim())
+            };
+            let approved = ask_person(ctx, commands, "paste", summary).await?;
+            native_entry(
+                "paste",
+                args.clone(),
+                if approved { "approved" } else { "declined" },
+                None,
+            );
+            if !approved {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: plan::ACTION_DECLINED.to_string(),
+                });
+            }
+            let (target, pasting) = (app.clone(), text.clone());
+            let pasted = tokio::task::spawn_blocking(move || {
+                // What the person had copied goes back once the field has
+                // been read, by when the app has taken the paste.
+                let previous = (!copied)
+                    .then(crate::capture::clipboard::restorable_text)
+                    .flatten();
+                let pasted = crate::accessibility::paste_into_app(&target, &pasting);
+                if let Some(previous) = previous {
+                    crate::capture::clipboard::put_back(&previous);
+                }
+                pasted
+            })
+            .await
+            .map_err(|error| RunError::Failed(format!("The paste did not finish: {error}")))?;
+            let verdict = match pasted {
+                Ok(field) => plan::verify_paste(&app, &text, field.as_deref()),
+                Err(error) => plan::Verdict {
+                    ok: false,
+                    detail: error,
+                },
+            };
+            native_entry(
+                "paste",
+                args,
+                if verdict.ok { "ok" } else { "failed" },
+                Some(verdict.detail.clone()),
+            );
+            Ok(verdict)
+        }
         StepAction::Operate => {
+            let Some(session) = session else {
+                return Ok(plan::Verdict {
+                    ok: false,
+                    detail: "Operating an app needs the planner's session".to_string(),
+                });
+            };
             let media_app = (step.check == StepCheck::MediaPlaying).then_some(step.app.as_str());
             let track_before = match media_app {
                 Some(app) => native::media_state(app).await.1,
@@ -1237,85 +1357,135 @@ async fn run(
     commands: mpsc::UnboundedReceiver<RunCommand>,
     codex_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), RunError> {
-    if let Some(name) = plan::save_set_name(&transcript) {
-        return save_last_set(&state, &ctx, &name);
-    }
-    let named = crate::workset::resolve_named(&state, &transcript).await;
-    if named.is_some() || plan::asks_for_work_set(&transcript) {
-        (ctx.emit)(ComputerUseEvent::Planning {
-            run_id: ctx.run_id.clone(),
-            used_memories: 0,
-        });
-        let resolution = match named {
-            Some(resolution) => resolution,
-            None => crate::workset::resolve(&state, &transcript).await,
-        };
-        let layout = plan::layout_asked_for(&transcript);
-        let open_state = state.clone();
-        return run_work_set(
-            ctx,
-            resolution,
-            commands,
-            move |item| {
-                let state = open_state.clone();
-                async move {
-                    let id = item.memory_id.clone();
-                    crate::workset::open_items(&state, &[item])
-                        .await
-                        .pop()
-                        .unwrap_or(ItemOutcome {
-                            memory_id: id,
-                            label: String::new(),
-                            kind: None,
-                            ok: false,
-                            detail: "Nothing was opened".to_string(),
-                            outcome: None,
-                            arrangement: None,
-                        })
-                }
-            },
-            move |set, opened| async move {
-                let requested: Vec<String> = set
-                    .items
-                    .iter()
-                    .map(|item| item.memory_id.clone())
-                    .collect();
-                let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
-                let arranged = match layout {
-                    Some(layout) => {
-                        let windows = opened
-                            .iter()
-                            .map(|item| crate::workset::arrange::Opened {
-                                app: item.app_name.clone(),
-                                label: item.label.clone(),
-                            })
-                            .collect();
-                        Some(
-                            crate::workset::arrange::after_open(&state, windows, layout)
-                                .await
-                                .sentence(),
-                        )
-                    }
-                    None => None,
-                };
-                crate::workset::note_opened(
-                    &state,
-                    &requested,
-                    &ids,
-                    &set.title,
-                    crate::workset::routines::Source::Notch,
-                );
-                arranged
-            },
-        )
-        .await;
-    }
-    let snippets = if plan::refers_to_past(&transcript) {
-        memory::snippets(&state, &transcript).await
-    } else {
+    let saved = crate::workset::saved_sets(&state);
+    let names: Vec<String> = saved.iter().map(|set| set.name.clone()).collect();
+    let skills = crate::operator::skills::list(&state.state_store).unwrap_or_else(|error| {
+        tracing::warn!(%error, "computer_use:skills_load_failed");
         Vec::new()
+    });
+    let skill_names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
+    // Decided before any await: what it is routed against is not Send.
+    let route = {
+        let known = plan::Known {
+            saved_sets: &names,
+            skills: &skill_names,
+            is_app: &native::is_installed,
+        };
+        plan::route(&transcript, &known)
     };
-    run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await
+    let (resolution, layout) = match route {
+        plan::Route::Skill { index } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            let plan = Plan {
+                steps: skills[index].steps.clone(),
+            };
+            // Only an operate step needs Codex; opening apps and links does not.
+            let session = if plan
+                .steps
+                .iter()
+                .any(|step| step.action == StepAction::Operate)
+            {
+                Some(operator_session(&codex_pid).await?)
+            } else {
+                None
+            };
+            return carry_out(session, ctx, plan, "skill", commands, Observed::default()).await;
+        }
+        plan::Route::SaveSet { name } => return save_last_set(&state, &ctx, &name),
+        plan::Route::Local { plan } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            return carry_out(None, ctx, plan, "local", commands, Observed::default()).await;
+        }
+        plan::Route::Planner { memory_snippets } => {
+            let snippets = if memory_snippets {
+                memory::snippets(&state, &transcript).await
+            } else {
+                Vec::new()
+            };
+            return run_with_snippets(ctx, transcript, snippets, commands, codex_pid).await;
+        }
+        plan::Route::SavedSet { index, layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (
+                crate::workset::resolve_saved(&state, &saved[index]).await,
+                layout,
+            )
+        }
+        plan::Route::WorkSet { layout } => {
+            (ctx.emit)(ComputerUseEvent::Planning {
+                run_id: ctx.run_id.clone(),
+                used_memories: 0,
+            });
+            (crate::workset::resolve(&state, &transcript).await, layout)
+        }
+    };
+    let open_state = state.clone();
+    run_work_set(
+        ctx,
+        resolution,
+        commands,
+        move |item| {
+            let state = open_state.clone();
+            async move {
+                let id = item.memory_id.clone();
+                crate::workset::open_items(&state, &[item])
+                    .await
+                    .pop()
+                    .unwrap_or(ItemOutcome {
+                        memory_id: id,
+                        label: String::new(),
+                        kind: None,
+                        ok: false,
+                        detail: "Nothing was opened".to_string(),
+                        outcome: None,
+                        arrangement: None,
+                    })
+            }
+        },
+        move |set, opened| async move {
+            let requested: Vec<String> = set
+                .items
+                .iter()
+                .map(|item| item.memory_id.clone())
+                .collect();
+            let ids: Vec<String> = opened.iter().map(|item| item.memory_id.clone()).collect();
+            let arranged = match layout {
+                Some(layout) => {
+                    let windows = opened
+                        .iter()
+                        .map(|item| crate::workset::arrange::Opened {
+                            app: item.app_name.clone(),
+                            label: item.label.clone(),
+                        })
+                        .collect();
+                    Some(
+                        crate::workset::arrange::after_open(&state, windows, layout)
+                            .await
+                            .sentence(),
+                    )
+                }
+                None => None,
+            };
+            crate::workset::note_opened(
+                &state,
+                &requested,
+                &ids,
+                &set.title,
+                crate::workset::routines::Source::Notch,
+            );
+            arranged
+        },
+    )
+    .await
 }
 
 /// "Save this as <name>": saves the set this session opened last, on this
@@ -1471,17 +1641,11 @@ where
 
 /// Plans, waits for Start, then runs and checks every step. Everything after
 /// memory retrieval, so it runs without the app's state.
-async fn run_with_snippets(
-    ctx: RunContext,
-    transcript: String,
-    snippets: Vec<memory::MemorySnippet>,
-    mut commands: mpsc::UnboundedReceiver<RunCommand>,
-    codex_pid: Arc<Mutex<Option<u32>>>,
-) -> Result<(), RunError> {
+/// A Codex session with FNDR's computer-use tools attached, for planning and
+/// for `operate` steps. Its process id is kept so Stop can kill it.
+async fn operator_session(codex_pid: &Arc<Mutex<Option<u32>>>) -> Result<Session, RunError> {
     let codex = ready_executable().map_err(RunError::Failed)?;
-    let backend = detect_backend().ok_or_else(|| {
-        RunError::Failed(NO_HELPER.to_string())
-    })?;
+    let backend = detect_backend().ok_or_else(|| RunError::Failed(NO_HELPER.to_string()))?;
     let user_servers = configured_mcp_server_names(&codex)
         .await
         .map_err(RunError::Failed)?;
@@ -1489,19 +1653,32 @@ async fn run_with_snippets(
         .await
         .map_err(RunError::Failed)?;
     let args = session_args(&user_servers, &backend).map_err(RunError::Failed)?;
+    let session = Session::open(&codex, &args).await?;
+    if let Ok(mut slot) = codex_pid.lock() {
+        *slot = session.server.pid();
+    }
+    Ok(session)
+}
 
+async fn run_with_snippets(
+    ctx: RunContext,
+    transcript: String,
+    snippets: Vec<memory::MemorySnippet>,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    codex_pid: Arc<Mutex<Option<u32>>>,
+) -> Result<(), RunError> {
     (ctx.emit)(ComputerUseEvent::Planning {
         run_id: ctx.run_id.clone(),
         used_memories: snippets.len(),
     });
-
-    let mut session = Session::open(&codex, &args).await?;
-    if let Ok(mut slot) = codex_pid.lock() {
-        *slot = session.server.pid();
-    }
+    let mut session = operator_session(&codex_pid).await?;
     let mut observed = Observed::default();
 
-    let in_front = app_in_front(&native::observe(None).await, &ctx.guards);
+    let in_front = app_in_front(
+        &native::observe(None).await,
+        &ctx.guards,
+        native::app_looked_at().as_deref(),
+    );
     let request = plan_request_text(&transcript, &snippets, in_front.as_deref());
     crate::privacy_proof::record_model_request_including(
         crate::privacy_proof::Feature::NotchDoPlan,
@@ -1536,6 +1713,32 @@ async fn run_with_snippets(
     .map_err(|_| RunError::Failed("Planning took too long.".to_string()))??;
     let plan = plan::parse_plan(&plan_text)
         .map_err(|error| RunError::Failed(plan::explain_empty_plan(error, &ctx.request)))?;
+    let plan = plan::settled(plan, in_front.as_deref());
+    carry_out(Some(session), ctx, plan, "planner", commands, observed).await
+}
+
+/// Shows a plan, waits for it to start, and carries it out step by step.
+/// `session` is the Codex session an `operate` step needs; a plan FNDR made
+/// on this Mac (`plan::local_plan`) has none and starts no Codex.
+async fn carry_out(
+    mut session: Option<Session>,
+    ctx: RunContext,
+    plan: Plan,
+    planned_by: &str,
+    mut commands: mpsc::UnboundedReceiver<RunCommand>,
+    mut observed: Observed,
+) -> Result<(), RunError> {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_plan(
+            store,
+            &ctx.run_id,
+            &ctx.request,
+            planned_by,
+            &plan.steps,
+        ) {
+            tracing::warn!(%error, "computer_use:run_record_failed");
+        }
+    }
     (ctx.emit)(ComputerUseEvent::Planned {
         run_id: ctx.run_id.clone(),
         auto_start: plan_starts_by_itself(&plan, &ctx.request, &ctx.guards),
@@ -1561,7 +1764,7 @@ async fn run_with_snippets(
                 attempt,
             });
             verdict = attempt_step(
-                &mut session,
+                session.as_mut(),
                 &ctx,
                 &mut observed,
                 &mut commands,
@@ -1571,7 +1774,7 @@ async fn run_with_snippets(
             )
             .await?;
             // A no from the person is an answer, not a failure to retry.
-            if verdict.ok || !worth_retrying(&verdict) {
+            if verdict.ok || !worth_retrying(&plan.steps[index], &verdict) {
                 break;
             }
             retry_note = Some(verdict.detail.clone());
@@ -1584,29 +1787,51 @@ async fn run_with_snippets(
             checked: plan::checked_by_fndr(&plan.steps[index], &verdict),
         });
         if !verdict.ok {
+            let summary = format!(
+                "Stopped at \"{}\": {}",
+                plan.steps[index].label, verdict.detail
+            );
+            record_outcome(&ctx, false, &summary);
             (ctx.emit)(ComputerUseEvent::Finished {
                 run_id: ctx.run_id.clone(),
                 ok: false,
-                summary: format!(
-                    "Stopped at \"{}\": {}",
-                    plan.steps[index].label, verdict.detail
-                ),
+                summary,
             });
-            session.server.shutdown().await;
+            if let Some(session) = session {
+                session.server.shutdown().await;
+            }
             return Ok(());
         }
         done.push(plan.steps[index].label.clone());
     }
+    let summary = plan::with_left_out_note(
+        with_report(
+            format!("Done: {}.", done.join(", ")),
+            session
+                .as_ref()
+                .and_then(|session| session.last_report.as_deref()),
+        ),
+        &ctx.request,
+    );
+    record_outcome(&ctx, true, &summary);
     (ctx.emit)(ComputerUseEvent::Finished {
         run_id: ctx.run_id.clone(),
         ok: true,
-        summary: plan::with_left_out_note(
-            with_report(format!("Done: {}.", done.join(", ")), session.last_report.as_deref()),
-            &ctx.request,
-        ),
+        summary,
     });
-    session.server.shutdown().await;
+    if let Some(session) = session {
+        session.server.shutdown().await;
+    }
     Ok(())
+}
+
+/// Keeps how a run ended with its record (`operator::runs`).
+fn record_outcome(ctx: &RunContext, ok: bool, summary: &str) {
+    if let Some(store) = &ctx.runs {
+        if let Err(error) = crate::operator::runs::record_outcome(store, &ctx.run_id, ok, summary) {
+            tracing::warn!(%error, "computer_use:run_outcome_failed");
+        }
+    }
 }
 
 fn kill_process_group(pid: u32) {
@@ -1771,6 +1996,7 @@ pub async fn computer_use_plan(
         ),
         guards,
         request: transcript.clone(),
+        runs: Some(state.inner().state_store.clone()),
     };
     let task_state = state.inner().clone();
     let task_app = app.clone();
@@ -1823,6 +2049,112 @@ pub async fn computer_use_plan(
         });
     }
     Ok(run_id)
+}
+
+/// The person's rating of a run that ended. A run rated as not working is
+/// kept as a draft case for the evaluation suite (`operator::runs`).
+#[tauri::command]
+pub async fn notch_do_rate_run(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    worked: bool,
+) -> Result<(), String> {
+    let rating = if worked {
+        crate::operator::runs::Rating::Worked
+    } else {
+        crate::operator::runs::Rating::DidNotWork
+    };
+    crate::operator::runs::rate(&state.inner().state_store, &run_id, rating).map(|_| ())
+}
+
+/// Saves a run that worked as a skill, run again by saying its name.
+#[tauri::command]
+pub async fn notch_do_save_skill(
+    state: State<'_, Arc<AppState>>,
+    run_id: String,
+    name: String,
+) -> Result<String, String> {
+    crate::operator::skills::save_from_run(&state.inner().state_store, &run_id, &name)
+        .map(|skill| skill.name)
+}
+
+/// How many recent runs Settings lists.
+const RUNS_LISTED: usize = 20;
+
+/// A Notch Do run as Settings lists it: the request, how it was planned, its
+/// steps by label, how it ended, the person's rating and whether a skill
+/// could repeat it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoRun {
+    pub run_id: String,
+    pub at: String,
+    pub request: String,
+    pub planned_by: String,
+    pub steps: Vec<String>,
+    pub ok: Option<bool>,
+    pub summary: String,
+    pub rating: Option<crate::operator::runs::Rating>,
+    pub repeatable: bool,
+}
+
+/// A saved skill as Settings lists it, its steps by label.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchDoSkill {
+    pub id: String,
+    pub name: String,
+    pub request: String,
+    pub steps: Vec<String>,
+    pub saved_at: String,
+}
+
+fn step_labels(steps: &[PlanStep]) -> Vec<String> {
+    steps.iter().map(|step| step.label.clone()).collect()
+}
+
+/// The newest Notch Do runs, so a run can be rated or saved as a skill after
+/// the notch has closed.
+#[tauri::command]
+pub async fn notch_do_runs(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoRun>, String> {
+    Ok(
+        crate::operator::runs::recent(&state.inner().state_store, RUNS_LISTED)?
+            .into_iter()
+            .map(|run| NotchDoRun {
+                repeatable: run.repeatable(),
+                steps: step_labels(&run.steps),
+                run_id: run.run_id,
+                at: run.at,
+                request: run.request,
+                planned_by: run.planned_by,
+                ok: run.ok,
+                summary: run.summary,
+                rating: run.rating,
+            })
+            .collect(),
+    )
+}
+
+#[tauri::command]
+pub async fn notch_do_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<NotchDoSkill>, String> {
+    Ok(crate::operator::skills::list(&state.inner().state_store)?
+        .into_iter()
+        .map(|skill| NotchDoSkill {
+            steps: step_labels(&skill.steps),
+            id: skill.id,
+            name: skill.name,
+            request: skill.request,
+            saved_at: skill.saved_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn notch_do_delete_skill(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    crate::operator::skills::delete(&state.inner().state_store, &id)
 }
 
 /// Starts the planned run (the plan card's countdown, "go", or a tap).
@@ -2127,16 +2459,32 @@ mod tests {
     }
 
     #[test]
-    fn the_planner_learns_the_app_in_front_unless_it_is_off_limits() {
+    fn the_planner_learns_the_app_the_person_is_in_even_behind_fndr_unless_it_is_off_limits() {
         let seen = |app: &str| plan::Observation {
             frontmost_app: app.to_string(),
             ..Default::default()
         };
         let mut guards = Guards::open();
-        assert_eq!(app_in_front(&seen("Google Chrome"), &guards).as_deref(), Some("Google Chrome"));
-        assert_eq!(app_in_front(&seen(""), &guards), None);
-        guards.off_limits = Arc::new(|app| app == "1Password");
-        assert_eq!(app_in_front(&seen("1Password"), &guards), None);
+        assert_eq!(
+            app_in_front(&seen("Google Chrome"), &guards, Some("Notes")).as_deref(),
+            Some("Google Chrome")
+        );
+        assert_eq!(app_in_front(&seen(""), &guards, None), None);
+        // FNDR's own notch is in front: the app the person was in counts.
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("Safari")).as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(app_in_front(&seen("FNDR"), &guards, None), None);
+        guards.off_limits = Arc::new(|app| app == "1Password" || app.starts_with("FNDR"));
+        assert_eq!(
+            app_in_front(&seen("1Password"), &guards, Some("Safari")),
+            None
+        );
+        assert_eq!(
+            app_in_front(&seen("FNDR"), &guards, Some("1Password")),
+            None
+        );
     }
 
     #[test]
@@ -2146,7 +2494,10 @@ mod tests {
             with_report("Done: Summarize article.".into(), Some(" It argues X. ")),
             "Done: Summarize article. Reported: It argues X."
         );
-        assert_eq!(with_report("Done: Open Chrome.".into(), None), "Done: Open Chrome.");
+        assert_eq!(
+            with_report("Done: Open Chrome.".into(), None),
+            "Done: Open Chrome."
+        );
         assert_eq!(with_report("Done.".into(), Some("  ")), "Done.");
     }
 
@@ -2165,15 +2516,60 @@ mod tests {
     }
 
     #[test]
-    fn a_declined_link_is_not_asked_about_twice() {
+    fn a_declined_step_is_not_asked_about_twice_and_a_paste_is_never_repeated() {
         let verdict = |ok: bool, detail: &str| plan::Verdict {
             ok,
             detail: detail.to_string(),
         };
-        assert!(!worth_retrying(&verdict(false, plan::LINK_DECLINED)));
-        assert!(!worth_retrying(&verdict(false, plan::ACTION_DECLINED)));
-        assert!(worth_retrying(&verdict(false, "Spotify is not in front")));
-        assert!(!worth_retrying(&verdict(true, "")));
+        let step = |action: StepAction| PlanStep {
+            action,
+            label: "x".into(),
+            app: "Notes".into(),
+            url: String::new(),
+            goal: String::new(),
+            text: "https://zoom.us/j/123".into(),
+            check: StepCheck::Frontmost,
+            item: None,
+        };
+        let open = step(StepAction::OpenApp);
+        assert!(!worth_retrying(&open, &verdict(false, plan::LINK_DECLINED)));
+        assert!(!worth_retrying(
+            &open,
+            &verdict(false, plan::ACTION_DECLINED)
+        ));
+        assert!(worth_retrying(
+            &open,
+            &verdict(false, "Notes is not in front")
+        ));
+        assert!(!worth_retrying(&open, &verdict(true, "")));
+        assert!(
+            !worth_retrying(
+                &step(StepAction::Paste),
+                &verdict(false, "The field in Notes does not show the text")
+            ),
+            "a second paste would put the text in twice"
+        );
+        let paste = Plan {
+            steps: vec![step(StepAction::Paste)],
+        };
+        let guards = Guards {
+            off_limits: Arc::new(|_| false),
+            halt: Arc::new(|| None),
+        };
+        assert!(!plan_starts_by_itself(
+            &paste,
+            "paste the zoom link into Notes",
+            &guards
+        ));
+        assert_eq!(
+            paste_preview("  see\n you  at five "),
+            "\u{201c}see you at five\u{201d}"
+        );
+        let long = paste_preview(&"word ".repeat(100));
+        assert!(
+            long.ends_with("\u{2026}\u{201d} (499 characters)"),
+            "{long}"
+        );
     }
 
     #[test]
@@ -2184,6 +2580,7 @@ mod tests {
             app: "Spotify".into(),
             url: String::new(),
             goal: "play Blinding Lights".into(),
+            text: String::new(),
             check: StepCheck::MediaPlaying,
             item: None,
         };
@@ -2479,6 +2876,96 @@ mod tests {
         );
     }
 
+    /// The Notch Do suite's planner cases against the real planner, on the
+    /// person's ChatGPT sign-in. Planning only: the session has no
+    /// computer-use tools and a planning turn refuses every tool request, so
+    /// nothing on this Mac is read or done. Writes the raw answers to
+    /// `scripts/operator/recordings/<date>-live.json`, which
+    /// `operator::eval` rescores offline from then on.
+    ///
+    /// `FNDR_NOTCH_DO_LIVE_EVAL=1 cargo test --lib notch_do_live_planner_eval -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "sends the suite's synthetic requests to the planner on the person's ChatGPT plan"]
+    async fn notch_do_live_planner_eval() {
+        if std::env::var("FNDR_NOTCH_DO_LIVE_EVAL").is_err() {
+            return;
+        }
+        let suite = crate::operator::eval::load_suite();
+        let codex =
+            crate::ipc::commands::codex_account::ready_executable().expect("Codex is installed");
+        let mut session = Session::open(&codex, &[])
+            .await
+            .expect("signed in with ChatGPT");
+        let (_commands, mut receiver) = mpsc::unbounded_channel::<RunCommand>();
+        let emit = |_: ComputerUseEvent| {};
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::new(dir.path().join("journal.jsonl"));
+        let guards = Guards::open();
+        let mut answers = serde_json::Map::new();
+        let (mut passed, mut scored) = (0usize, 0usize);
+        for case in suite.cases.iter().filter(|case| {
+            case.plan.is_some() && crate::operator::eval::goes_to_planner(&suite, case)
+        }) {
+            let mut observed = Observed::default();
+            let planner = session.planner_thread.clone();
+            let mut turn = TurnContext {
+                run_id: "eval",
+                step: None,
+                guards: &guards,
+                observed: &mut observed,
+                journal: &journal,
+                emit: &emit,
+                commands: &mut receiver,
+            };
+            let request = plan_request_text(
+                &case.request,
+                &case.synthetic_snippets(),
+                case.in_front.as_deref(),
+            );
+            let answer = tokio::time::timeout(
+                PLAN_TIMEOUT,
+                session.run_turn(&mut turn, &planner, &request, plan::plan_output_schema()),
+            )
+            .await
+            .map_err(|_| "timed out".to_string())
+            .and_then(|answer| answer.map_err(|error| format!("{error:?}")))
+            .unwrap_or_else(|error| format!("ERROR {error}"));
+            let wrong = crate::operator::eval::plan_mismatches(case, &answer);
+            scored += 1;
+            if wrong.is_empty() {
+                passed += 1;
+            }
+            println!(
+                "{}: {}",
+                case.id,
+                if wrong.is_empty() {
+                    "ok".to_string()
+                } else {
+                    wrong.join("; ")
+                }
+            );
+            answers.insert(case.id.clone(), serde_json::Value::String(answer));
+        }
+        session.server.shutdown().await;
+        let share = passed as f64 / scored.max(1) as f64;
+        println!("planner: {passed} of {scored} plans as labeled");
+        let recording = json!({
+            "recorded_at": chrono::Utc::now().to_rfc3339(),
+            "codex": codex.display().to_string(),
+            "prompt_version": crate::inference::prompts::LLM_PROMPT_VERSION,
+            // The share today; rescoring later may not fall below it.
+            "pass_floor": (share * 100.0).floor() / 100.0,
+            "answers": answers,
+        });
+        let path = crate::operator::eval::repo_path(&format!(
+            "scripts/operator/recordings/{}-live.json",
+            chrono::Local::now().format("%Y-%m-%d")
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec_pretty(&recording).unwrap()).unwrap();
+        println!("recorded {}", path.display());
+    }
+
     /// A planner that asks to read the screen is refused: nothing is read or
     /// done before the plan is shown and started.
     #[tokio::test]
@@ -2639,7 +3126,10 @@ mod tests {
         let asked: Arc<Mutex<Vec<String>>> = Arc::default();
         let recorded = asked.clone();
         let emit = move |event: ComputerUseEvent| {
-            if let ComputerUseEvent::Approval { request_key, tool, .. } = &event {
+            if let ComputerUseEvent::Approval {
+                request_key, tool, ..
+            } = &event
+            {
                 recorded.lock().unwrap().push(tool.clone());
                 commands
                     .send(RunCommand::Respond {
@@ -2735,6 +3225,7 @@ mod tests {
             journal: Journal::new(journal_dir.join("journal.jsonl")),
             guards: Guards::open(),
             request: transcript.clone(),
+            runs: None,
             emit: Arc::new(move |event| {
                 println!(
                     "[{:>5.1}s] {}",
@@ -2879,6 +3370,7 @@ mod tests {
             journal: Journal::new(dir.join("journal.jsonl")),
             guards,
             request: "pull up everything related to the assignment".to_string(),
+            runs: None,
             emit: Arc::new(move |event| {
                 if matches!(event, ComputerUseEvent::Planned { .. }) {
                     let _ = commands.send(RunCommand::Start);

@@ -115,9 +115,11 @@ function planned(next: DoState): Narration {
 
 function finished(next: DoState): Narration {
     const result = next.result;
+    // FNDR's summary of a run that ended well already leads with "Done:".
+    const summary = (result?.summary ?? "").replace(/^\s*done:\s*/i, "");
     const parts = [
         result?.ok ? "Done." : "I could not finish.",
-        result?.summary ? `${sentence(result.summary)}.` : "",
+        summary ? `${sentence(summary)}.` : "",
         leftOut(next.steps),
         checkedNote(next.steps),
         next.steps.some((step) => step.status === "done") ? "Nothing is undone automatically." : "",
@@ -131,7 +133,9 @@ export function narrate(prev: DoState, next: DoState): Narration | null {
     if (next.phase === "choose" && next.options.length > 0 && next.options !== prev.options) return choices();
 
     if (next.approval && next.approval.requestKey !== prev.approval?.requestKey) {
-        return { text: `I need your okay to ${sentence(next.approval.summary)}. Tap Allow.`, urgent: true };
+        // Summaries start like a button ("Paste …", "Open …"); mid-sentence they read lower case.
+        const asked = sentence(next.approval.summary).replace(/^\p{Lu}(?!\p{Lu})/u, (letter) => letter.toLowerCase());
+        return { text: `I need your okay to ${asked}. Tap Allow.`, urgent: true };
     }
 
     const blocked = next.actions.find((a) => a.state === "blocked" && !prev.actions.some((p) => p.id === a.id));

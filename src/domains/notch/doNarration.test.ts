@@ -66,6 +66,8 @@ describe("narrate", () => {
         const said = lines(...start, event({ kind: "approval", runId: "r1", requestKey: "k", tool: "click", summary: "click Add to cart" }))[2];
         expect(said?.urgent).toBe(true);
         expect(said?.text).toBe("I need your okay to click Add to cart. Tap Allow.");
+        const paste = lines(...start, event({ kind: "approval", runId: "r1", requestKey: "p", tool: "paste", summary: "Paste “see you at five” into Slack" }))[2];
+        expect(paste?.text).toBe("I need your okay to paste “see you at five” into Slack. Tap Allow.");
     });
 
     it("says what it refused to do", () => {
@@ -89,6 +91,15 @@ describe("narrate", () => {
             event({ kind: "finished", runId: "r1", ok: true, summary: "Playing Blinding Lights." }),
         )[4];
         expect(allChecked?.text).toBe("Done. Playing Blinding Lights. I checked every step myself. Nothing is undone automatically.");
+
+        // FNDR's own summary of a run it checked already leads with "Done:".
+        const opened = lines(
+            ...start,
+            event({ kind: "stepDone", runId: "r1", index: 0, ok: true, detail: "", checked: true }),
+            event({ kind: "stepDone", runId: "r1", index: 1, ok: true, detail: "", checked: true }),
+            event({ kind: "finished", runId: "r1", ok: true, summary: "Done: Open Notes." }),
+        )[4];
+        expect(opened?.text).toBe("Done. Open Notes. I checked every step myself. Nothing is undone automatically.");
 
         const reported = lines(
             ...start,
