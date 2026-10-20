@@ -37,7 +37,8 @@
   },
   {
     "id": "kw-hist-reader",
-    "minutes_ago": 1560,
+    "day_offset": -1,
+    "time": "12:00",
     "app_name": "Preview",
     "bundle_id": "com.apple.Preview",
     "window_title": "Harlan - The Unfinished Settlement - course reader ch4.pdf (page 112 of 160)",
@@ -53,7 +54,8 @@
   },
   {
     "id": "kw-hist-draft",
-    "minutes_ago": 190,
+    "day_offset": 0,
+    "time": "00:00",
     "app_name": "Google Chrome",
     "bundle_id": "com.google.Chrome",
     "window_title": "Reconstruction essay draft - Google Docs",
@@ -156,7 +158,8 @@
   },
   {
     "id": "kw-cs-a4-error-new",
-    "minutes_ago": 55,
+    "day_offset": 0,
+    "time": "00:00",
     "app_name": "Terminal",
     "bundle_id": "com.apple.Terminal",
     "window_title": "zsh - a4",
@@ -207,7 +210,8 @@
   },
   {
     "id": "kw-intern-themes",
-    "minutes_ago": 1320,
+    "day_offset": -1,
+    "time": "12:00",
     "app_name": "Google Chrome",
     "bundle_id": "com.google.Chrome",
     "window_title": "Q4 onboarding survey - Themes - Google Sheets",

@@ -415,8 +415,37 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_worker_time_queries_keep_their_calendar_day_at_midnight_and_late_night() {
+        let entries = knowledge_worker_corpus();
+        for now in [
+            Local.with_ymd_and_hms(2026, 9, 24, 0, 5, 0).unwrap(),
+            Local.with_ymd_and_hms(2026, 9, 24, 23, 55, 0).unwrap(),
+        ] {
+            for (id, days_ago) in [
+                ("kw-hist-draft", 0),
+                ("kw-cs-a4-error-new", 0),
+                ("kw-intern-themes", 1),
+                ("kw-hist-reader", 1),
+            ] {
+                let entry = entries.iter().find(|entry| entry.id == id).unwrap();
+                let actual = Local
+                    .timestamp_millis_opt(timestamp_ms(entry, now))
+                    .single()
+                    .unwrap()
+                    .date_naive();
+                assert_eq!(
+                    actual,
+                    now.date_naive() - ChronoDuration::days(days_ago),
+                    "{id}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn knowledge_worker_corpus_repeats_one_error_days_apart() {
         let entries = knowledge_worker_corpus();
+        let now = fixed_now();
         let with_error: Vec<&SeedEntry> = entries
             .iter()
             .filter(|entry| {
@@ -427,7 +456,14 @@ mod tests {
             })
             .collect();
         assert!(
-            with_error.iter().any(|entry| entry.minutes_ago.is_some()),
+            with_error.iter().any(|entry| {
+                Local
+                    .timestamp_millis_opt(timestamp_ms(entry, now))
+                    .single()
+                    .unwrap()
+                    .date_naive()
+                    == now.date_naive()
+            }),
             "the error recurs today"
         );
         assert!(
