@@ -154,11 +154,26 @@ fn manual_import_ocr_reads_gold_small_labels_and_amounts() {
             .0
             .text;
         let normalized = recognized.split_whitespace().collect::<Vec<_>>().join(" ");
+        let observations = fndr_lib::inference::extraction_evidence::source_observations_from_ocr(
+            &recognized,
+            "Meta glasses import",
+        )
+        .expect("source observations from accepted OCR");
+        let quoted = observations
+            .statements
+            .iter()
+            .map(|statement| statement.quote.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         for fact in facts {
             assert!(
                 normalized.contains(fact),
                 "{id} did not retain the labeled fact {fact:?}"
             );
+            assert!(quoted.contains(fact), "{id} did not cite {fact:?} from OCR");
         }
     }
 }

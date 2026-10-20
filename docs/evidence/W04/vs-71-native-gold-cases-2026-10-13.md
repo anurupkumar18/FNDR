@@ -64,3 +64,19 @@ A fresh, capture-paused knowledge-worker Lab profile ran the same native gold ba
 | `pdf_paper-04` | The improvement was described without the twelve-percent amount or top-five measure. | The comparison against either signal alone on a held-out set was missing. | The card said only `results analysis`; the longer context described a generic experiment. It was not useful for answering the labeled question. |
 
 All three records stored `vision_semantic_extraction_failed` as an import diagnostic. Home rendered that machine marker as a suggested `Fix:` task for the chat and paper threads. That display failure is separate from the source-fidelity gaps and is addressed by filtering legacy import diagnostics from Resume suggestions and keeping future import diagnostics in `raw_evidence`. With the rebuilt native backend, Home showed no `Fix: vision_semantic_extraction_failed` suggestion for those legacy records or a newly imported chat fixture. Home also grouped the article and paper imports by the shared file suffix `04 png`; that naming issue remains open for work-identity review. A 10/12 mechanical retrieval score does not imply the saved memory text is faithful or useful.
+
+## Bounded source observation trial
+
+After ADR 032, the explicit image-import path retained at most six source-hashed OCR observations in each imported memory. The native gold batch ran in a freshly seeded, capture-paused knowledge-worker Quality Lab profile with the rebuilt backend and installed local models. It completed 3/3 fixtures, 10/12 mechanical checks passed, 2 needed review, 0 were not run, and 0 fixture errors occurred.
+
+| Fixture | Exact Search | Paraphrase Search | Grounded Ask | Unsupported Ask |
+| --- | --- | --- | --- | --- |
+| `browser_article-04` | Pass, rank 1 | Pass, rank 1 | Pass, target cited and not refused | Pass, refused |
+| `chat_mock-01` | Pass, rank 1 | Review, target rank 7 | Review, target cited but verifier refused | Pass, refused |
+| `pdf_paper-04` | Pass, rank 1 | Pass, rank 2 | Pass, target cited and not refused | Pass, refused |
+
+The browser's saved quote contains faster search indexing, memory-leak repair, and the background-worker qualifier. The paper's quote contains the twelve-percent top-five result and comparison against either signal alone on a held-out set. The chat quotes retain both message bodies and the names, but Apple Vision placed the two speaker labels before the message lines. Their order alone does not establish who said each line. The generated card and context still omit or distort these facts, so the observations are a separate citation source, not proof that the visible memory is faithful.
+
+The chat grounded Ask stopped at `not_enough_evidence: all hits below confidence threshold`, before the cited observations reached answer composition. The browser and paper reached a `partial_answer` verifier outcome and returned nonrefusals. The Lab's check confirms citation and nonrefusal, not factual answer accuracy. Earlier gold batches scored 9/12 to 11/12 under different seed/model runs; this 10/12 result is not a controlled gain estimate. The chat paraphrase rank and verifier refusal remain open retrieval work. No global confidence threshold or embedding contract was changed.
+
+Verification for this trial: the real Apple Vision fixture test passed 1/1 and asserted the selected source quotes contain all labeled facts; `inference::extraction_evidence::tests` passed 15/15; `context_runtime::composer::tests` passed 7/7; `cargo build --no-default-features` passed; `npm test -- src/dev/docsDrift.test.ts` passed 8/8; Rust formatting and `git diff --check` passed. The native UI run above exercised import, OCR, fallback extraction, storage, Search, and Ask in the isolated profile. It did not test live screen capture or the owner vault.

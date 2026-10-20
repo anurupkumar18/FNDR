@@ -179,6 +179,13 @@ pub async fn run_memory_journey_query(
                 .chain(composed.evidence.errors.iter().map(|item| &item.memory_ids))
                 .chain(composed.evidence.todos.iter().map(|item| &item.memory_ids))
                 .chain(composed.evidence.urls.iter().map(|item| &item.memory_ids))
+                .chain(
+                    composed
+                        .evidence
+                        .source_statements
+                        .iter()
+                        .map(|item| &item.memory_ids),
+                )
             {
                 citation_ids.extend(ids.iter().cloned());
             }

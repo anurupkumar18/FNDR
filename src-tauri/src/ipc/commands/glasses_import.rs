@@ -6,6 +6,7 @@
 use super::common::shared_embedder;
 use crate::config::DEFAULT_IMAGE_EMBEDDING_DIM;
 use crate::embedding::{embed_imported_image, EMBEDDING_DIM};
+use crate::inference::extraction_evidence::source_observations_from_ocr;
 use crate::inference::vlm_router::{
     should_run_vlm, vlm_capability_label, vlm_runtime_status_label, VlmRouteDecision, VlmRouteInput,
 };
@@ -419,6 +420,11 @@ pub(crate) async fn import_meta_glasses_photo_at_path(
     raw_evidence_json["host_supports_vlm"] = json!(host_supports_qwen_vlm);
     raw_evidence_json["pressure_reason"] = json!(skip_reason);
     raw_evidence_json["extraction_issues"] = json!(&extraction_issues);
+    if include_ocr {
+        if let Some(observations) = source_observations_from_ocr(&ocr_text, APP_LABEL) {
+            raw_evidence_json["source_evidence"] = json!(observations);
+        }
+    }
     raw_evidence_json["visual_semantics_grounded"] = json!(visual_semantics_grounded);
     raw_evidence_json["visual_understanding"] = json!({
         "status": if visual_semantics_grounded {
