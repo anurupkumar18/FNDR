@@ -197,7 +197,11 @@ mod tests {
         }
     }
 
-    fn run(root: &Fake, budget: Budget) -> TextOutcome {
+    fn run(root: &Fake, mut budget: Budget) -> TextOutcome {
+        // Most tests exercise ordering, privacy, or character/node limits.
+        // Keep scheduler load from turning those assertions into wall-clock
+        // timing tests; the dedicated time-budget test below covers that path.
+        budget.max_time = Duration::from_secs(10);
         collect_text(&FakeTree, root, budget)
     }
 
@@ -350,7 +354,8 @@ mod tests {
     fn time_budget_stops_the_walk() {
         let mut budget = Budget::new(1_000);
         budget.max_time = Duration::ZERO;
-        let out = run(
+        let out = collect_text(
+            &FakeTree,
             &n("AXWindow", "", vec![n("AXStaticText", "late", vec![])]),
             budget,
         );
