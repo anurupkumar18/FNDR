@@ -148,7 +148,7 @@ afterEach(() => {
 
 describe("Onboarding voice download", () => {
     it("offers the natural voice ticked, naming the size and where it comes from, and starts it when the person continues", async () => {
-        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        listAvailableModels.mockResolvedValue([qwenInfo(true), minilmInfo(true)]);
         render(<Onboarding onComplete={() => {}} />);
 
         const box = (await screen.findByLabelText(/natural voice \(330 MB\)/)) as HTMLInputElement;
@@ -156,17 +156,17 @@ describe("Onboarding voice download", () => {
         expect(screen.getByText(/Hugging Face and GitHub/)).toBeInTheDocument();
         expect(ttsInstall).not.toHaveBeenCalled();
 
-        fireEvent.click(await screen.findByText(/^Skip for now/));
+        fireEvent.click(await screen.findByRole("button", { name: /Use Qwen3-VL · 2B/ }));
         await waitFor(() => expect(ttsInstall).toHaveBeenCalledWith(true));
         expect(ttsInstall).toHaveBeenCalledTimes(1);
     });
 
     it("downloads nothing when the box is unticked", async () => {
-        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        listAvailableModels.mockResolvedValue([qwenInfo(true), minilmInfo(true)]);
         render(<Onboarding onComplete={() => {}} />);
 
         fireEvent.click(await screen.findByLabelText(/natural voice/));
-        fireEvent.click(await screen.findByText(/^Skip for now/));
+        fireEvent.click(await screen.findByRole("button", { name: /Use Qwen3-VL · 2B/ }));
         await waitFor(() => expect(saveOnboardingState).toHaveBeenCalled());
         expect(ttsInstall).not.toHaveBeenCalled();
     });
@@ -182,6 +182,15 @@ describe("Onboarding voice download", () => {
 });
 
 describe("Onboarding model step", () => {
+    it("explains that a model is required and does not offer a skip loop", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: "Select your local AI model" })).toBeInTheDocument();
+        expect(screen.getByText(/choose a local model to finish setup/i)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /^Skip for now/ })).toBeNull();
+    });
+
     it("uses available Apple text inference without downloading Qwen and still offers Qwen", async () => {
         getAppleModelStatus.mockResolvedValue({ availability: "available", enabled: true });
         listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);

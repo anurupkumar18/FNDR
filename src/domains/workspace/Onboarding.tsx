@@ -818,6 +818,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 Downloading connects to Hugging Face. After the model files are installed, supported analysis
                 runs on this Mac. Optional helpers for transcription and TTS are loaded only when needed.
             </p>
+            <p className="ob-subtitle">
+                Choose a local model to finish setup. You can quit FNDR and return to this step later.
+            </p>
 
             {!isDownloading && (
                 <div className="ob-model-cards">
@@ -942,31 +945,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             ? `Use ${selected?.name}`
                             : `Download ${selected?.name ?? ""} · ${selected?.size_label ?? ""}`}
                     </button>
-                    <button
-                        className="ob-btn-ghost"
-                        onClick={() => {
-                            beginVoice();
-                            onSave({ ...state, step: "permissions" }, true);
-                        }}
-                    >
-                        {embedderMissing
-                            ? "Skip for now (capture stays paused until the search model is installed)"
-                            : "Skip for now"}
-                    </button>
                 </>
             )}
 
-            {isDownloading && (
-                <button
-                    className="ob-btn-ghost"
-                    onClick={() => {
-                        beginVoice();
-                        onSave({ ...state, step: "permissions" }, true);
-                    }}
-                >
-                    Skip for now (downloads continue in the background)
-                </button>
-            )}
         </>
     );
 }
