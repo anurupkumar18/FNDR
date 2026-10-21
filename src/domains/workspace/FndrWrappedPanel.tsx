@@ -8,6 +8,7 @@ import {
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./FndrWrappedPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
@@ -430,7 +431,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                                 );
                             })}
                         </fieldset>
-                        {error && <p className="wrapped-selection-error" role="alert">{error}</p>}
+                        {error && <PanelState kind="error" title="FNDR Wrapped could not build a recap" description={error} action={{ label: "Try again", onAction: () => void loadWrapped() }} />}
                         {wrappedActivity && (
                             <ActivityTrace
                                 trace={wrappedActivity}
@@ -438,9 +439,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                                 announce={!error}
                             />
                         )}
-                        <button type="button" className="wrapped-start-btn" onClick={() => void loadWrapped()} disabled={loading}>
-                            {loading ? "Building recap…" : "Start Wrapped"}
-                        </button>
+                        {loading ? <PanelState kind="loading" title="Building FNDR Wrapped" description="Summarizing this week’s local activity." /> : <button type="button" className="wrapped-start-btn" onClick={() => void loadWrapped()}>Start Wrapped</button>}
                     </section>
                 </main>
             ) : (

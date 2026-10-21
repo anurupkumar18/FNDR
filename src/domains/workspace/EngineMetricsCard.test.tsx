@@ -103,6 +103,19 @@ describe("EngineMetricsCard", () => {
 
     afterEach(() => cleanup());
 
+    it("shows the local first imported answer time in diagnostics", async () => {
+        const snapshot = runtimeSnapshot();
+        snapshot.aggregates.import_first_answer = {
+            n: 1, sum_ms: 3200, max_ms: 3200, avg_ms: 3200,
+            ewma_ms: 3200, p50_ms: 3200, p95_ms: 3200,
+        };
+        snapshot.counters.import_first_answer_count = 1;
+        mocks.getRuntimeMetrics.mockResolvedValue(snapshot);
+        render(<EngineMetricsCard enabled />);
+        expect(await screen.findByText("First imported answer")).toBeInTheDocument();
+        expect(screen.getByText("3.2 seconds · 1 opened result")).toBeInTheDocument();
+    });
+
     it("shows the observed diagnostics request while the first refresh is pending", async () => {
         mocks.getRuntimeMetrics.mockReturnValue(new Promise(() => {}));
 

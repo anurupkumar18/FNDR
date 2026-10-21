@@ -1,0 +1,196 @@
+.hand-off-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1060;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: color-mix(in srgb, var(--panel-bg) 55%, transparent);
+    backdrop-filter: blur(6px);
+}
+
+.hand-off-panel {
+    width: min(560px, 100%);
+    max-height: min(760px, calc(100vh - 32px));
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-md, 12px);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.hand-off-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.hand-off-header h2 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.hand-off-close {
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1.3rem;
+    cursor: pointer;
+}
+
+.hand-off-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+}
+
+.hand-off-task {
+    margin: 0;
+    padding: 10px 12px;
+    border-left: 3px solid var(--rc-accent, var(--border));
+    background: var(--bg-3);
+    font-size: 0.95rem;
+    line-height: 1.45;
+}
+
+.hand-off-note {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.hand-off-goals {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.hand-off-goal {
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.hand-off-goal[aria-pressed="true"] {
+    border-color: var(--rc-accent, var(--text-primary));
+    background: var(--bg-3);
+    font-weight: 600;
+}
+
+.hand-off-subhead {
+    margin: 4px 0 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.hand-off-items,
+.hand-off-files {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.hand-off-items li + li,
+.hand-off-files li + li {
+    border-top: 1px solid var(--border);
+}
+
+.hand-off-items label {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 12px;
+    cursor: pointer;
+}
+
+.hand-off-item-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+.hand-off-item-kind {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+.hand-off-files li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
+.hand-off-install {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+
+.hand-off-install p {
+    margin: 0;
+}
+
+.hand-off-problem {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--danger-light, var(--text-primary));
+}
+
+.hand-off-working {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+}
+
+.hand-off-result {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.hand-off-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.hand-off-actions .ui-action-btn {
+    min-height: 44px;
+    padding-inline: 14px;
+}
+
+.hand-off-primary:not(:disabled) {
+    font-weight: 600;
+}

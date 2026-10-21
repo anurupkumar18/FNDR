@@ -11,6 +11,8 @@ const ipcMocks = vi.hoisted(() => ({
     fndrAnswer: vi.fn(),
     getClipboardHistory: vi.fn(),
     omnibarOpenMemory: vi.fn(),
+    notchDoRequest: vi.fn(),
+    notchDoSkills: vi.fn(),
     pasteClipboardEntry: vi.fn(),
     searchMemoryCards: vi.fn(),
 }));
@@ -61,6 +63,64 @@ describe("OmnibarApp", () => {
         ipcMocks.pasteClipboardEntry.mockResolvedValue(undefined);
         ipcMocks.dismissOmnibar.mockResolvedValue(undefined);
         ipcMocks.omnibarOpenMemory.mockResolvedValue(undefined);
+        ipcMocks.notchDoRequest.mockResolvedValue(undefined);
+        ipcMocks.notchDoSkills.mockResolvedValue([]);
+    });
+
+    it("hands a request to do something to Notch Do from a first row, and searches the rest", async () => {
+        ipcMocks.searchMemoryCards.mockResolvedValue([memoryCard("m1", "Notes from Monday")]);
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+
+        fireEvent.change(box, { target: { value: "open Notes" } });
+        expect(await screen.findByRole("option", { name: /Do it: open Notes/ })).toHaveAttribute("aria-selected", "true");
+        await screen.findByText("Notes from Monday");
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.notchDoRequest).toHaveBeenCalledWith("open Notes"));
+        expect(ipcMocks.omnibarOpenMemory).not.toHaveBeenCalled();
+
+        // Down past the action opens the memory instead.
+        fireEvent.change(box, { target: { value: "open Notes" } });
+        await screen.findByText("Notes from Monday");
+        fireEvent.keyDown(box, { key: "ArrowDown" });
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.omnibarOpenMemory).toHaveBeenCalledWith("m1"));
+    });
+
+    it("offers no action for a search, and says why Notch Do refused one", async () => {
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        fireEvent.change(box, { target: { value: "pandas import error" } });
+        await waitFor(() => expect(ipcMocks.searchMemoryCards).toHaveBeenCalled());
+        expect(screen.queryByRole("option", { name: /Do it/ })).toBeNull();
+
+        ipcMocks.notchDoRequest.mockRejectedValue('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+        fireEvent.change(box, { target: { value: "look up the weather" } });
+        fireEvent.click(await screen.findByRole("option", { name: /Do it: look up the weather/ }));
+        expect(await screen.findByText('Turn on "Operate my Mac" in Settings for FNDR to do this.')).toBeInTheDocument();
+    });
+
+    it("runs a saved skill by its whole name, or by its start after \"run\"", async () => {
+        ipcMocks.notchDoSkills.mockResolvedValue([
+            { id: "s1", name: "Monday setup", request: "open Notes and Slack", steps: ["Open Notes", "Open Slack"], savedAt: "" },
+        ]);
+        render(<OmnibarApp />);
+        const box = screen.getByRole("searchbox", { name: "Search your memory" });
+        await waitFor(() => expect(ipcMocks.notchDoSkills).toHaveBeenCalled());
+
+        for (const typed of ["run mon", "run my Monday setup", "monday SETUP", "the Monday setup"]) {
+            fireEvent.change(box, { target: { value: typed } });
+            const row = await screen.findByRole("option", { name: /Run skill: Monday setup/ });
+            expect(row).toHaveTextContent("Open Notes · Open Slack");
+        }
+        fireEvent.keyDown(box, { key: "Enter" });
+        await waitFor(() => expect(ipcMocks.notchDoRequest).toHaveBeenCalledWith("Monday setup"));
+
+        for (const typed of ["mon", "monday", "run mo", "monday standup notes", "open Notes"]) {
+            fireEvent.change(box, { target: { value: typed } });
+            await waitFor(() => expect(screen.queryByRole("option", { name: /Run skill/ })).toBeNull());
+        }
+        expect(screen.getByRole("option", { name: /Do it: open Notes/ })).toBeInTheDocument();
     });
 
     afterEach(() => cleanup());

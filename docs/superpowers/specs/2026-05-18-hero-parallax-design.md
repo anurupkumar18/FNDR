@@ -1,6 +1,8 @@
 # Hero Parallax & Cinematic Background Design
 *2026-05-18*
 
+Historical exploration. The current Home and Resume design contract is in `docs/product/DESIGN_DIRECTION.md`; it supersedes this layout's full-screen hero, CTAs and scroll hint.
+
 ## Context
 
 The FNDR home screen hero currently shows a static "Memory, developed." heading with two CTAs over a radial-gradient background and a drifting constellation SVG. The AuroraWallpaper WebGL background already tracks mouse position and click ripples, but:

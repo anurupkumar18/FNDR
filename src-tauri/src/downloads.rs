@@ -370,7 +370,7 @@ fn pick_source_memory(
     let in_window: Vec<&MemoryRecord> = candidates
         .iter()
         .filter(|memory| {
-            crate::capture::macos::is_browser_app(&memory.app_name)
+            crate::browsers::is_browser(&memory.app_name)
                 && memory.timestamp >= window_start
                 && memory.timestamp <= download_ms
         })

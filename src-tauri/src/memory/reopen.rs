@@ -522,9 +522,10 @@ pub fn reopen_target_from_stored_evidence(record: &crate::storage::MemoryRecord)
 /// A strictly more specific target than the stored one, or `None`. Unlike
 /// `merge_reopen_targets`, the stored target wins every tie, so a capture-time
 /// document path or passage is never swapped for a guess from
-/// `files_touched`. Agent notes never get a target (VS-68).
+/// `files_touched`. Leaf rows (agent notes and imports) keep only their
+/// explicit target.
 pub fn upgraded_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ReopenTarget> {
-    if record.is_agent_note() {
+    if record.is_leaf_row() {
         return None;
     }
     let mut stored = record.reopen_target();
@@ -695,6 +696,8 @@ pub enum ReopenOutcome {
         target: String,
     },
     NoTarget,
+    /// No source was opened because the id, its eligibility, or its store was unavailable.
+    Unavailable,
 }
 
 impl ReopenOutcome {
@@ -1552,6 +1555,7 @@ mod tests {
                 },
             ),
             (r#"{"kind":"no_target"}"#, ReopenOutcome::NoTarget),
+            (r#"{"kind":"unavailable"}"#, ReopenOutcome::Unavailable),
         ];
         for (json, value) in cases {
             assert_eq!(serde_json::to_string(value).expect("ser"), *json, "{json}");
@@ -2124,5 +2128,13 @@ mod tests {
         note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
         note.url = Some("https://example.com".into());
         assert!(upgraded_reopen_target(&note).is_none());
+    }
+
+    #[test]
+    fn upgraded_reopen_target_skips_imported_rows() {
+        let mut imported = stored_app_only("com.apple.TextEdit", "TextEdit");
+        imported.source_type = format!("{}notes", crate::storage::IMPORT_SOURCE_TYPE_PREFIX);
+        imported.url = Some("https://example.com".into());
+        assert!(upgraded_reopen_target(&imported).is_none());
     }
 }

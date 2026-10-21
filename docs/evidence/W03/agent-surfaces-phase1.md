@@ -269,3 +269,18 @@ The first cause also broke Screen Guide's ChatGPT answers. Since 2026-10-07 that
 ### Still not run
 
 Stop and quit during a run, the twenty-task set, and Spotify or Music playback. Stop and quit need the FNDR window.
+
+### Follow-up the same evening: findings 4 and 5
+
+Built: the planner is told the name of the app in front (never a blocklisted app or FNDR), and a finished run adds what its last operate step reported, marked "Reported:". Prompts `operator_plan` and `operator_step` changed; `LLM_PROMPT_VERSION` is v8.
+
+Live: "search for running shoes on this page" and "summarize this article", with no app named, were both planned as an operate step in Google Chrome. Before, the first became a Google search. The operate steps themselves could not be checked: the helper answered `cgWindowNotFound` for Chrome (Chrome reported no windows at the time), so whether the summary shows in the result is covered by a unit test only.
+
+Also seen in that run: with no page to read, the model typed the words into Chrome's address bar and pressed Return. That is the "search typing runs" tier working as written, and it is not what "on this page" asks for. Open: an address bar is not a page's search box.
+
+### Later that evening: rechecked live
+
+- "Summarize this article", no app named: the run ended with "Done: ... Reported:" followed by a three-sentence summary of the window in front, cut at 400 characters. The app in front was not the one intended (another app had come forward before the run), which is the feature working: "this" means what is in front.
+- "Search for running shoes on this page": planned in Google Chrome. The model switched to the page's tab and did not use the address bar. It then tried a click that needs a yes, got a no, and stopped.
+- Policy: an address typed into a browser's address bar now waits for a tap; words typed there still run as a search. `operator_step` tells the model the address bar is not a page's search box. `LLM_PROMPT_VERSION` is v9.
+

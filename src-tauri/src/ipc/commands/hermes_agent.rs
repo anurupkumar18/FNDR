@@ -1,7 +1,6 @@
 //! Hermes bridge, gateway, and chat Tauri commands.
 
 use crate::http_util::{llm_http_client, local_service_client, post_json_response};
-use crate::search::MemoryCard;
 use crate::AppState;
 use parking_lot::Mutex as AgentMutex;
 use serde::{Deserialize, Serialize};
@@ -12,23 +11,6 @@ use std::sync::{Arc, OnceLock as AgentOnceLock};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 use tokio::time::{Duration, Instant};
-
-use super::common::{strip_internal_fndr_results, truncate_chars};
-use super::search::{memory_card_from_result, refine_memory_card_titles};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesAppContext {
-    pub app_name: String,
-    pub memory_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HermesMemoryDigest {
-    pub title: String,
-    pub app_name: String,
-    pub summary: String,
-    pub timestamp: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HermesBridgeStatus {
@@ -63,12 +45,9 @@ pub struct HermesBridgeStatus {
     pub codex_auth_path: String,
     pub profile_name: Option<String>,
     pub focus_task: Option<String>,
-    pub recent_memory_count: u32,
     pub open_task_count: u32,
     /// True when Ollama is reachable and configured — chat works without Hermes CLI.
     pub direct_ollama_ready: bool,
-    pub top_apps: Vec<HermesAppContext>,
-    pub recent_memories: Vec<HermesMemoryDigest>,
     pub last_error: Option<String>,
     pub install_command: String,
     /// `stopped`, `starting`, `running`, `restarting` or `crashed`.
@@ -402,17 +381,32 @@ fn detect_ollama_executable() -> Option<PathBuf> {
 
 /// Codex binaries bundled inside OpenAI's desktop apps. They ship a working
 /// native build even when a global npm install has lost its platform binary.
-const BUNDLED_CODEX_CANDIDATES: &[&str] = &[
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
-];
+const CODEX_APP_ROOTS: &[&str] = &["/Applications/ChatGPT.app", "/Applications/Codex.app"];
+
+/// Where those apps keep their Codex: `Resources/codex-cli/bin/codex` since
+/// the ChatGPT 26.1002 update, `Resources/codex` before it.
+fn bundled_codex_paths(app_root: &Path) -> [PathBuf; 2] {
+    let resources = app_root.join("Contents/Resources");
+    [
+        resources.join("codex-cli/bin/codex"),
+        resources.join("codex"),
+    ]
+}
 
 /// First Codex that actually runs; otherwise the first one found, so callers
 /// can report a broken install instead of a missing one.
 pub(crate) fn detect_codex_executable() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = existing_executable_path("codex").into_iter().collect();
     candidates.extend(common_executable_candidates("codex"));
-    candidates.extend(BUNDLED_CODEX_CANDIDATES.iter().map(PathBuf::from));
+    candidates.extend(
+        CODEX_APP_ROOTS
+            .iter()
+            .flat_map(|root| bundled_codex_paths(Path::new(root))),
+    );
+    // The official installer (chatgpt.com/codex/install.sh) links here.
+    if let Some(home) = user_home_dir() {
+        candidates.push(home.join(".codex/packages/standalone/current/bin/codex"));
+    }
     candidates.retain(|candidate| candidate.is_file());
     candidates.dedup();
 
@@ -477,7 +471,7 @@ fn configure_uv_command(command: &mut Command, state: &AppState) -> Result<(), S
     Ok(())
 }
 
-fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
+pub(crate) fn ensure_uv_available(state: &AppState) -> Result<PathBuf, String> {
     if let Some(path) = detect_uv_executable(state) {
         return Ok(path);
     }
@@ -913,53 +907,8 @@ fn file_modified_at_ms(path: &PathBuf) -> Option<i64> {
 async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStatus, String> {
     let context_path = hermes_project_context_path(state);
     let home_dir = hermes_home_dir(state);
-    // Memory and task counts are decoration; a vault that can't be read
-    // (locked, migrating) must not hide Hermes setup.
-    let recent_results = state
-        .store
-        .list_recent_results(18, None)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "hermes:status_recent_memories_unavailable");
-            Vec::new()
-        });
-    let mut recent_memories: Vec<MemoryCard> = strip_internal_fndr_results(recent_results)
-        .into_iter()
-        .map(memory_card_from_result)
-        .collect();
-    refine_memory_card_titles(&mut recent_memories);
-
-    let mut app_counts: HashMap<String, usize> = HashMap::new();
-    for memory in &recent_memories {
-        *app_counts.entry(memory.app_name.clone()).or_insert(0) += 1;
-    }
-
-    let mut top_apps: Vec<HermesAppContext> = app_counts
-        .into_iter()
-        .map(|(app_name, memory_count)| HermesAppContext {
-            app_name,
-            memory_count: memory_count as u32,
-        })
-        .collect();
-    top_apps.sort_by(|left, right| {
-        right
-            .memory_count
-            .cmp(&left.memory_count)
-            .then_with(|| left.app_name.cmp(&right.app_name))
-    });
-    top_apps.truncate(6);
-
-    let recent_memories = recent_memories
-        .into_iter()
-        .take(6)
-        .map(|memory| HermesMemoryDigest {
-            title: memory.title,
-            app_name: memory.app_name,
-            summary: truncate_chars(&memory.summary, 180),
-            timestamp: memory.timestamp,
-        })
-        .collect::<Vec<_>>();
-
+    // The task count is decoration; a vault that can't be read (locked,
+    // migrating) must not hide Hermes setup.
     let open_task_count = state
         .store
         .list_tasks()
@@ -1037,10 +986,7 @@ async fn build_hermes_bridge_status(state: &AppState) -> Result<HermesBridgeStat
         codex_auth_path: codex_auth_path.display().to_string(),
         profile_name: read_hermes_profile_name(state),
         focus_task: state.focus_task.read().clone(),
-        recent_memory_count: recent_memories.len() as u32,
         open_task_count,
-        top_apps,
-        recent_memories,
         last_error,
         install_command: "FNDR installs a pinned Hermes into its own app data.".to_string(),
         gateway_state,
@@ -1822,6 +1768,19 @@ async fn deliver_hermes_message(
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn bundled_codex_is_looked_up_in_the_current_and_the_old_location() {
+        let paths = bundled_codex_paths(Path::new("/Applications/ChatGPT.app"));
+        assert_eq!(
+            paths[0],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        );
+        assert_eq!(
+            paths[1],
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex")
+        );
+    }
+
     /// Regression: status read the supervisor three times in one struct
     /// literal; the first guard was still held, so the second lock deadlocked
     /// and the Agent tab never left "Not set up".
@@ -1843,11 +1802,11 @@ mod tests {
     fn an_answer_reports_what_hermes_did_on_the_way_once_each_in_order() {
         // The shape the pinned gateway returned in the 2026-10-07 live check.
         let response = serde_json::json!({ "output": [
-            { "type": "function_call", "name": "mcp_fndr_memory_search_full_context", "arguments": "{}", "call_id": "a" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_search", "arguments": "{}", "call_id": "a" },
             { "type": "function_call_output", "call_id": "a", "output": "..." },
             { "type": "function_call", "name": "todo", "arguments": "{}", "call_id": "b" },
             { "type": "function_call_output", "call_id": "b", "output": "..." },
-            { "type": "function_call", "name": "mcp_fndr_memory_timeline", "arguments": "{}", "call_id": "c" },
+            { "type": "function_call", "name": "mcp_fndr_fndr_timeline", "arguments": "{}", "call_id": "c" },
             { "type": "function_call", "name": "terminal", "arguments": "{}", "call_id": "d" },
             { "type": "message", "content": [{ "type": "output_text", "text": "Done." }] }
         ]});

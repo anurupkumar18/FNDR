@@ -41,7 +41,7 @@ jobs:
       TZ: America/Denver
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -50,11 +50,23 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Builds of llama.cpp configured against OpenSSL 4 must not come back.
+          key: openssl3
           cache-on-failure: true
 
       # lance-encoding's build script requires protoc.
       - name: Install protobuf
         run: brew install protobuf
+
+      # llama.cpp's bundled HTTP client does not compile against OpenSSL 4,
+      # which the macOS image carries since 2026-10-13. CMake finds 3 through
+      # its root; CPATH gives its headers to the targets CMake does not.
+      - name: Use OpenSSL 3
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          prefix="$(brew --prefix openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$prefix" >> "$GITHUB_ENV"
+          echo "CPATH=$prefix/include" >> "$GITHUB_ENV"
 
       # tauri::generate_context! requires frontendDist ("../dist") to exist.
       - name: Create empty frontend dist

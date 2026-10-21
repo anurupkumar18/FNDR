@@ -7,10 +7,13 @@ import {
     copyClipboardEntry,
     dismissOmnibar,
     fndrAnswer,
+    notchDoRequest,
+    notchDoSkills,
     getClipboardHistory,
     omnibarOpenMemory,
     pasteClipboardEntry,
     searchMemoryCards,
+    type NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 import {
@@ -62,6 +65,38 @@ function answerGroundingLabel(answer: ComposedAnswer): string {
         return `Partial answer from ${memories}`;
     }
     return "Limited evidence in your local memory";
+}
+
+/** Words a request to do something starts with. */
+const ACTION_OPENERS = [
+    "open", "launch", "start", "look up", "search for", "google", "play", "go to", "switch to",
+    "show", "pull up", "bring up", "bring back", "set up", "save this", "save it",
+];
+
+/** The text to hand to Notch Do, when the query asks FNDR to do something. */
+export function requestToDo(query: string): string | null {
+    const text = query.trim();
+    const lower = text.toLowerCase().replace(/^(please|hey fndr|fndr)\s+/, "");
+    const asks = ACTION_OPENERS.some((opener) => lower.startsWith(`${opener} `));
+    return asks && text.split(/\s+/).length >= 2 ? text : null;
+}
+
+/** The saved skill a query asks to run: its whole name ("Monday setup"),
+ *  or, after "run", "do" or "start", its first three letters or more ("run
+ *  mon"). A bare prefix stays a memory search, so typing "notes" never runs a
+ *  skill called "Notes setup". */
+export function skillNamed(query: string, skills: NotchDoSkill[]): NotchDoSkill | null {
+    const words = query
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[.!?]+$/, "")
+        .replace(/^(please|hey fndr|fndr) /, "");
+    const asked = /^(run|do|start) /.test(words);
+    const said = words.replace(/^(run|do|start) /, "").replace(/^(my|the) /, "");
+    if (said.length < 3) return null;
+    const name = (skill: NotchDoSkill) => skill.name.toLowerCase().replace(/^(my|the) /, "");
+    return skills.find((skill) => (asked ? name(skill).startsWith(said) : name(skill) === said)) ?? null;
 }
 
 function matchCountLabel(count: number): string {
@@ -118,8 +153,19 @@ export function OmnibarApp() {
         setActivityTrace(null);
     }, []);
 
+    // Skills are read each time the command bar opens, so one saved in the
+    // notch or Settings is offered at once.
+    const [skills, setSkills] = useState<NotchDoSkill[]>([]);
+    const loadSkills = useCallback(() => {
+        void notchDoSkills()
+            .then(setSkills)
+            .catch(() => setSkills([]));
+    }, []);
+    useEffect(loadSkills, [loadSkills]);
+
     useTauriEvent<void>(OMNIBAR_FOCUS_EVENT, () => {
         reset();
+        loadSkills();
         inputRef.current?.focus();
     });
 
@@ -342,6 +388,23 @@ export function OmnibarApp() {
         }
     }, [selectedIndex]);
 
+    const doIt = useCallback((text: string) => {
+        const seq = ++actionSeq.current;
+        setFeedback(null);
+        void notchDoRequest(text)
+            .then(() => {
+                if (actionSeq.current === seq) reset();
+            })
+            .catch((reason: unknown) => {
+                if (actionSeq.current === seq) {
+                    setFeedback({
+                        kind: "error",
+                        message: typeof reason === "string" ? reason : "Notch Do could not take that. Try again.",
+                    });
+                }
+            });
+    }, [reset]);
+
     const openMemory = useCallback(
         (memoryId: string) => {
             const seq = ++actionSeq.current;
@@ -516,6 +579,13 @@ export function OmnibarApp() {
         inputRef.current?.focus();
     }, []);
 
+    // A saved skill's name, or a request to do something, gets a first row
+    // that hands it to Notch Do.
+    const typingSearch = surface === "memory" && mode.kind === "search";
+    const skill = typingSearch ? skillNamed(query, skills) : null;
+    const doText = skill ? skill.name : typingSearch ? requestToDo(query) : null;
+    const actionRows = doText ? 1 : 0;
+
     const handleKeyDown = (event: React.KeyboardEvent) => {
         if (event.key === "Escape") {
             event.preventDefault();
@@ -536,7 +606,7 @@ export function OmnibarApp() {
             return;
         }
         const listLength =
-            surface === "memory" ? results.length : clips.length;
+            surface === "memory" ? results.length + actionRows : clips.length;
         if (event.key === "ArrowDown") {
             event.preventDefault();
             if (listLength > 0) {
@@ -561,8 +631,10 @@ export function OmnibarApp() {
             }
             if (event.metaKey || event.ctrlKey) {
                 ask();
-            } else if (results[selectedIndex]) {
-                openMemory(results[selectedIndex].id);
+            } else if (doText && selectedIndex === 0) {
+                doIt(doText);
+            } else if (results[selectedIndex - actionRows]) {
+                openMemory(results[selectedIndex - actionRows].id);
             }
         }
     };
@@ -590,7 +662,7 @@ export function OmnibarApp() {
                     }
                     aria-controls={`omnibar-${surface}-results`}
                     aria-activedescendant={
-                        mode.kind === "search" && (surface === "memory" ? results : clips).length
+                        mode.kind === "search" && (surface === "memory" ? results.length + actionRows : clips.length)
                             ? `omnibar-${surface}-result-${selectedIndex}`
                             : undefined
                     }
@@ -648,16 +720,37 @@ export function OmnibarApp() {
                     role="listbox"
                     aria-label="Memory matches"
                 >
+                    {doText && (
+                        <button
+                            id="omnibar-memory-result-0"
+                            type="button"
+                            role="option"
+                            aria-selected={selectedIndex === 0}
+                            data-selected={selectedIndex === 0}
+                            className="omnibar-result omnibar-result-do"
+                            onMouseEnter={() => setSelectedIndex(0)}
+                            onClick={() => doIt(doText)}
+                        >
+                            <span className="omnibar-result-title">
+                                {skill ? `Run skill: ${skill.name}` : `Do it: ${doText}`}
+                            </span>
+                            <span className="omnibar-result-meta">
+                                {skill
+                                    ? skill.steps.join(" · ")
+                                    : "Notch Do plans it, and asks before anything that needs a yes"}
+                            </span>
+                        </button>
+                    )}
                     {results.map((card, index) => (
                         <button
                             key={card.id}
-                            id={`omnibar-memory-result-${index}`}
+                            id={`omnibar-memory-result-${index + actionRows}`}
                             type="button"
                             role="option"
-                            aria-selected={index === selectedIndex}
-                            data-selected={index === selectedIndex}
+                            aria-selected={index + actionRows === selectedIndex}
+                            data-selected={index + actionRows === selectedIndex}
                             className="omnibar-result"
-                            onMouseEnter={() => setSelectedIndex(index)}
+                            onMouseEnter={() => setSelectedIndex(index + actionRows)}
                             onClick={() => openMemory(card.id)}
                         >
                             <span className="omnibar-result-title">

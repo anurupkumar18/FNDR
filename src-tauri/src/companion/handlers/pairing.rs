@@ -1,10 +1,8 @@
-//! Pairing endpoints — the only routes mounted *without* the auth middleware.
-//!
-//! `POST /v1/pair/start` is reserved for the Mac-side React UI. iOS only ever
-//! hits `POST /v1/pair/complete`
-//! with the short code it scanned from the Mac's QR.
+//! The pairing endpoint, the only route mounted without the auth middleware.
+//! The Mac issues a code (`companion_start_pairing`); the phone posts it to
+//! `POST /v1/pair/complete` after scanning the Mac's QR.
 
-use crate::companion::dto::{PairCompleteRequest, PairCompleteResponse, PairStartResponse};
+use crate::companion::dto::{PairCompleteRequest, PairCompleteResponse};
 use crate::companion::errors::{CompanionError, CompanionResult};
 use crate::companion::pairing::{PairingEndpointHint, PairingService};
 use axum::extract::State;
@@ -15,14 +13,6 @@ use std::sync::Arc;
 pub struct PairingHttpState {
     pub service: Arc<PairingService>,
     pub endpoint_hint: PairingEndpointHint,
-}
-
-pub async fn start(
-    State(state): State<Arc<PairingHttpState>>,
-) -> CompanionResult<Json<PairStartResponse>> {
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let resp = state.service.start(now_ms, &state.endpoint_hint);
-    Ok(Json(resp))
 }
 
 pub async fn complete(

@@ -35,6 +35,7 @@ describe("reopenOutcomeMessage", () => {
         ],
         [{ kind: "blocked", target: "chrome://settings" }, "FNDR does not open this kind of link."],
         [{ kind: "no_target" }, "Nothing to reopen for this memory."],
+        [{ kind: "unavailable" }, "This source is unavailable to reopen right now."],
     ];
 
     it("returns one line for every outcome", () => {

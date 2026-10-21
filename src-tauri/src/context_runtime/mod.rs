@@ -25,6 +25,7 @@ pub mod fusion;
 pub mod graph_plan;
 pub mod graph_route;
 pub mod keyword_route;
+pub mod proactive;
 pub mod query_filters;
 pub mod query_plan;
 pub mod retrieval_routes;
@@ -164,8 +165,8 @@ pub async fn sync_memory_record(
     record: &MemoryRecord,
     source_hint: Option<&str>,
 ) -> Result<ActivityEvent, String> {
-    if record.is_agent_note() {
-        return Err("Assistant notes cannot become derived activity.".to_string());
+    if record.is_leaf_row() {
+        return Err("Leaf memories cannot become derived activity.".to_string());
     }
     let _ = state.graph.ingest_memory(record).await;
 
@@ -407,7 +408,7 @@ pub(crate) fn graph_memory_references(metadata: &serde_json::Value) -> Option<Ve
 /// Eligibility for derived/agent context is stricter than a local search card.
 pub(crate) fn context_memory_is_visible(record: &MemoryRecord, blocklist: &[String]) -> bool {
     retrieve::memory_is_visible(record, blocklist)
-        && !record.is_agent_note()
+        && !record.is_leaf_row()
         && !crate::privacy::Blocklist::is_sensitive_context(
             record.url.as_deref(),
             Some(&record.window_title),
@@ -654,8 +655,8 @@ pub async fn build_context_pack(
             continue;
         }
         excluded.push(ExcludedContextItem {
-            reason: if result.is_agent_note() {
-                "assistant note remains separate from derived work context".to_string()
+            reason: if result.is_leaf_row() {
+                "leaf memory remains separate from derived work context".to_string()
             } else {
                 "zero graph/entity relevance after runtime filtering".to_string()
             },
@@ -1165,7 +1166,7 @@ async fn ensure_event_for_result(
     state: &AppState,
     result: &SearchResult,
 ) -> Result<Option<ActivityEvent>, String> {
-    if result.is_agent_note() {
+    if result.is_leaf_row() {
         return Ok(None);
     }
     if let Some(event) = state
@@ -2582,13 +2583,45 @@ fn classify_source_type(record: &MemoryRecord, source_hint: Option<&str>) -> Str
 }
 
 fn classify_privacy(record: &MemoryRecord) -> PrivacyClass {
+    privacy_class_of(&record.app_name, &record.window_title, &record.clean_text)
+}
+
+/// The class of a memory from its app, window title and cleaned text; the one
+/// rule behind `classify_privacy` and the MCP recall tools.
+pub(crate) fn privacy_class_of(
+    app_name: &str,
+    window_title: &str,
+    clean_text: &str,
+) -> PrivacyClass {
+    use crate::privacy::safety_gate::{evaluate, SafetyDecision};
+
+    let visible_text = format!("{window_title}\n{clean_text}");
+    let secret_pattern =
+        evaluate(None, None, None, None, Some(&visible_text), &[]) == SafetyDecision::Redact;
+    let password_manager =
+        evaluate(Some(app_name), None, None, None, None, &[]) == SafetyDecision::SkipStorage;
+    let title = window_title.to_lowercase();
+    let login_page = [
+        "sign in",
+        "log in",
+        "login",
+        "authenticate",
+        "authorization",
+        "oauth",
+        "saml",
+        "two-factor",
+        "2fa",
+        "password reset",
+    ]
+    .iter()
+    .any(|marker| title.contains(marker));
     let lower = format!(
         "{} {} {}",
-        record.app_name.to_lowercase(),
-        record.window_title.to_lowercase(),
-        record.clean_text.to_lowercase()
+        app_name.to_lowercase(),
+        title,
+        clean_text.to_lowercase()
     );
-    if lower.contains("password") || lower.contains("secret") || lower.contains("token") {
+    if secret_pattern || password_manager || login_page {
         PrivacyClass::Secret
     } else if lower.contains("bank") || lower.contains("finance") || lower.contains("health") {
         PrivacyClass::Sensitive

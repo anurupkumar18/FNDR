@@ -17,6 +17,9 @@ pub enum AgentActionKind {
     CreateSkillCandidate,
     CreateEvalCandidate,
     ScheduleAgentJob,
+    /// Text leaves FNDR for another service or person (Slack, Linear, a mail
+    /// draft). Daily outputs register their tools under this kind.
+    SendExternalMessage,
     Unsupported,
 }
 
@@ -191,6 +194,12 @@ pub fn policy_for_action(
             "Scheduled job requires approval".to_string(),
             None,
         ),
+        AgentActionKind::SendExternalMessage => (
+            true,
+            true,
+            "Sending text outside FNDR requires approval".to_string(),
+            None,
+        ),
         AgentActionKind::Unsupported => (
             false,
             false,
@@ -233,6 +242,25 @@ mod approve_then_act_tests {
             assert!(decision.allowed, "{kind:?} should still be allowed");
             assert!(decision.requires_approval, "{kind:?} must require approval");
         }
+    }
+
+    #[test]
+    fn sending_text_outside_fndr_requires_approval_at_every_risk_level() {
+        for risk in [RiskLevel::Low, RiskLevel::Medium, RiskLevel::High] {
+            let decision = policy_for_action(
+                &AgentActionKind::SendExternalMessage,
+                &risk,
+                &AgentMode::Act,
+            );
+            assert!(decision.allowed, "{risk:?}");
+            assert!(decision.requires_approval, "{risk:?}");
+        }
+        let ask = policy_for_action(
+            &AgentActionKind::SendExternalMessage,
+            &RiskLevel::Low,
+            &AgentMode::Ask,
+        );
+        assert!(!ask.allowed);
     }
 
     #[test]

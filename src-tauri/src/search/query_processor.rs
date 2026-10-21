@@ -152,6 +152,7 @@ fn is_anchor_stop_word(token: &str) -> bool {
     matches!(
         token,
         "a" | "an"
+            | "about"
             | "and"
             | "are"
             | "as"

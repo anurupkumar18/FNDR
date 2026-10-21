@@ -7,6 +7,13 @@ containing "REWORDED_APPROVAL" asks with approval wording FNDR cannot parse. Any
 Spotify, clicking its "Buy Premium" button, and typing into Notes, then
 reports done. Every approval answer is appended to the log file passed as
 FAKE_CODEX_LOG (one JSON line: request id and the answer).
+
+Realtime voice (`thread/realtime/*`, Codex 0.162 shapes) answers only after
+`initialize` opted into `experimentalApi`, like the real server. Arguments
+after `app-server` steer it: `fake:signed_out`, `fake:usage=<percent>`,
+`fake:no_realtime` (an older Codex), `fake:no_sdp` (the answer never comes),
+`fake:drop_after_speak` (exits after the first appendSpeech) and
+`fake:log=<path>` (one JSON line per realtime request: method and params).
 """
 import json
 import os
@@ -68,17 +75,76 @@ def ask(approval_id, thread, turn, tool, args, message):
         send({"method": "item/completed", "params": {"threadId": thread, "item": dict(item, status="completed", result=result, error=None)}})
 
 
+FLAGS = [arg[len("fake:"):] for arg in sys.argv[1:] if arg.startswith("fake:")]
+
+
+def flag_value(name):
+    for item in FLAGS:
+        if item.startswith(name + "="):
+            return item[len(name) + 1:]
+    return None
+
+
+REALTIME_LOG = flag_value("log")
+VOICES = {"v1": ["juniper", "cove"], "v2": ["alloy", "marin"], "defaultV1": "cove", "defaultV2": "marin"}
+
+
+def log_realtime(method, params):
+    if REALTIME_LOG:
+        with open(REALTIME_LOG, "a") as log:
+            log.write(json.dumps({"method": method, "params": params}) + "\n")
+
+
+def realtime(request_id, method, params):
+    """One thread/realtime/* request, answered the way Codex 0.162 does."""
+    log_realtime(method, params)
+    if "no_realtime" in FLAGS or not experimental:
+        send({"id": request_id, "error": {"code": -32601, "message": "unknown method " + method}})
+        return
+    thread = params.get("threadId", "")
+    if method == "thread/realtime/listVoices":
+        send({"id": request_id, "result": {"voices": VOICES}})
+    elif method == "thread/realtime/start":
+        send({"id": request_id, "result": {}})
+        send({"method": "thread/realtime/started", "params": {"threadId": thread, "realtimeSessionId": thread, "version": "v3"}})
+        if "no_sdp" not in FLAGS:
+            send({"method": "thread/realtime/sdp", "params": {"threadId": thread, "sdp": "v=0\r\nfake-answer\r\n"}})
+    elif method == "thread/realtime/appendSpeech":
+        send({"id": request_id, "result": {}})
+        if "drop_after_speak" in FLAGS:
+            send({"method": "thread/realtime/closed", "params": {"threadId": thread, "reason": "transport closed"}})
+            sys.exit(0)
+    elif method == "thread/realtime/stop":
+        send({"id": request_id, "result": {}})
+        send({"method": "thread/realtime/closed", "params": {"threadId": thread, "reason": "stopped"}})
+    else:
+        send({"id": request_id, "result": {}})
+
+
 threads = 0
 turns = 0
+experimental = False
 while True:
     message = read()
     method, request_id, params = message.get("method"), message.get("id"), message.get("params") or {}
     if request_id is None:
         continue
     if method == "initialize":
+        experimental = bool((params.get("capabilities") or {}).get("experimentalApi"))
         send({"id": request_id, "result": {"userAgent": "fake"}})
+    elif method and method.startswith("thread/realtime/"):
+        realtime(request_id, method, params)
     elif method == "account/read":
-        send({"id": request_id, "result": {"account": {"type": "chatgpt", "email": "test@example.com"}}})
+        if "signed_out" in FLAGS:
+            send({"id": request_id, "result": {"account": None, "requiresOpenaiAuth": True}})
+        else:
+            send({"id": request_id, "result": {"account": {"type": "chatgpt", "email": "test@example.com"}}})
+    elif method == "account/rateLimits/read":
+        used = float(flag_value("usage") or 20)
+        send({"id": request_id, "result": {"rateLimits": {
+            "primary": {"usedPercent": used, "windowDurationMins": 300, "resetsAt": 1791599030},
+            "secondary": {"usedPercent": 10, "windowDurationMins": 10080, "resetsAt": 1791907651},
+            "rateLimitReachedType": "primary" if used >= 100 else None}}})
     elif method == "thread/start":
         threads += 1
         send({"id": request_id, "result": {"thread": {"id": "thread-%d" % threads}}})

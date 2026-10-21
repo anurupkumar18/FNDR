@@ -43,6 +43,12 @@ def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
     subprocess.run(command, cwd=ROOT, env=env, check=True)
 
 
+def ensure_frontend_dist() -> None:
+    # Tauri's generate_context! macro needs frontendDist even for Rust integration tests.
+    if not (ROOT / "dist").is_dir():
+        run(["npm", "run", "build"])
+
+
 def assert_no_running_fndr() -> None:
     app = subprocess.run(["pgrep", "-x", "fndr"], capture_output=True, text=True)
     if app.returncode == 0:
@@ -275,6 +281,7 @@ def prepare(suite: str, reset: bool) -> None:
     env = os.environ.copy()
     env["FNDR_DEMO_DIR"] = str(profile)
     env["FNDR_DEMO_CORPUS"] = str(corpus)
+    env["FNDR_DEMO_PAUSE_CAPTURE"] = "1"
     command = [str(ROOT / "scripts" / "demo" / "seed-demo-profile.sh")]
     if reset:
         command.append("--reset")
@@ -297,6 +304,7 @@ def prepare(suite: str, reset: bool) -> None:
     print(f"Quality Lab profile ready: {profile}")
     print("This corpus exercises native Vault/Home/Search/Ask presentation and retrieval.")
     print("Its pre-seeded records do not claim to have passed live capture or extraction.")
+    print("Screen capture starts paused when this profile first opens in the native app.")
 
 
 def validate_profile(suite: str) -> Path:
@@ -465,6 +473,7 @@ def compare_reports(before_dir: Path, after_dir: Path) -> str:
 
 
 def fixtures() -> None:
+    ensure_frontend_dist()
     run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     report_dir = ROOT / "src-tauri" / "target" / "quality-lab" / "capture-fixtures" / run_id
     report_dir.mkdir(parents=True, exist_ok=True)

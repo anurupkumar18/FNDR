@@ -9,6 +9,7 @@
         "build": "tsc && vite build",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
+        "test:e2e": "playwright test",
         "test:watch": "vitest",
         "preview": "vite preview",
         "clean:dev-cache": "scripts/clean-dev-build-cache.sh --yes",
@@ -37,6 +38,7 @@
         "zustand": "^4.5.1"
     },
     "devDependencies": {
+        "@playwright/test": "^1.64.1",
         "@tauri-apps/cli": "^2.11.0",
         "@testing-library/jest-dom": "^6.6.3",
         "@testing-library/react": "^16.0.1",

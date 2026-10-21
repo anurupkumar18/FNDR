@@ -16,6 +16,11 @@ while IFS= read -r command; do
           printf '%s\n' '{"type":"level","level":0.42}'
           printf '%s\n' '{"type":"partial","text":"Show my"}'
           ;;
+        spot)
+          printf '%s\n' '{"type":"listening","level":0}'
+          printf '%s\n' '{"type":"stop_word"}'
+          printf '%s\n' '{"type":"partial","text":"Show my"}'
+          ;;
         error)
           printf '%s\n' '{"type":"error","code":"recognition_failed","message":"Recognition failed"}'
           ;;
@@ -28,6 +33,23 @@ while IFS= read -r command; do
           ;;
         crash)
           exit 17
+          ;;
+      esac
+      ;;
+    spot)
+      # The stop-word spotter. A real helper sends no text in this mode; the
+      # text lines here stand in for an older helper that still does.
+      printf '%s\n' '{"type":"listening","level":0}'
+      case "$scenario" in
+        spot)
+          printf '%s\n' '{"type":"partial","text":"open the music"}'
+          printf '%s\n' '{"type":"speech_ignored"}'
+          printf '%s\n' '{"type":"final","text":"turn it up"}'
+          printf '%s\n' '{"type":"partial","text":"please stop"}'
+          printf '%s\n' '{"type":"stop_word"}'
+          ;;
+        *)
+          printf '%s\n' '{"type":"partial","text":"Show my"}'
           ;;
       esac
       ;;

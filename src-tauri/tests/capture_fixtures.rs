@@ -128,6 +128,41 @@ fn ocr_plus_cleanup_stays_within_each_fixtures_cer_budget() {
     assert!(failures.is_empty(), "over budget: {failures:?}");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn manual_import_ocr_reads_gold_small_labels_and_amounts() {
+    let engine = fndr_lib::ocr::OcrEngine::with_config(fndr_lib::ocr::OcrConfig::high_quality())
+        .expect("accurate import OCR engine");
+    let required = [
+        (
+            "browser_article-04",
+            ["faster search indexing", "background worker"],
+        ),
+        ("chat_mock-01", ["Priya", "Sam"]),
+        (
+            "pdf_paper-04",
+            ["twelve percent", "held out evaluation set"],
+        ),
+    ];
+    let fixtures = load_manifest();
+    for (id, facts) in required {
+        let fixture = fixtures.iter().find(|fixture| fixture.id == id).unwrap();
+        let image = std::fs::read(fixtures_dir().join(&fixture.file)).unwrap();
+        let recognized = engine
+            .recognize_with_metadata(&image)
+            .expect("accurate import OCR")
+            .0
+            .text;
+        let normalized = recognized.split_whitespace().collect::<Vec<_>>().join(" ");
+        for fact in facts {
+            assert!(
+                normalized.contains(fact),
+                "{id} did not retain the labeled fact {fact:?}"
+            );
+        }
+    }
+}
+
 /// `text_cleanup`'s app-specific rules match on real app names ("chrome",
 /// "terminal", "code", ...), not the fixture's generic `app_class` label.
 #[cfg(target_os = "macos")]

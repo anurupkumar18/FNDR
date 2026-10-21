@@ -6,7 +6,8 @@ import { STORAGE_KEYS } from "@/shared/utils/config";
 export function useActiveCinematicPalette() {
     const [paletteKey, setPaletteKey] = useState<PaletteKey>(() => {
         const stored = localStorage.getItem(STORAGE_KEYS.palette);
-        return resolveStoredPalette(stored);
+        const mode = localStorage.getItem(STORAGE_KEYS.theme) === "light" ? "light" : "dark";
+        return resolveStoredPalette(stored, mode);
     });
     const [mode, setMode] = useState<PaletteMode>(() =>
         localStorage.getItem(STORAGE_KEYS.theme) === "light" ? "light" : "dark"

@@ -3,12 +3,15 @@
 //! token-budgeted evidence.
 
 pub mod pack;
+pub(crate) mod work_names;
 
 use crate::inference::extraction_evidence::{
     has_source_evidence, render_source_statements, source_evidence_sets_from_raw,
 };
 use crate::storage::{MemoryRecord, Store};
-use crate::tasks::extract_from_memory::{extract_task_candidates, TaskCandidate};
+use crate::tasks::extract_from_memory::{
+    extract_task_candidates, is_internal_extraction_issue, TaskCandidate,
+};
 use pack::{pack_within_budget, PackItem, PackResult};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -18,7 +21,14 @@ const MAX_SUGGESTED_NEXT_STEPS: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResumeThread {
+    /// The grouping key: what `what_changed_since` and `mark_thread_seen`
+    /// take. An identifier, never shown.
+    pub key: String,
     pub title: String,
+    /// The words shared across windows that made this one thread, as they
+    /// were written in a window title. Empty when the thread is one window
+    /// or one explicit project and nothing was inferred.
+    pub grouped_by: Vec<String>,
     /// App of the newest memory, shown as a label beside the title.
     pub app_name: String,
     pub last_state: String,
@@ -31,11 +41,16 @@ pub struct ResumeThread {
     pub pack: PackResult,
 }
 
-/// Groups a memory into a thread: its project, falling back to its
-/// session_key, then to the domain of its url, then to its app name.
-fn thread_key(record: &MemoryRecord) -> String {
+/// The grouping a memory has by itself: its project, falling back to its
+/// window, then its session_key, the domain of its url and its app name. Windows
+/// that share a name are then joined across these groups by
+/// `work_names::work_threads`, which is what every surface reads.
+pub(crate) fn thread_key(record: &MemoryRecord) -> String {
     if !record.project.trim().is_empty() {
         return record.project.clone();
+    }
+    if let Some(window) = window_key(record) {
+        return window;
     }
     if !record.session_key.trim().is_empty() {
         return record.session_key.clone();
@@ -50,9 +65,48 @@ fn thread_key(record: &MemoryRecord) -> String {
     record.app_name.clone()
 }
 
+/// One window: its app, its site and the words of its title, without a
+/// count in brackets ("Inbox (14)"). `session_key` cannot stand in for it:
+/// the store rewrites that to the first two parts of a page's path, which
+/// gives every Google Doc and every Gmail message one key.
+fn window_key(record: &MemoryRecord) -> Option<String> {
+    let mut title = String::new();
+    let mut in_count = false;
+    for word in record.window_title.split_whitespace() {
+        // "(14)" or "(page 6 of 22)": a counter, not part of the name.
+        let opens = word.starts_with('(') && word[1..].starts_with(|ch: char| ch.is_ascii_digit());
+        if opens || in_count {
+            in_count = !word.ends_with(')');
+            continue;
+        }
+        for run in word.split(|ch: char| !ch.is_alphanumeric()) {
+            if !run.is_empty() {
+                if !title.is_empty() {
+                    title.push(' ');
+                }
+                title.push_str(&run.to_lowercase());
+            }
+        }
+    }
+    if title.is_empty() {
+        return None;
+    }
+    let site = record
+        .url
+        .as_deref()
+        .and_then(crate::capture::extract_domain)
+        .unwrap_or_default();
+    Some(format!(
+        "window:{}|{}|{}",
+        record.app_name.trim().to_lowercase(),
+        site,
+        title
+    ))
+}
+
 /// What a person sees as the thread's name. The grouping key is an internal
 /// identifier (`google_chrome:title:grades_for_...`) and is never shown.
-fn thread_title(record: &MemoryRecord) -> String {
+pub(crate) fn thread_title(record: &MemoryRecord) -> String {
     let project = record.project.trim();
     if !project.is_empty() {
         return project.to_string();
@@ -81,7 +135,11 @@ const MAX_STATE_CHARS: usize = 160;
 fn thread_state(record: &MemoryRecord, title: &str) -> String {
     let first_sentence = crate::summariser::sentences::first_sentence(&record.memory_context);
     let topic = record.topic.trim();
-    let outcome = record.outcome.trim().replace('_', " ");
+    let outcome = if is_internal_extraction_issue(&record.outcome) {
+        String::new()
+    } else {
+        record.outcome.trim().replace('_', " ")
+    };
     let topic_line = format!("{topic} {outcome}");
     let repeats = |line: &str| {
         let line = line.trim().trim_end_matches('.').to_lowercase();
@@ -116,13 +174,22 @@ fn clip_at_word(text: &str, max_chars: usize) -> String {
     format!("{}…", clipped[..cut].trim_end_matches([',', ';', ':', ' ']))
 }
 
-fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize) -> ResumeThread {
+fn build_thread(
+    mut group: Vec<MemoryRecord>,
+    threads: &work_names::WorkThreads,
+    now_ms: i64,
+    budget_tokens: usize,
+) -> ResumeThread {
     group.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
     let newest = group
         .last()
         .expect("build_thread requires a non-empty group");
 
-    let mut title = thread_title(newest);
+    // A thread joined by a name goes by that name; one window keeps its own.
+    let mut title = threads
+        .title(newest)
+        .map(str::to_string)
+        .unwrap_or_else(|| thread_title(newest));
     let age_minutes = (now_ms - newest.timestamp).max(0) / 60_000;
     let mut last_state = thread_state(newest, &title);
     // When the only name available is the app, the sentence about the work is
@@ -138,6 +205,14 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         title = clip_at_word(last_state.trim_end_matches('.'), 80);
         last_state = String::new();
     }
+    // The words that joined windows are shown only when this view holds
+    // more than one of them; one window explains itself.
+    let windows: HashSet<String> = group.iter().map(thread_key).collect();
+    let grouped_by = if windows.len() >= 2 {
+        threads.names(newest)
+    } else {
+        Vec::new()
+    };
     let newest_source_backed = has_source_evidence(&newest.raw_evidence);
     let next_steps: Vec<String> = newest
         .next_steps
@@ -175,7 +250,12 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
             .iter()
             .filter(|_| !source_backed)
             .chain(record.decisions.iter())
-            .chain(record.errors.iter())
+            .chain(
+                record
+                    .errors
+                    .iter()
+                    .filter(|error| !is_internal_extraction_issue(error)),
+            )
             .chain(std::iter::once(&record.memory_context))
         {
             if text.trim().is_empty() {
@@ -198,7 +278,9 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
     let pack = pack_within_budget(candidates, budget_tokens);
 
     ResumeThread {
+        key: threads.key(newest),
         title,
+        grouped_by,
         app_name: newest.app_name.trim().to_string(),
         last_state,
         age_minutes,
@@ -207,6 +289,39 @@ fn build_thread(mut group: Vec<MemoryRecord>, now_ms: i64, budget_tokens: usize)
         evidence,
         pack,
     }
+}
+
+/// Whether a memory may shape a thread. Matches existing read-side
+/// admission before a row can influence thread state, suggestions or
+/// citations. Agent notes are not observed work and remain excluded by the
+/// remember contract. A downloaded file is a fact for search, not a piece of
+/// work to resume.
+pub(crate) fn admits(record: &MemoryRecord, blocklist: &[String]) -> bool {
+    crate::context_runtime::retrieve::memory_is_visible(record, blocklist)
+        && !record.source_type.trim().eq_ignore_ascii_case("agent")
+        && !record.snippet.starts_with("Downloaded: ")
+}
+
+/// The admitted memories from `since_ms` on, or from the start of the naming
+/// window if that is earlier, with the threads named over all of them. Every
+/// surface that needs a thread key reads it from here, so the key of a
+/// thread does not depend on how far back that surface looks.
+pub(crate) async fn admitted_with_threads(
+    store: &Store,
+    blocklist: &[String],
+    since_ms: i64,
+    now_ms: i64,
+) -> Result<(Vec<MemoryRecord>, work_names::WorkThreads), String> {
+    let start_ms = since_ms.min(now_ms - work_names::NAMING_WINDOW_MS);
+    let records: Vec<MemoryRecord> = store
+        .get_memories_in_range(start_ms, now_ms)
+        .await
+        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?
+        .into_iter()
+        .filter(|record| admits(record, blocklist))
+        .collect();
+    let named = work_names::work_threads(&records);
+    Ok((records, named))
 }
 
 /// Builds Resume Work threads from memories captured in the last `hours`
@@ -222,29 +337,19 @@ pub async fn build_resume_threads(
     let window_ms = i64::from(hours) * 60 * 60 * 1000;
     let start_ms = now_ms - window_ms;
 
-    let records = store
-        .get_memories_in_range(start_ms, now_ms)
-        .await
-        .map_err(|e: Box<dyn std::error::Error>| e.to_string())?;
+    let (records, named) = admitted_with_threads(store, blocklist, start_ms, now_ms).await?;
 
     let mut by_key: HashMap<String, Vec<MemoryRecord>> = HashMap::new();
     for record in records {
-        // Match existing read-side admission before a row can influence
-        // thread state, suggestions or citations. Agent notes are not
-        // observed work and remain excluded by the remember contract.
-        // A downloaded file is a fact for search, not a piece of work to resume.
-        if !crate::context_runtime::retrieve::memory_is_visible(&record, blocklist)
-            || record.source_type.trim().eq_ignore_ascii_case("agent")
-            || record.snippet.starts_with("Downloaded: ")
-        {
+        if record.timestamp < start_ms {
             continue;
         }
-        by_key.entry(thread_key(&record)).or_default().push(record);
+        by_key.entry(named.key(&record)).or_default().push(record);
     }
 
     let mut threads: Vec<ResumeThread> = by_key
         .into_values()
-        .map(|group| build_thread(group, now_ms, budget_tokens))
+        .map(|group| build_thread(group, &named, now_ms, budget_tokens))
         .collect();
     threads.sort_by_key(|thread| thread.age_minutes);
     Ok(threads)
@@ -300,7 +405,10 @@ mod tests {
             session_key: "google_chrome:title:grades_for_anurup_kumar_4500_001_fall_2026".into(),
             ..Default::default()
         };
-        assert_eq!(super::thread_key(&record), record.session_key);
+        assert_eq!(
+            super::thread_key(&record),
+            "window:google chrome||grades for anurup kumar 4500 001 fall 2026"
+        );
         assert_eq!(
             super::thread_title(&record),
             "Grades for Anurup Kumar: 4500-001 Fall 2026"
@@ -338,7 +446,7 @@ mod tests {
         chat.window_title = "FNDR".into();
         chat.display_summary =
             "Reviewed the app's development status, including commits and UI rendering.".into();
-        let thread = build_thread(vec![chat], 1_800_000_060_000, 800);
+        let thread = build_thread(vec![chat], &Default::default(), 1_800_000_060_000, 800);
         assert_eq!(
             thread.title,
             "Reviewed the app's development status, including commits and UI rendering"
@@ -353,12 +461,33 @@ mod tests {
         page.app_name = "Google Chrome".into();
         page.window_title = "Gamete Chromosome Count".into();
         page.display_summary = "Answered questions on meiosis and chromosome counts.".into();
-        let thread = build_thread(vec![page], 1_800_000_060_000, 800);
+        let thread = build_thread(vec![page], &Default::default(), 1_800_000_060_000, 800);
         assert_eq!(thread.title, "Gamete Chromosome Count");
         assert_eq!(
             thread.last_state,
             "Answered questions on meiosis and chromosome counts."
         );
+    }
+
+    #[test]
+    fn legacy_import_diagnostics_do_not_surface_in_resume() {
+        let mut imported = record("imported-image", "", 1_800_000_000_000);
+        imported.app_name = "Meta glasses import".into();
+        imported.source_type = "meta_glasses_import".into();
+        imported.window_title = "release-notes.png".into();
+        imported.next_steps.clear();
+        imported.errors = vec!["vision_semantic_extraction_failed".into()];
+        imported.outcome = "vision_semantic_extraction_failed".into();
+        imported.memory_context = "Imported an image of the release notes.".into();
+
+        let thread = build_thread(vec![imported], &Default::default(), 1_800_000_060_000, 800);
+        assert!(thread.suggested_next_steps.is_empty());
+        assert!(!thread
+            .last_state
+            .contains("vision_semantic_extraction_failed"));
+        assert!(!serde_json::to_string(&thread.pack)
+            .unwrap()
+            .contains("vision_semantic_extraction_failed"));
     }
 
     #[test]
@@ -376,7 +505,7 @@ mod tests {
             }
         })
         .to_string();
-        let thread = build_thread(vec![observed], 1_800_000_060_000, 1000);
+        let thread = build_thread(vec![observed], &Default::default(), 1_800_000_060_000, 1000);
         assert!(thread.next_steps.is_empty());
         assert!(thread.suggested_next_steps.is_empty());
         let packed = serde_json::to_string(&thread.pack).unwrap();
@@ -396,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_key_prefers_project_then_session_then_domain_then_app() {
+    fn thread_key_prefers_project_then_window_then_session_then_domain_then_app() {
         assert_eq!(
             thread_key(&MemoryRecord {
                 project: "FNDR".to_string(),
@@ -404,6 +533,27 @@ mod tests {
                 ..Default::default()
             }),
             "FNDR"
+        );
+        // The store gives every Google Doc one session key. Two documents
+        // are two windows, and the unread count is not part of a window.
+        let doc = |title: &str| MemoryRecord {
+            app_name: "Google Chrome".to_string(),
+            window_title: title.to_string(),
+            url: Some("https://docs.google.com/document/d/abc/edit".to_string()),
+            session_key: "google_chrome:docs.google.com:document/d".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            thread_key(&doc("Essay draft - Google Docs")),
+            "window:google chrome|docs.google.com|essay draft google docs"
+        );
+        assert_ne!(
+            thread_key(&doc("Essay draft - Google Docs")),
+            thread_key(&doc("Budget - Google Docs"))
+        );
+        assert_eq!(
+            thread_key(&doc("Inbox (14) - Gmail")),
+            thread_key(&doc("Inbox (23) - Gmail"))
         );
         assert_eq!(
             thread_key(&MemoryRecord {
@@ -439,8 +589,9 @@ mod tests {
         newer.outcome = "done".to_string();
         newer.next_steps = vec!["Measure p95 latency".to_string()];
 
-        let thread = build_thread(vec![older, newer], now, 10_000);
+        let thread = build_thread(vec![older, newer], &Default::default(), now, 10_000);
 
+        assert_eq!(thread.key, "FNDR");
         assert_eq!(thread.title, "FNDR");
         assert_eq!(thread.last_state, "Looked at the merge decision path");
         assert_eq!(thread.age_minutes, 1);
@@ -571,5 +722,111 @@ mod tests {
             after.is_empty(),
             "hidden and deleted records must not return"
         );
+    }
+
+    fn window(id: &str, app: &str, title: &str, timestamp: i64) -> MemoryRecord {
+        MemoryRecord {
+            id: id.into(),
+            timestamp,
+            app_name: app.into(),
+            window_title: title.into(),
+            session_key: crate::capture::build_session_key(app, title, None),
+            memory_context: format!("Worked in {title}."),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_named_thread_seen_through_one_window_keeps_its_name_but_claims_no_grouping() {
+        let deck = window(
+            "deck",
+            "Keynote",
+            "Smart Reminders Launch Review.key",
+            1_000,
+        );
+        let faq = window("faq", "Notion", "Support FAQ - Smart Reminders", 2_000);
+        let named = work_names::work_threads(&[deck, faq.clone()]);
+        let thread = build_thread(vec![faq], &named, 3_000, 800);
+        assert_eq!(thread.key, "work:smart reminders");
+        assert_eq!(thread.title, "Smart Reminders");
+        assert!(thread.grouped_by.is_empty());
+    }
+
+    #[tokio::test]
+    async fn windows_that_share_a_name_are_one_thread_with_one_key_however_far_back_a_surface_looks(
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store =
+            tokio::task::spawn_blocking(move || Store::new(&path).map_err(|e| e.to_string()))
+                .await
+                .expect("join")
+                .expect("store");
+        let now = chrono::Utc::now().timestamp_millis();
+        let day = 24 * 60 * 60 * 1000;
+        let mut private = window(
+            "private",
+            "Notes",
+            "Smart Reminders salary notes",
+            now - 500_000,
+        );
+        private.app_name = "PrivateNotes".into();
+        store
+            .add_batch_preserving_ids(&[
+                window(
+                    "deck",
+                    "Keynote",
+                    "Smart Reminders Launch Review.key",
+                    now - 5 * day,
+                ),
+                window(
+                    "checklist",
+                    "Notion",
+                    "Launch checklist v3 - Smart Reminders",
+                    now - 600_000,
+                ),
+                window(
+                    "faq",
+                    "Notion",
+                    "Support FAQ - Smart Reminders",
+                    now - 300_000,
+                ),
+                window("lunch", "Mail", "Lunch order", now - 200_000),
+                private,
+            ])
+            .await
+            .expect("insert");
+        let blocklist = vec!["PrivateNotes".to_string()];
+
+        // A day back: the deck from five days ago still names the thread.
+        let today = build_resume_threads(&store, 24, 2000, &blocklist)
+            .await
+            .expect("today");
+        let named = today
+            .iter()
+            .find(|thread| thread.key == "work:smart reminders")
+            .expect("named thread");
+        assert_eq!(named.title, "Smart Reminders");
+        assert_eq!(named.evidence, vec!["checklist", "faq"]);
+        assert_eq!(named.grouped_by, vec!["Smart Reminders"]);
+        let lunch = today
+            .iter()
+            .find(|thread| thread.evidence == vec!["lunch"])
+            .expect("lunch thread");
+        assert!(lunch.grouped_by.is_empty());
+        // A blocked app's window neither joins a thread nor names one.
+        assert!(today
+            .iter()
+            .all(|thread| !thread.evidence.contains(&"private".to_string())));
+
+        // A week back: the same key, now with the deck.
+        let week = build_resume_threads(&store, 7 * 24, 2000, &blocklist)
+            .await
+            .expect("week");
+        let named = week
+            .iter()
+            .find(|thread| thread.key == "work:smart reminders")
+            .expect("named thread");
+        assert_eq!(named.evidence, vec!["deck", "checklist", "faq"]);
     }
 }

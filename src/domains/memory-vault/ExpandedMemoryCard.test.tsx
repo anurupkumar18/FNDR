@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
-import { fndrGetMemorySourceStatements, fndrGetMemorySubgraph, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
+import { fndrGetMemorySourceStatements, fndrGetRelatedMemories } from "@/shared/ipc/tauri";
 
 vi.mock("@/shared/ipc/tauri", () => ({
     fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
-    fndrGetMemorySubgraph: vi.fn(),
     fndrGetRelatedMemories: vi.fn(),
 }));
 
@@ -39,7 +38,6 @@ describe("ExpandedMemoryCard", () => {
             line: 7, source_sha256: "a".repeat(64),
         }]);
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
         const { container } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
 
         await screen.findByText("Observed statement; ownership and status unverified.");
@@ -56,7 +54,6 @@ describe("ExpandedMemoryCard", () => {
         const statement = (quote: string) => ({ memory_ids: ["memory-next"], kind: "action", quote, line: 1, source_sha256: "b".repeat(64) });
         vi.mocked(fndrGetMemorySourceStatements).mockReturnValueOnce(first).mockResolvedValueOnce([statement("Current source quote")]);
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
         const { rerender } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
         expect(screen.getByText("Loading observed statements…")).toBeTruthy();
         rerender(<ExpandedMemoryCard card={{ ...card, id: "memory-next" }} onClose={() => {}} />);
@@ -69,7 +66,6 @@ describe("ExpandedMemoryCard", () => {
     it("distinguishes an unavailable source read from an empty one", async () => {
         vi.mocked(fndrGetMemorySourceStatements).mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce([]);
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [], node_count: 0, edge_count: 0 });
         const { rerender } = render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
         await screen.findByText("Observed statements unavailable.");
         rerender(<ExpandedMemoryCard card={{ ...card, id: "empty" }} onClose={() => {}} />);
@@ -90,7 +86,6 @@ describe("ExpandedMemoryCard", () => {
             },
             { ...card, id: "unknown-note", title: "A legacy note", source_type: "agent", added_by: "   " },
         ]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({ seed_ids: [card.id], node_count: 0, edge_count: 0 });
         const onOpenRelated = vi.fn();
         render(<ExpandedMemoryCard card={{ ...card, source_type: "agent", added_by: "Parent author" }} onClose={() => {}} onOpenRelated={interactive ? onOpenRelated : undefined} />);
 
@@ -111,7 +106,6 @@ describe("ExpandedMemoryCard", () => {
 
     it("owns modal focus and shows bounded load failures instead of hanging", async () => {
         vi.mocked(fndrGetRelatedMemories).mockRejectedValue(new Error("offline"));
-        vi.mocked(fndrGetMemorySubgraph).mockRejectedValue(new Error("offline"));
 
         render(<ExpandedMemoryCard card={card} onClose={() => {}} />);
 
@@ -121,19 +115,37 @@ describe("ExpandedMemoryCard", () => {
             expect(screen.getByRole("button", { name: "Close memory details" })).toHaveFocus();
         });
         expect(await screen.findByText("Related memories unavailable.")).toBeTruthy();
-        expect(await screen.findByText("Graph context unavailable.")).toBeTruthy();
-        expect(screen.queryByText(/loading subgraph/i)).toBeNull();
+        expect(screen.queryByText("Connected context")).toBeNull();
+    });
+
+    it("keeps Tab inside the card and closes on Escape", async () => {
+        vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
+        const onClose = vi.fn();
+        render(
+            <>
+                <button type="button">Behind the card</button>
+                <ExpandedMemoryCard card={card} onClose={onClose} />
+            </>,
+        );
+        const dialog = screen.getByRole("dialog", { name: "Expanded memory: Primary memory" });
+        const close = screen.getByRole("button", { name: "Close memory details" });
+        await waitFor(() => expect(close).toHaveFocus());
+
+        const focusable = within(dialog).getAllByRole("button").filter((button) => !button.hasAttribute("disabled"));
+        const last = focusable[focusable.length - 1];
+        last.focus();
+        fireEvent.keyDown(last, { key: "Tab" });
+        // Tab from the last control wraps to the first instead of leaving for the page behind.
+        expect(close).toHaveFocus();
+
+        fireEvent.keyDown(close, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("renders related memories as named actions", async () => {
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([
             { ...card, id: "memory-related", title: "Related memory" },
         ]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({
-            seed_ids: [card.id],
-            node_count: 2,
-            edge_count: 1,
-        });
         const onOpenRelated = vi.fn();
 
         render(
@@ -153,11 +165,6 @@ describe("ExpandedMemoryCard", () => {
 
     it("shows page N on the source line and labels a file reopen with the page", async () => {
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({
-            seed_ids: [card.id],
-            node_count: 0,
-            edge_count: 0,
-        });
         const onReopen = vi.fn();
         render(
             <ExpandedMemoryCard
@@ -178,11 +185,6 @@ describe("ExpandedMemoryCard", () => {
 
     it("shows a one-line reopen status under Open source", async () => {
         vi.mocked(fndrGetRelatedMemories).mockResolvedValue([]);
-        vi.mocked(fndrGetMemorySubgraph).mockResolvedValue({
-            seed_ids: [card.id],
-            node_count: 0,
-            edge_count: 0,
-        });
         render(
             <ExpandedMemoryCard
                 card={{

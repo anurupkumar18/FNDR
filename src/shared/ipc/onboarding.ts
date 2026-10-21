@@ -9,6 +9,7 @@ export type OnboardingStep =
     | "privacy_promise"
     | "permissions"
     | "model_download"
+    | "bring_past"
     | "indexing_started"
     | "complete";
 
@@ -26,8 +27,18 @@ export async function getOnboardingState(): Promise<OnboardingState> {
     return invoke<OnboardingState>("get_onboarding_state");
 }
 
-export async function saveOnboardingState(state: OnboardingState): Promise<void> {
-    return invoke("save_onboarding_state", { state });
+export async function saveOnboardingState(state: OnboardingState, skipped?: boolean): Promise<OnboardingState> {
+    return invoke<OnboardingState>("save_onboarding_state", { state, skipped: skipped ?? null });
+}
+
+export type OnboardingFunnelEventKind =
+    | "error" | "search_submitted" | "result_selected" | "reopen_succeeded" | "reopen_failed";
+
+export async function recordOnboardingFunnelEvent(
+    kind: OnboardingFunnelEventKind,
+    step?: OnboardingStep,
+): Promise<void> {
+    return invoke("record_onboarding_funnel_event", { kind, step: step ?? null });
 }
 
 // ── Biometrics ────────────────────────────────────────────────────────────
@@ -38,10 +49,13 @@ export async function requestBiometricAuth(reason: string): Promise<boolean> {
 
 // ── Permissions ───────────────────────────────────────────────────────────
 
+export type PermissionState = "not_determined" | "restricted" | "denied" | "granted";
+
 export interface PermissionsStatus {
-    screen_recording: boolean;
-    accessibility: boolean;
-    microphone: boolean;
+    screen_recording: PermissionState;
+    accessibility: PermissionState;
+    microphone: PermissionState;
+    speech_recognition: PermissionState;
 }
 
 export async function checkPermissions(): Promise<PermissionsStatus> {
@@ -126,6 +140,27 @@ export interface AiRuntimeStatus {
     model_mode: 'ocr_only' | 'lightweight_vlm' | 'heavy_vlm' | 'disabled';
     vlm_status: 'unavailable' | 'loaded' | 'fallback';
     vlm_model_id: string | null;
+}
+
+export type AppleModelAvailability =
+    | "available"
+    | "model_not_ready"
+    | "apple_intelligence_off"
+    | "unsupported_device"
+    | "unsupported_os"
+    | "helper_unavailable";
+
+export interface AppleModelStatus {
+    availability: AppleModelAvailability;
+    enabled: boolean;
+}
+
+export async function getAppleModelStatus(): Promise<AppleModelStatus> {
+    return invoke<AppleModelStatus>("get_apple_model_status");
+}
+
+export async function setAppleModelEnabled(enabled: boolean): Promise<AppleModelStatus> {
+    return invoke<AppleModelStatus>("set_apple_model_enabled", { enabled });
 }
 
 export function onDownloadProgress(handler: (p: DownloadProgress) => void): Promise<() => void> {

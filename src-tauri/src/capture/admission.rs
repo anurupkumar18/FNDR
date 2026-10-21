@@ -1,18 +1,18 @@
 use super::extract_domain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CaptureSurfacePolicy {
+pub(crate) enum CaptureSurfacePolicy {
     Normal,
     UrlOnly,
     SkipFrame,
 }
 
-pub(super) fn classify_capture_surface_policy(
+pub(crate) fn classify_capture_surface_policy(
     app_name: &str,
     window_title: &str,
     url: Option<&str>,
 ) -> CaptureSurfacePolicy {
-    if !is_browser_app(app_name) {
+    if !crate::browsers::is_browser(app_name) {
         return CaptureSurfacePolicy::Normal;
     }
     let Some(url) = url else {
@@ -32,15 +32,6 @@ pub(super) fn classify_capture_surface_policy(
         return CaptureSurfacePolicy::UrlOnly;
     }
     CaptureSurfacePolicy::Normal
-}
-
-pub(super) fn is_browser_app(app_name: &str) -> bool {
-    let app = app_name.to_ascii_lowercase();
-    [
-        "chrome", "safari", "firefox", "arc", "edge", "brave", "opera",
-    ]
-    .iter()
-    .any(|needle| app.contains(needle))
 }
 
 fn is_generic_browser_chrome_title(title: &str) -> bool {

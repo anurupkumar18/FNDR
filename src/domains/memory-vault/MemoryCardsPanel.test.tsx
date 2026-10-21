@@ -11,15 +11,13 @@ import {
 } from "@/shared/ipc/tauri";
 import type { MemoryCard, SearchResult } from "@/shared/ipc/tauri";
 
+const recordOnboardingFunnelEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/shared/ipc/onboarding", () => ({ recordOnboardingFunnelEvent }));
+
 vi.mock("@/shared/ipc/tauri", () => ({
     deleteMemory: vi.fn(),
     findVisuallySimilarMemories: vi.fn().mockResolvedValue([]),
     fndrBuildContextPack: vi.fn().mockResolvedValue({}),
-    fndrGetMemorySubgraph: vi.fn().mockResolvedValue({
-        seed_ids: [],
-        node_count: 0,
-        edge_count: 0,
-    }),
     fndrGetMemorySourceStatements: vi.fn().mockResolvedValue([]),
     fndrGetRelatedMemories: vi.fn().mockResolvedValue([]),
     getMemoryDebugInspector: vi.fn().mockResolvedValue({}),
@@ -103,6 +101,37 @@ describe("MemoryCardsPanel", () => {
         fireEvent.click(within(trace).getByRole("button", { name: "Show Memory Vault loading activity details" }));
         expect(within(trace).getByText("2 memories returned")).toBeInTheDocument();
         expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
+    });
+
+    it("offers Try again when the vault cannot load, and loads again on it", async () => {
+        vi.mocked(listMemoryCards).mockRejectedValueOnce(new Error("store busy")).mockResolvedValueOnce([card(1)]);
+        renderVault();
+
+        const alert = await screen.findByRole("alert");
+        expect(within(alert).getByRole("heading", { name: "Memories could not load" })).toBeInTheDocument();
+        expect(alert).toHaveTextContent("store busy");
+        fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+
+        expect(await screen.findByText("Memory 1")).toBeInTheDocument();
+        expect(listMemoryCards).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells an empty vault from a filter with no matches, and clears filters in one click", async () => {
+        vi.mocked(listMemoryCards).mockResolvedValue([card(1)]);
+        renderVault();
+        await screen.findByText("Memory 1");
+
+        fireEvent.change(screen.getByRole("searchbox", { name: "Filter memories by text" }), {
+            target: { value: "nothing like this" },
+        });
+        expect(screen.getByRole("heading", { name: "No memories match these filters" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+        expect(screen.getByText("Memory 1")).toBeInTheDocument();
+
+        cleanup();
+        vi.mocked(listMemoryCards).mockResolvedValue([]);
+        renderVault();
+        expect(await screen.findByRole("heading", { name: "No memories yet" })).toBeInTheDocument();
     });
 
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
@@ -353,7 +382,7 @@ describe("MemoryCardsPanel", () => {
         expect(await screen.findByRole("button", { name: /^2 more moments/ })).toHaveTextContent(
             "3 moments over 42 min",
         );
-        expect(screen.getByLabelText("Recorded in this session")).toHaveTextContent("2 decisions");
+        expect(screen.getByText("In this session").parentElement).toHaveTextContent("2 decisions");
         expect(screen.getByText(earlier)).toBeInTheDocument();
         expect(screen.getByText("Earlier in this session")).toBeInTheDocument();
     });
@@ -379,8 +408,10 @@ describe("MemoryCardsPanel", () => {
 
         renderVault();
 
-        const [first] = await screen.findAllByLabelText("Same stretch of work");
-        expect(within(first).getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+        const [first] = await screen.findAllByText("Same stretch of work");
+        const link = within(first.parentElement!).getByRole("button", { name: "Terminal" });
+        fireEvent.click(link);
+        expect(document.activeElement).toHaveAccessibleName("Open memory: Ran the tests");
     });
 
     it("reopens a row's source in one click and a folded duplicate's source in two", async () => {
@@ -389,11 +420,13 @@ describe("MemoryCardsPanel", () => {
             { ...card(1), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/7", timestamp: VAULT_NOW - HOUR },
             { ...card(2), title: "Read the rubric", app_name: "Google Chrome", reopen_target: "https://canvas.example.edu/a/8", timestamp: VAULT_NOW - 2 * HOUR },
         ]);
+        vi.mocked(reopenMemory).mockResolvedValue({ kind: "opened" });
 
         renderVault();
 
         fireEvent.click(await screen.findByRole("button", { name: "Open source: Read the rubric" }));
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-1");
+        await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("reopen_succeeded"));
 
         fireEvent.click(screen.getByRole("button", { name: /^1 more moment/ }));
         fireEvent.click(screen.getAllByRole("button", { name: "Open source: Read the rubric" })[1]);

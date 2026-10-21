@@ -25,6 +25,10 @@ struct ScriptCacheEntry {
 }
 
 static BROWSER_SEMANTIC_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+static FINDER_FOLDER_CACHE: OnceLock<Mutex<Option<ScriptCacheEntry>>> = OnceLock::new();
+/// Set once the person refuses FNDR control of Finder; it is not asked again
+/// this session.
+static FINDER_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, Default)]
 pub struct BrowserSemanticContent {
@@ -132,6 +136,16 @@ fn image_to_png(image: &core_graphics::image::CGImage) -> Result<Vec<u8>, String
     let raw_data = data_provider.copy_data();
     let bytes = raw_data.bytes();
 
+    bgra_to_png(width, height, bytes_per_row, bytes)
+}
+
+/// The pixel conversion used by live capture and synthetic footprint runs.
+pub fn bgra_to_png(
+    width: usize,
+    height: usize,
+    bytes_per_row: usize,
+    bytes: &[u8],
+) -> Result<Vec<u8>, String> {
     // The data often has padding at the end of each row.
     // We need to strip this to create a clean RGBA buffer.
     let mut clean_data = Vec::with_capacity(width * height * 4);
@@ -214,7 +228,7 @@ fn read_frontmost_app_info() -> FrontmostAppContext {
         let document_url = native_window
             .as_ref()
             .and_then(|window| window.document_url.as_deref());
-        let browser = is_browser_app(&app_name);
+        let browser = crate::browsers::is_browser(&app_name);
         let browser_url = browser
             .then(|| normalize_browser_document_url(document_url))
             .flatten();
@@ -304,6 +318,109 @@ fn from_hex(byte: u8) -> Option<u8> {
     }
 }
 
+/// The file or folder a memory reopens to: the window's document, or, for a
+/// Finder window, which shows Accessibility no document, its folder.
+pub(super) fn document_path_for(context: &FrontmostAppContext) -> Option<String> {
+    context.document_path.clone().or_else(|| {
+        context
+            .bundle_id
+            .as_deref()
+            .filter(|bundle| bundle.eq_ignore_ascii_case("com.apple.finder"))
+            .and_then(|_| finder_front_folder(&context.window_title))
+    })
+}
+
+const FINDER_FOLDER_TTL: Duration = Duration::from_secs(30);
+/// macOS holds the script while it asks the person; capture does not wait.
+const FINDER_SCRIPT_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// The folder the front Finder window shows, asked of Finder through
+/// AppleScript (owner decision 2026-10-15). macOS asks the person once to let
+/// FNDR control Finder; a refusal ends the asking for the session. Windows
+/// with no folder (Recents, a search) give None.
+fn finder_front_folder(window_title: &str) -> Option<String> {
+    // Tests never drive the person's Finder or raise the permission prompt.
+    if cfg!(test) || FINDER_REFUSED.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let key = format!("finder:{window_title}");
+    if let Some(cached) = cache_get(&FINDER_FOLDER_CACHE, &key, FINDER_FOLDER_TTL) {
+        return (!cached.is_empty()).then_some(cached);
+    }
+    let script = r#"tell application "Finder" to if (count of Finder windows) > 0 then POSIX path of (target of front Finder window as alias)"#;
+    let mut child = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < FINDER_SCRIPT_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let output = child.wait_with_output().ok()?;
+    let folder = finder_folder_from_script(
+        status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    match folder {
+        FinderFolder::Refused => {
+            FINDER_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+        FinderFolder::Shown(path) => {
+            cache_put(&FINDER_FOLDER_CACHE, &key, Some(path.clone()));
+            Some(path)
+        }
+        FinderFolder::None => {
+            cache_put(&FINDER_FOLDER_CACHE, &key, Some(String::new()));
+            None
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum FinderFolder {
+    Shown(String),
+    None,
+    /// macOS: not authorized to send Apple events (-1743).
+    Refused,
+}
+
+fn finder_folder_from_script(ok: bool, stdout: &str, stderr: &str) -> FinderFolder {
+    if !ok {
+        return if stderr.contains("-1743") {
+            FinderFolder::Refused
+        } else {
+            FinderFolder::None
+        };
+    }
+    let path = stdout.trim();
+    if path.starts_with('/') {
+        // A folder's POSIX path ends with a slash; the root stays "/".
+        let trimmed = path.trim_end_matches('/');
+        FinderFolder::Shown(if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed.to_string()
+        })
+    } else {
+        FinderFolder::None
+    }
+}
+
 pub(super) fn preferred_reopen_file_path<'a>(
     document_path: Option<&'a str>,
     files_touched: &'a [String],
@@ -312,10 +429,6 @@ pub(super) fn preferred_reopen_file_path<'a>(
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .or_else(|| files_touched.first().map(String::as_str))
-}
-
-pub fn is_browser_app(app_name: &str) -> bool {
-    super::admission::is_browser_app(app_name)
 }
 
 pub fn get_browser_semantic_content(app_name: &str) -> Option<BrowserSemanticContent> {
@@ -653,6 +766,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bgra_to_png_preserves_pixels_and_ignores_row_padding() {
+        let bgra = [
+            0, 0, 255, 255, 0, 255, 0, 255, 9, 9, 9, 9, 255, 0, 0, 255, 255, 255, 255, 255, 9, 9,
+            9, 9,
+        ];
+        let png = bgra_to_png(2, 2, 12, &bgra).expect("synthetic pixels encode");
+        let image = image::load_from_memory(&png)
+            .expect("PNG decodes")
+            .to_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 255, 0, 255]);
+        assert_eq!(image.get_pixel(0, 1).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 1).0, [255, 255, 255, 255]);
+        assert!(bgra_to_png(2, 2, 12, &bgra[..12]).is_err());
+    }
+
+    #[test]
     fn frontmost_bundle_id_matches_get_frontmost_app_info() {
         // Both read the same NSWorkspace state; calling them back to back
         // in a test process (no app switch in between) must agree, the
@@ -662,14 +792,6 @@ mod tests {
             get_frontmost_app_info().bundle_id,
             "frontmost_bundle_id must agree with get_frontmost_app_info absent a real app switch"
         );
-    }
-
-    #[test]
-    fn privacy_sensitive_browser_detection_includes_unsupported_firefox() {
-        assert!(is_browser_app("Firefox"));
-        assert!(is_browser_app("Opera"));
-        assert!(is_browser_app("Google Chrome"));
-        assert!(!is_browser_app("Finder"));
     }
 
     #[test]
@@ -733,6 +855,35 @@ mod tests {
         ] {
             assert_eq!(native_document_path_from_ax_url(input), None, "{input:?}");
         }
+    }
+
+    #[test]
+    fn a_finder_window_reads_as_its_folder_and_a_refusal_is_told_apart() {
+        assert_eq!(
+            finder_folder_from_script(true, "/Users/qa/Courses/PA2/\n", ""),
+            FinderFolder::Shown("/Users/qa/Courses/PA2".to_string())
+        );
+        assert_eq!(
+            finder_folder_from_script(true, "/\n", ""),
+            FinderFolder::Shown("/".to_string())
+        );
+        assert_eq!(finder_folder_from_script(true, "", ""), FinderFolder::None);
+        assert_eq!(
+            finder_folder_from_script(
+                false,
+                "",
+                "execution error: Can’t make «class cfol» into type alias. (-1700)"
+            ),
+            FinderFolder::None
+        );
+        assert_eq!(
+            finder_folder_from_script(
+                false,
+                "",
+                "execution error: Not authorized to send Apple events to Finder. (-1743)"
+            ),
+            FinderFolder::Refused
+        );
     }
 
     #[test]

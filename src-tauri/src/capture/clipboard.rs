@@ -40,6 +40,34 @@ pub fn note_self_copy(text: &str) {
     LAST_SELF_COPY_FP.store(clipboard_fingerprint(text.trim()), Ordering::SeqCst);
 }
 
+/// The text on the clipboard, for a Notch Do paste of what an earlier step
+/// copied. A copy marked secret (password managers mark theirs) is refused.
+pub fn copied_text() -> Result<String, String> {
+    if pasteboard_is_concealed() {
+        return Err(
+            "What is on the clipboard is marked secret, so FNDR does not paste it".to_string(),
+        );
+    }
+    read_pasteboard_string()
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| "Nothing is on the clipboard to paste".to_string())
+}
+
+/// The clipboard's plain text, to put back after FNDR pastes over it. None
+/// when it holds something else, or a copy marked secret.
+pub fn restorable_text() -> Option<String> {
+    (!pasteboard_is_concealed())
+        .then(read_pasteboard_string)
+        .flatten()
+}
+
+/// Puts plain text back on the clipboard. The watcher skips it: it is what
+/// the person had copied already.
+pub fn put_back(text: &str) -> bool {
+    note_self_copy(text);
+    write_pasteboard_string(text)
+}
+
 /// Start the clipboard watcher as a background loop.
 ///
 /// Polls `NSPasteboard.generalPasteboard` for `changeCount` changes, extracts
@@ -230,6 +258,21 @@ fn read_pasteboard_string() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+fn write_pasteboard_string(text: &str) -> bool {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        pb.setString_forType(
+            &NSString::from_str(text),
+            &NSString::from_str("public.utf8-plain-text"),
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn pasteboard_is_concealed() -> bool {
     use objc2_app_kit::NSPasteboard;
 
@@ -263,6 +306,11 @@ fn current_change_count() -> isize {
 #[cfg(not(target_os = "macos"))]
 fn read_pasteboard_string() -> Option<String> {
     None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_pasteboard_string(_text: &str) -> bool {
+    false
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -77,30 +77,6 @@ pub async fn fndr_build_context_pack(
     crate::context_runtime::build_context_pack(state.inner(), request).await
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct FndrSubgraphResponse {
-    pub seed_ids: Vec<String>,
-    pub node_count: usize,
-    pub edge_count: usize,
-}
-
-#[tauri::command]
-pub async fn fndr_get_memory_subgraph(
-    _state: State<'_, Arc<AppState>>,
-    seed_ids: Vec<String>,
-    _max_hops: Option<u8>,
-) -> Result<FndrSubgraphResponse, String> {
-    // The typed insight-graph table is not yet persisted (see context_runtime
-    // run_query notes). Until it lands, this command returns the bounded
-    // descriptor so the UI can show "no graph yet" without erroring.
-    crate::telemetry::runtime_metrics::bump("fndr.mcp.get_memory_subgraph.calls");
-    Ok(FndrSubgraphResponse {
-        seed_ids,
-        node_count: 0,
-        edge_count: 0,
-    })
-}
-
 #[tauri::command]
 pub async fn fndr_get_memory_source_statements(
     state: State<'_, Arc<AppState>>,

@@ -14,6 +14,7 @@ const ipc = vi.hoisted(() => ({
     reopenMemory: vi.fn(),
     searchMemoryCards: vi.fn(),
     listConfiguredPeers: vi.fn(),
+    listPeerRuns: vi.fn(),
     addConfiguredPeer: vi.fn(),
     removeConfiguredPeer: vi.fn(),
 }));
@@ -56,6 +57,7 @@ beforeEach(() => {
     ipc.deleteAgentChat.mockResolvedValue(undefined);
     ipc.cancelHermesMessage.mockResolvedValue(undefined);
     ipc.listConfiguredPeers.mockResolvedValue([]);
+    ipc.listPeerRuns.mockResolvedValue([]);
 });
 
 afterEach(() => {

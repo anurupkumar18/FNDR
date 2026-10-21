@@ -1,0 +1,401 @@
+respondent_id,segment,churned,churn_reason,last_onboarding_step,nps,days_to_first_report
+1000,SMB,yes,Missing Salesforce integration,First report,5,22
+1001,SMB,no,,Completed,6,3
+1002,SMB,no,,First report,9,6
+1003,SMB,yes,Pricing was unclear,First report,5,29
+1004,SMB,no,,First report,10,2
+1005,SMB,no,,Completed,7,11
+1006,SMB,no,,Completed,9,8
+1007,SMB,no,,Completed,10,8
+1008,SMB,no,,First report,10,2
+1009,SMB,no,,Completed,6,4
+1010,SMB,yes,Team never adopted it,First report,1,11
+1011,SMB,no,,Completed,8,9
+1012,SMB,yes,Other,Data import,1,18
+1013,SMB,no,,First report,8,7
+1014,SMB,no,,First report,5,7
+1015,SMB,no,,Completed,5,10
+1016,SMB,no,,First report,8,12
+1017,SMB,no,,First report,8,10
+1018,SMB,yes,Setup took too long,First report,1,19
+1019,SMB,no,,First report,6,10
+1020,SMB,no,,Completed,9,7
+1021,SMB,yes,Missing Salesforce integration,First report,0,23
+1022,SMB,no,,First report,8,8
+1023,SMB,yes,Team never adopted it,First report,2,29
+1024,SMB,no,,First report,8,8
+1025,SMB,no,,Completed,10,5
+1026,SMB,no,,First report,6,7
+1027,SMB,no,,Completed,5,2
+1028,SMB,no,,First report,9,5
+1029,SMB,no,,First report,9,4
+1030,SMB,no,,Completed,6,9
+1031,SMB,yes,Pricing was unclear,Data import,0,9
+1032,SMB,no,,First report,10,12
+1033,SMB,no,,Completed,5,11
+1034,SMB,yes,Pricing was unclear,Invite team,5,20
+1035,SMB,yes,Setup took too long,Invite team,4,15
+1036,SMB,no,,First report,10,4
+1037,SMB,no,,First report,10,2
+1038,SMB,no,,First report,6,6
+1039,SMB,no,,Completed,8,12
+1040,SMB,no,,Completed,9,5
+1041,SMB,no,,Completed,9,11
+1042,SMB,no,,Completed,10,4
+1043,SMB,no,,First report,9,2
+1044,SMB,no,,Completed,8,6
+1045,SMB,no,,First report,7,10
+1046,SMB,no,,Completed,8,3
+1047,SMB,no,,Completed,8,3
+1048,SMB,yes,Other,Invite team,0,9
+1049,SMB,no,,First report,5,2
+1050,SMB,no,,First report,7,7
+1051,SMB,no,,Completed,5,5
+1052,SMB,no,,Completed,7,5
+1053,SMB,no,,Completed,10,7
+1054,SMB,no,,First report,7,7
+1055,SMB,yes,Other,Invite team,4,21
+1056,SMB,yes,Missing Salesforce integration,Invite team,6,24
+1057,SMB,yes,Missing Salesforce integration,Data import,3,9
+1058,SMB,no,,Completed,5,8
+1059,SMB,no,,Completed,6,6
+1060,SMB,no,,First report,7,4
+1061,SMB,no,,Completed,5,4
+1062,SMB,no,,Completed,8,6
+1063,SMB,yes,Setup took too long,Data import,4,19
+1064,SMB,no,,First report,9,11
+1065,SMB,no,,First report,8,2
+1066,SMB,yes,Setup took too long,Invite team,4,21
+1067,SMB,yes,Pricing was unclear,First report,6,24
+1068,SMB,no,,Completed,7,4
+1069,SMB,no,,Completed,6,2
+1070,SMB,no,,Completed,5,12
+1071,SMB,no,,Completed,6,2
+1072,SMB,no,,First report,5,11
+1073,SMB,yes,Setup took too long,Invite team,3,12
+1074,SMB,yes,Other,First report,2,26
+1075,SMB,yes,Team never adopted it,Invite team,1,15
+1076,SMB,no,,First report,8,7
+1077,SMB,no,,First report,8,8
+1078,SMB,no,,Completed,6,10
+1079,SMB,no,,Completed,8,9
+1080,SMB,yes,Setup took too long,Invite team,3,18
+1081,SMB,yes,Setup took too long,Data import,1,29
+1082,SMB,yes,Team never adopted it,Invite team,5,14
+1083,SMB,yes,Missing Salesforce integration,Data import,4,18
+1084,SMB,no,,First report,5,4
+1085,SMB,yes,Pricing was unclear,Invite team,0,15
+1086,SMB,no,,Completed,9,6
+1087,SMB,no,,First report,7,4
+1088,SMB,no,,Completed,5,11
+1089,SMB,no,,First report,6,10
+1090,SMB,no,,First report,5,6
+1091,SMB,yes,Missing Salesforce integration,Invite team,5,26
+1092,SMB,no,,Completed,7,12
+1093,SMB,yes,Pricing was unclear,Data import,4,10
+1094,SMB,no,,First report,5,7
+1095,SMB,no,,First report,6,5
+1096,SMB,yes,Missing Salesforce integration,First report,4,18
+1097,SMB,no,,First report,10,6
+1098,SMB,yes,Pricing was unclear,Invite team,2,13
+1099,SMB,no,,Completed,9,12
+1100,SMB,no,,Completed,7,7
+1101,SMB,yes,Setup took too long,First report,5,28
+1102,SMB,no,,First report,5,11
+1103,SMB,no,,Completed,10,12
+1104,SMB,yes,Other,Data import,4,29
+1105,SMB,yes,Missing Salesforce integration,Invite team,2,22
+1106,SMB,no,,Completed,5,4
+1107,SMB,no,,Completed,5,7
+1108,SMB,yes,Pricing was unclear,Invite team,4,9
+1109,SMB,no,,Completed,8,2
+1110,SMB,no,,Completed,5,9
+1111,SMB,no,,First report,6,10
+1112,SMB,yes,Setup took too long,First report,1,29
+1113,SMB,yes,Setup took too long,Data import,4,27
+1114,SMB,no,,Completed,9,2
+1115,SMB,no,,First report,7,4
+1116,SMB,no,,Completed,10,5
+1117,SMB,no,,Completed,7,2
+1118,SMB,no,,Completed,7,10
+1119,SMB,no,,Completed,8,6
+1120,SMB,no,,Completed,8,12
+1121,SMB,yes,Pricing was unclear,Data import,0,17
+1122,SMB,no,,Completed,10,3
+1123,SMB,no,,Completed,10,7
+1124,SMB,no,,Completed,9,8
+1125,SMB,no,,Completed,8,11
+1126,SMB,no,,Completed,10,8
+1127,SMB,no,,Completed,6,11
+1128,SMB,no,,Completed,5,4
+1129,SMB,yes,Missing Salesforce integration,First report,2,23
+1130,SMB,no,,Completed,9,7
+1131,SMB,yes,Pricing was unclear,First report,5,16
+1132,SMB,no,,First report,6,11
+1133,SMB,no,,First report,5,12
+1134,SMB,no,,First report,7,11
+1135,SMB,no,,Completed,7,10
+1136,SMB,no,,First report,10,11
+1137,SMB,yes,Pricing was unclear,Data import,1,10
+1138,SMB,no,,Completed,7,5
+1139,SMB,yes,Setup took too long,Data import,1,10
+1140,SMB,no,,First report,6,5
+1141,SMB,no,,First report,8,7
+1142,SMB,yes,Setup took too long,First report,0,29
+1143,SMB,no,,Completed,5,3
+1144,SMB,yes,Pricing was unclear,Data import,5,14
+1145,SMB,yes,Missing Salesforce integration,Data import,6,18
+1146,SMB,no,,First report,10,2
+1147,SMB,yes,Missing Salesforce integration,Data import,4,24
+1148,SMB,no,,First report,8,9
+1149,SMB,yes,Team never adopted it,Invite team,6,10
+1150,SMB,no,,Completed,8,9
+1151,SMB,no,,First report,5,9
+1152,SMB,yes,Setup took too long,First report,2,17
+1153,SMB,yes,Pricing was unclear,First report,0,23
+1154,SMB,yes,Setup took too long,Data import,4,20
+1155,SMB,no,,First report,9,8
+1156,SMB,no,,First report,10,11
+1157,SMB,no,,First report,5,6
+1158,SMB,no,,Completed,10,7
+1159,SMB,no,,Completed,10,11
+1160,SMB,no,,Completed,7,6
+1161,SMB,no,,First report,6,5
+1162,SMB,no,,First report,6,6
+1163,SMB,yes,Missing Salesforce integration,First report,3,28
+1164,SMB,no,,Completed,8,4
+1165,SMB,yes,Team never adopted it,First report,6,16
+1166,SMB,no,,First report,7,3
+1167,SMB,no,,First report,9,9
+1168,SMB,no,,First report,7,4
+1169,SMB,yes,Other,First report,3,23
+1170,SMB,no,,First report,6,10
+1171,SMB,no,,Completed,5,9
+1172,SMB,no,,First report,5,11
+1173,SMB,no,,First report,8,11
+1174,SMB,no,,First report,6,7
+1175,SMB,no,,Completed,6,11
+1176,SMB,no,,First report,10,5
+1177,SMB,no,,First report,5,3
+1178,SMB,yes,Team never adopted it,Data import,0,9
+1179,SMB,no,,First report,10,10
+1180,SMB,yes,Missing Salesforce integration,First report,0,27
+1181,SMB,no,,Completed,9,9
+1182,SMB,no,,First report,10,6
+1183,SMB,yes,Setup took too long,First report,1,12
+1184,SMB,yes,Setup took too long,Invite team,1,14
+1185,SMB,yes,Missing Salesforce integration,Data import,4,16
+1186,SMB,no,,Completed,8,7
+1187,SMB,no,,Completed,6,10
+1188,SMB,yes,Setup took too long,Data import,1,25
+1189,SMB,no,,First report,5,5
+1190,SMB,no,,Completed,5,2
+1191,SMB,no,,First report,5,11
+1192,SMB,no,,Completed,7,3
+1193,SMB,no,,First report,5,9
+1194,SMB,no,,First report,9,8
+1195,SMB,no,,First report,9,11
+1196,SMB,no,,First report,9,7
+1197,SMB,no,,Completed,5,6
+1198,SMB,no,,Completed,6,3
+1199,SMB,yes,Missing Salesforce integration,Data import,6,24
+1200,SMB,no,,First report,9,12
+1201,SMB,yes,Setup took too long,Invite team,4,22
+1202,SMB,no,,First report,5,12
+1203,SMB,yes,Pricing was unclear,Invite team,6,22
+1204,SMB,no,,First report,9,7
+1205,SMB,no,,First report,9,8
+1206,SMB,yes,Missing Salesforce integration,Invite team,5,29
+1207,SMB,no,,Completed,9,6
+1208,SMB,yes,Missing Salesforce integration,First report,6,16
+1209,SMB,no,,Completed,6,3
+1210,SMB,no,,First report,5,11
+1211,SMB,no,,First report,10,11
+1212,SMB,no,,First report,9,4
+1213,SMB,no,,First report,7,10
+1214,SMB,no,,Completed,7,8
+1215,SMB,no,,First report,7,12
+1216,SMB,no,,First report,8,11
+1217,SMB,no,,First report,9,6
+1218,SMB,no,,Completed,5,10
+1219,SMB,no,,Completed,7,8
+1220,Mid-market,no,,First report,9,7
+1221,Mid-market,yes,Missing Salesforce integration,Data import,5,13
+1222,Mid-market,yes,Setup took too long,Data import,2,19
+1223,Mid-market,no,,First report,5,12
+1224,Mid-market,no,,Completed,7,12
+1225,Mid-market,no,,First report,7,12
+1226,Mid-market,no,,First report,10,11
+1227,Mid-market,no,,Completed,6,8
+1228,Mid-market,no,,First report,8,5
+1229,Mid-market,no,,First report,8,10
+1230,Mid-market,no,,First report,10,6
+1231,Mid-market,no,,First report,9,5
+1232,Mid-market,no,,First report,7,5
+1233,Mid-market,yes,Setup took too long,Data import,2,19
+1234,Mid-market,no,,First report,7,6
+1235,Mid-market,no,,First report,7,2
+1236,Mid-market,no,,First report,5,12
+1237,Mid-market,no,,Completed,10,3
+1238,Mid-market,no,,First report,7,12
+1239,Mid-market,no,,Completed,5,9
+1240,Mid-market,no,,Completed,5,5
+1241,Mid-market,no,,Completed,7,2
+1242,Mid-market,yes,Missing Salesforce integration,Invite team,1,27
+1243,Mid-market,no,,First report,8,7
+1244,Mid-market,no,,First report,8,3
+1245,Mid-market,no,,First report,5,7
+1246,Mid-market,no,,First report,9,2
+1247,Mid-market,yes,Setup took too long,Data import,0,15
+1248,Mid-market,no,,Completed,7,2
+1249,Mid-market,no,,Completed,5,8
+1250,Mid-market,no,,Completed,7,11
+1251,Mid-market,no,,First report,8,8
+1252,Mid-market,no,,First report,10,12
+1253,Mid-market,no,,Completed,6,2
+1254,Mid-market,no,,Completed,6,7
+1255,Mid-market,no,,Completed,9,12
+1256,Mid-market,no,,Completed,10,3
+1257,Mid-market,no,,Completed,8,6
+1258,Mid-market,no,,First report,9,6
+1259,Mid-market,no,,First report,6,9
+1260,Mid-market,no,,First report,9,6
+1261,Mid-market,no,,Completed,7,10
+1262,Mid-market,no,,First report,7,11
+1263,Mid-market,no,,Completed,7,6
+1264,Mid-market,no,,First report,5,11
+1265,Mid-market,yes,Pricing was unclear,Data import,3,9
+1266,Mid-market,no,,Completed,10,3
+1267,Mid-market,no,,Completed,9,3
+1268,Mid-market,no,,Completed,7,5
+1269,Mid-market,no,,First report,6,5
+1270,Mid-market,no,,Completed,9,4
+1271,Mid-market,no,,First report,9,3
+1272,Mid-market,no,,Completed,9,7
+1273,Mid-market,yes,Missing Salesforce integration,Data import,3,23
+1274,Mid-market,no,,First report,8,6
+1275,Mid-market,no,,First report,6,9
+1276,Mid-market,no,,First report,9,5
+1277,Mid-market,no,,Completed,5,11
+1278,Mid-market,no,,Completed,7,6
+1279,Mid-market,no,,First report,10,4
+1280,Mid-market,no,,First report,9,9
+1281,Mid-market,no,,First report,8,10
+1282,Mid-market,no,,First report,9,9
+1283,Mid-market,yes,Setup took too long,Invite team,5,30
+1284,Mid-market,no,,Completed,7,10
+1285,Mid-market,no,,First report,10,5
+1286,Mid-market,no,,First report,8,4
+1287,Mid-market,no,,First report,10,10
+1288,Mid-market,no,,First report,5,2
+1289,Mid-market,no,,First report,9,7
+1290,Mid-market,no,,Completed,9,5
+1291,Mid-market,yes,Team never adopted it,First report,4,12
+1292,Mid-market,no,,First report,5,7
+1293,Mid-market,no,,First report,5,8
+1294,Mid-market,no,,Completed,10,4
+1295,Mid-market,no,,Completed,6,5
+1296,Mid-market,no,,Completed,9,3
+1297,Mid-market,no,,First report,6,8
+1298,Mid-market,no,,Completed,10,3
+1299,Mid-market,no,,Completed,8,5
+1300,Mid-market,no,,Completed,8,2
+1301,Mid-market,yes,Pricing was unclear,First report,2,30
+1302,Mid-market,no,,First report,8,11
+1303,Mid-market,no,,First report,10,2
+1304,Mid-market,yes,Pricing was unclear,Data import,1,12
+1305,Mid-market,no,,First report,7,9
+1306,Mid-market,no,,First report,10,9
+1307,Mid-market,yes,Setup took too long,Invite team,0,13
+1308,Mid-market,no,,First report,10,10
+1309,Mid-market,no,,Completed,5,8
+1310,Mid-market,no,,First report,7,7
+1311,Mid-market,no,,First report,7,8
+1312,Mid-market,no,,Completed,6,3
+1313,Mid-market,no,,First report,9,12
+1314,Mid-market,no,,Completed,7,7
+1315,Mid-market,no,,First report,7,4
+1316,Mid-market,no,,First report,9,7
+1317,Mid-market,no,,Completed,6,3
+1318,Mid-market,yes,Missing Salesforce integration,First report,6,22
+1319,Mid-market,no,,First report,7,8
+1320,Mid-market,no,,First report,10,2
+1321,Mid-market,yes,Other,Invite team,4,13
+1322,Mid-market,no,,First report,10,10
+1323,Mid-market,no,,First report,8,9
+1324,Mid-market,no,,First report,5,7
+1325,Mid-market,no,,First report,6,3
+1326,Mid-market,yes,Pricing was unclear,Data import,3,14
+1327,Mid-market,no,,First report,5,2
+1328,Mid-market,no,,Completed,6,10
+1329,Mid-market,no,,Completed,7,2
+1330,Mid-market,no,,Completed,9,12
+1331,Mid-market,no,,First report,8,11
+1332,Mid-market,no,,Completed,6,12
+1333,Mid-market,no,,First report,9,12
+1334,Mid-market,no,,Completed,9,7
+1335,Mid-market,no,,First report,6,8
+1336,Mid-market,no,,First report,9,5
+1337,Mid-market,no,,Completed,5,12
+1338,Mid-market,no,,Completed,10,10
+1339,Mid-market,no,,First report,5,2
+1340,Mid-market,no,,First report,6,3
+1341,Mid-market,no,,First report,10,7
+1342,Mid-market,no,,First report,6,9
+1343,Mid-market,no,,Completed,6,6
+1344,Mid-market,no,,First report,8,8
+1345,Mid-market,no,,Completed,10,2
+1346,Mid-market,no,,Completed,5,3
+1347,Mid-market,no,,Completed,5,7
+1348,Mid-market,no,,Completed,7,10
+1349,Mid-market,no,,Completed,9,12
+1350,Enterprise,no,,First report,9,4
+1351,Enterprise,no,,Completed,5,2
+1352,Enterprise,no,,First report,8,7
+1353,Enterprise,yes,Setup took too long,Invite team,3,21
+1354,Enterprise,no,,Completed,6,6
+1355,Enterprise,no,,First report,7,10
+1356,Enterprise,no,,First report,5,12
+1357,Enterprise,no,,Completed,7,7
+1358,Enterprise,no,,First report,7,6
+1359,Enterprise,no,,Completed,9,4
+1360,Enterprise,no,,Completed,6,3
+1361,Enterprise,no,,First report,10,6
+1362,Enterprise,no,,First report,10,6
+1363,Enterprise,no,,First report,8,8
+1364,Enterprise,no,,Completed,10,5
+1365,Enterprise,no,,Completed,10,2
+1366,Enterprise,no,,First report,6,9
+1367,Enterprise,no,,First report,5,6
+1368,Enterprise,no,,First report,5,12
+1369,Enterprise,no,,First report,5,7
+1370,Enterprise,no,,First report,5,11
+1371,Enterprise,no,,Completed,5,7
+1372,Enterprise,no,,Completed,7,5
+1373,Enterprise,no,,Completed,10,11
+1374,Enterprise,no,,First report,8,10
+1375,Enterprise,no,,Completed,6,5
+1376,Enterprise,no,,Completed,7,3
+1377,Enterprise,no,,First report,6,3
+1378,Enterprise,no,,Completed,7,9
+1379,Enterprise,no,,First report,5,3
+1380,Enterprise,no,,First report,5,8
+1381,Enterprise,no,,First report,9,2
+1382,Enterprise,no,,First report,9,3
+1383,Enterprise,no,,Completed,7,5
+1384,Enterprise,no,,First report,5,10
+1385,Enterprise,no,,First report,6,6
+1386,Enterprise,no,,First report,9,2
+1387,Enterprise,no,,First report,5,7
+1388,Enterprise,no,,Completed,8,8
+1389,Enterprise,no,,First report,7,6
+1390,Enterprise,no,,Completed,9,5
+1391,Enterprise,no,,First report,10,4
+1392,Enterprise,no,,First report,7,7
+1393,Enterprise,no,,Completed,8,5
+1394,Enterprise,no,,First report,9,9
+1395,Enterprise,no,,First report,8,8
+1396,Enterprise,no,,First report,10,11
+1397,Enterprise,no,,First report,9,3
+1398,Enterprise,no,,Completed,5,10
+1399,Enterprise,no,,First report,8,10

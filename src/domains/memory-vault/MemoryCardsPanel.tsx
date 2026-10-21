@@ -14,6 +14,7 @@ import {
     type NeedsSignalCard,
 } from "@/shared/ipc/tauri";
 import { reopenOutcomeMessage } from "@/shared/reopenOutcome";
+import { recordOnboardingFunnelEvent } from "@/shared/ipc/onboarding";
 import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
@@ -25,6 +26,7 @@ import { matchesPerspective, type Perspective } from "./perspectiveFilter";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
@@ -153,6 +155,7 @@ export function MemoryCardsPanel({
     const [showVaultMenu, setShowVaultMenu] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [reloadKey, setReloadKey] = useState(0);
     const [vaultActivity, setVaultActivity] = useState<ActivityTraceSnapshot | null>(null);
     const [appFilter, setAppFilter] = useState<string>(APP_FILTER_ALL);
     const [vaultQuery, setVaultQuery] = useState("");
@@ -219,6 +222,19 @@ export function MemoryCardsPanel({
                         .includes(needle))
         );
     }, [cards, timeFilter, perspectiveFilter, vaultQuery]);
+
+    const filtersActive =
+        vaultQuery.trim().length > 0 ||
+        appFilter !== APP_FILTER_ALL ||
+        timeFilter !== TIME_FILTER_ALL ||
+        perspectiveFilter !== PERSPECTIVE_FILTER_ALL;
+
+    const clearFilters = () => {
+        setVaultQuery("");
+        setAppFilter(APP_FILTER_ALL);
+        setTimeFilter(TIME_FILTER_ALL);
+        setPerspectiveFilter(PERSPECTIVE_FILTER_ALL);
+    };
 
     const vaultDays = useMemo(
         () => groupVaultMemories(filteredCards.slice(0, renderedCardLimit), Date.now()),
@@ -347,7 +363,7 @@ export function MemoryCardsPanel({
         return () => {
             cancelled = true;
         };
-    }, [isVisible, appFilter]);
+    }, [isVisible, appFilter, reloadKey]);
 
     useEffect(() => {
         if (!isVisible || !isVaultFeature) return;
@@ -404,11 +420,15 @@ export function MemoryCardsPanel({
     const handleReopen = async (memoryId: string) => {
         try {
             const outcome = await reopenMemory(memoryId);
+            void recordOnboardingFunnelEvent(
+                outcome.kind === "opened" || outcome.kind === "opened_moved" ? "reopen_succeeded" : "reopen_failed",
+            ).catch(() => undefined);
             setReopenStatusById((previous) => ({
                 ...previous,
                 [memoryId]: reopenOutcomeMessage(outcome),
             }));
         } catch (err) {
+            void recordOnboardingFunnelEvent("reopen_failed").catch(() => undefined);
             const message = err instanceof Error ? err.message : String(err);
             setReopenStatusById((previous) => ({
                 ...previous,
@@ -817,10 +837,7 @@ export function MemoryCardsPanel({
                 </section>
                 )}
                 {loading && cards.length === 0 && (
-                    <div className="memory-cards-state">
-                        <ThinkingIndicator state="searching" size="md" />
-                        <p>Loading memory cards...</p>
-                    </div>
+                    <PanelState kind="loading" title="Loading memories" description="Reading saved memories from this Mac." />
                 )}
 
                 {error && filteredCards.length > 0 && (
@@ -830,15 +847,11 @@ export function MemoryCardsPanel({
                 )}
 
                 {error && filteredCards.length === 0 && (
-                    <div className="memory-cards-state">
-                        <p>{error}</p>
-                    </div>
+                    <PanelState kind="error" title="Memories could not load" description={error} action={{ label: "Try again", onAction: () => setReloadKey((key) => key + 1) }} />
                 )}
 
                 {!loading && !error && filteredCards.length === 0 && (
-                    <div className="memory-cards-state">
-                        <p>No memory cards yet for this filter.</p>
-                    </div>
+                    <PanelState kind="empty" title={filtersActive ? "No memories match these filters" : "No memories yet"} description={filtersActive ? "Try different search or filter settings." : "New memories will appear after FNDR captures useful screen context."} action={filtersActive ? { label: "Clear filters", onAction: clearFilters } : { label: "Show connections", onAction: () => setShowConnections(true) }} />
                 )}
 
                 {filteredCards.length > 0 && (

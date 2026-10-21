@@ -152,9 +152,8 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     if normalized.internal_context.trim().is_empty() {
         normalized.internal_context = normalized.clean_text.clone();
     }
-    // Assistant notes are authored text, so capture cleanup must not change
-    // their indentation, paragraph boundaries, or literal marker strings.
-    if !normalized.is_agent_note() {
+    // Leaf rows preserve the connector's admitted text and its boundaries.
+    if !normalized.is_leaf_row() {
         normalized.clean_text = strip_low_conf_markers(&normalized.clean_text);
         normalized.snippet = strip_low_conf_markers(&normalized.snippet);
         normalized.display_summary = strip_low_conf_markers(&normalized.display_summary);
@@ -172,8 +171,8 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
         normalized.source_type = infer_source_type(&normalized);
     }
     normalized.activity_type = crate::inference::normalize_activity_type(&normalized.activity_type);
-    // An agent note never becomes an open target (VS-68).
-    if !normalized.is_agent_note() {
+    // Leaf rows use only their explicit typed reopen provenance.
+    if !normalized.is_leaf_row() {
         let derived = if normalized.reopen_kind == ReopenKind::Unknown {
             Some(reopen_target_from_stored_evidence(&normalized))
         } else {
@@ -1227,6 +1226,9 @@ pub(super) fn build_index_session_key(record: &MemoryRecord) -> String {
         || record
             .session_key
             .starts_with(crate::storage::AGENT_NOTE_SESSION_PREFIX)
+        || record
+            .session_key
+            .starts_with(crate::storage::IMPORT_SESSION_PREFIX)
     {
         return record.session_key.clone();
     }
@@ -1412,6 +1414,9 @@ pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
     if record.is_agent_note() {
         return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, record.id);
     }
+    if record.is_import() {
+        return format!("{}{}", crate::storage::IMPORT_SESSION_PREFIX, record.id);
+    }
     if !record.content_hash.trim().is_empty() {
         return record.content_hash.trim().to_string();
     }
@@ -1425,6 +1430,9 @@ pub(super) fn record_insert_dedup_key(record: &MemoryRecord) -> String {
 pub(super) fn search_result_dedup_key(result: &SearchResult) -> String {
     if result.is_agent_note() {
         return format!("{}{}", crate::storage::AGENT_NOTE_SESSION_PREFIX, result.id);
+    }
+    if result.is_import() {
+        return format!("{}{}", crate::storage::IMPORT_SESSION_PREFIX, result.id);
     }
     if !result.content_hash.trim().is_empty() {
         return result.content_hash.trim().to_string();

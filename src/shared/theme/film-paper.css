@@ -94,6 +94,13 @@
     --paper-amber-2: #0062cc;
     --paper-amber-3: #004f9e;
 
+    /* Semantic status colors are defined once here so mounted panels stay
+       palette-aware rather than carrying their own literal color values. */
+    --status-success: #278451;
+    --status-warning: #a96d16;
+    --status-info: #2d72b8;
+    --on-accent: #ffffff;
+
     /* Hairlines — additional steps; existing --hairline is set in index.css */
     --film-hairline: rgba(255, 255, 255, 0.08);
     --film-hairline-2: rgba(255, 255, 255, 0.14);

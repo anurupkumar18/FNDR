@@ -55,6 +55,8 @@ pub struct LlmTrace {
     pub task: String,
     pub prompt_version: String,
     pub model_id: String,
+    #[serde(default)]
+    pub backend: String,
     pub prompt_tokens: u32,
     pub output_tokens: u32,
     /// The generation cap for this call; `output_tokens >= max_tokens` means the output was cut off.
@@ -72,6 +74,7 @@ pub struct TraceInput<'a> {
     pub task: &'a str,
     pub prompt_version: &'a str,
     pub model_id: &'a str,
+    pub backend: &'a str,
     pub prompt_tokens: u32,
     pub output_tokens: u32,
     pub max_tokens: u32,
@@ -87,6 +90,7 @@ pub fn build_trace(input: &TraceInput<'_>, include_content: bool) -> LlmTrace {
         task: input.task.to_string(),
         prompt_version: input.prompt_version.to_string(),
         model_id: input.model_id.to_string(),
+        backend: input.backend.to_string(),
         prompt_tokens: input.prompt_tokens,
         output_tokens: input.output_tokens,
         max_tokens: input.max_tokens,
@@ -126,6 +130,7 @@ mod tests {
             task: "memory_extraction",
             prompt_version: "v3",
             model_id: "qwen3-vl-2b",
+            backend: "local_gguf",
             prompt_tokens: 1200,
             output_tokens: 180,
             max_tokens: 400,
@@ -134,6 +139,14 @@ mod tests {
             output: "{\"topic\":\"x\"}",
             validator: "ok",
         }
+    }
+
+    #[test]
+    fn trace_names_backend_without_storing_prompt_content() {
+        let trace = build_trace(&input(), false);
+        assert_eq!(trace.backend, "local_gguf");
+        assert!(trace.prompt.is_none());
+        assert!(trace.output.is_none());
     }
 
     #[test]

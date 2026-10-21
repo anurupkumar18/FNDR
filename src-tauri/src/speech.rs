@@ -727,18 +727,59 @@ async fn try_whisper_cli_binary_with_candidates_within(
 /// Try to run whisper via the `whisper-cli` binary (from `brew install whisper-cpp`).
 /// Returns the transcript on success, or None if the binary is unavailable / fails.
 async fn try_whisper_cli_binary(model_path: &Path, audio_path: &Path) -> Option<String> {
-    let path_dirs = std::env::var_os("PATH")
+    try_whisper_cli_binary_with_candidates(model_path, audio_path, &whisper_cli_search_paths())
+        .await
+}
+
+fn whisper_cli_search_paths() -> Vec<PathBuf> {
+    let mut cli_paths = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let mut cli_paths = path_dirs
-        .iter()
+        .unwrap_or_default()
+        .into_iter()
         .map(|directory| directory.join("whisper-cli"))
         .collect::<Vec<_>>();
     cli_paths.extend([
         PathBuf::from("/opt/homebrew/bin/whisper-cli"),
         PathBuf::from("/usr/local/bin/whisper-cli"),
     ]);
-    try_whisper_cli_binary_with_candidates(model_path, audio_path, &cli_paths).await
+    cli_paths
+}
+
+/// Which of the two programs the native voice route runs are on this Mac.
+/// Only the file system is read: nothing is executed, so a Mac without the
+/// Command Line Tools is not asked to install them by a status check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeechRuntime {
+    pub ffmpeg: bool,
+    pub whisper_cli: bool,
+}
+
+pub fn speech_runtime() -> SpeechRuntime {
+    SpeechRuntime {
+        ffmpeg: resolve_ffmpeg_binary().is_some(),
+        whisper_cli: whisper_cli_search_paths()
+            .iter()
+            .any(|candidate| binary_is_executable(candidate)),
+    }
+}
+
+/// What is missing for voice search and meeting transcripts, in plain words,
+/// or `None` when the native route has everything it runs.
+pub fn speech_runtime_gap(runtime: SpeechRuntime) -> Option<String> {
+    const FALLBACK: &str = "FNDR then tries a Python backup, which needs Python 3.13 or older and a download, and fails without them.";
+    const UNAFFECTED: &str = "Capture, search and typed commands are not affected.";
+    match (runtime.ffmpeg, runtime.whisper_cli) {
+        (true, true) => None,
+        (false, false) => Some(format!(
+            "Neither ffmpeg nor whisper.cpp is on this Mac, and FNDR does not install them yet. {FALLBACK} {UNAFFECTED}"
+        )),
+        (false, true) => Some(format!(
+            "ffmpeg is not on this Mac, and FNDR needs it to read recordings made in the app. FNDR does not install it yet. {UNAFFECTED}"
+        )),
+        (true, false) => Some(format!(
+            "whisper.cpp is not on this Mac, so recordings are not transcribed on the fast route. {FALLBACK} {UNAFFECTED}"
+        )),
+    }
 }
 
 fn python_imports_ok(python: &Path, imports: &str) -> bool {
@@ -1295,6 +1336,61 @@ pub async fn synthesize_speech(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_complete_speech_runtime_reports_no_gap() {
+        let runtime = SpeechRuntime {
+            ffmpeg: true,
+            whisper_cli: true,
+        };
+        assert_eq!(speech_runtime_gap(runtime), None);
+    }
+
+    #[test]
+    fn each_missing_speech_program_is_named_in_plain_words() {
+        let none = speech_runtime_gap(SpeechRuntime {
+            ffmpeg: false,
+            whisper_cli: false,
+        })
+        .expect("both missing is a gap");
+        assert!(none.contains("ffmpeg") && none.contains("whisper.cpp"));
+        assert!(none.contains("Python 3.13 or older"));
+
+        let no_ffmpeg = speech_runtime_gap(SpeechRuntime {
+            ffmpeg: false,
+            whisper_cli: true,
+        })
+        .expect("a missing ffmpeg is a gap");
+        assert!(no_ffmpeg.contains("ffmpeg") && !no_ffmpeg.contains("whisper.cpp"));
+
+        let no_whisper = speech_runtime_gap(SpeechRuntime {
+            ffmpeg: true,
+            whisper_cli: false,
+        })
+        .expect("a missing whisper.cpp is a gap");
+        assert!(no_whisper.contains("whisper.cpp") && !no_whisper.contains("ffmpeg"));
+    }
+
+    #[test]
+    fn a_gap_never_tells_the_person_to_open_a_terminal() {
+        for (ffmpeg, whisper_cli) in [(false, false), (false, true), (true, false)] {
+            let text = speech_runtime_gap(SpeechRuntime {
+                ffmpeg,
+                whisper_cli,
+            })
+            .expect("a gap");
+            for banned in ["brew", "pip", "terminal", "npm"] {
+                assert!(!text.to_lowercase().contains(banned), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn whisper_cli_is_searched_in_the_homebrew_locations_without_a_shell_path() {
+        let paths = whisper_cli_search_paths();
+        assert!(paths.contains(&PathBuf::from("/opt/homebrew/bin/whisper-cli")));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin/whisper-cli")));
+    }
 
     #[test]
     fn development_build_resolves_bundled_whisper_sidecar() {

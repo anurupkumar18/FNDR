@@ -1,0 +1,35 @@
+{
+ "respondents": 400,
+ "churned": 78,
+ "top_reasons": [
+  [
+   "Setup took too long",
+   24
+  ],
+  [
+   "Missing Salesforce integration",
+   21
+  ],
+  [
+   "Pricing was unclear",
+   18
+  ]
+ ],
+ "churn_by_segment": {
+  "SMB": [
+   62,
+   220,
+   28.2
+  ],
+  "Mid-market": [
+   15,
+   130,
+   11.5
+  ],
+  "Enterprise": [
+   1,
+   50,
+   2.0
+  ]
+ }
+}

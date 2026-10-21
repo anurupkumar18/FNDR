@@ -1,13 +1,14 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import type { ResumeThread } from "@/shared/ipc/tauri";
+import type { ResumeThread, WorkItem } from "@/shared/ipc/tauri";
 import { ResumeWork } from "./ResumeWork";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 function thread(title = "Parser"): ResumeThread {
     return {
+        key: `key:${title}`,
         title,
         last_state: "Fixed weekday aliases",
         age_minutes: 12,
@@ -18,17 +19,67 @@ function thread(title = "Parser"): ResumeThread {
     };
 }
 
-beforeEach(() => vi.mocked(invoke).mockReset());
-afterEach(cleanup);
+function item(memoryId: string): WorkItem {
+    return { memoryId, label: `Item ${memoryId}`, kind: "url", reopenRank: 4, appName: "Safari", capturedAt: 1 };
+}
+
+type Resume = ResumeThread[] | Error | Promise<ResumeThread[]>;
+let resumeRows: Resume[] = [];
+
+function route() {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+        const payload = args as Record<string, unknown> | undefined;
+        switch (command) {
+            case "resume_work": {
+                const next = resumeRows.length > 1 ? resumeRows.shift()! : resumeRows[0] ?? [];
+                if (next instanceof Error) throw next;
+                return next;
+            }
+            case "what_changed_since":
+                return {
+                    thread_key: payload?.threadKey, title: "", since_ms: 0, first_view: true, new_memories: 3,
+                    page_count: 3, pages: ["A", "B", "C"], file_count: 0, files: [], task_count: 0, tasks: [],
+                    commit_count: 0, newest_memory_id: null,
+                };
+            case "mark_thread_seen": return undefined;
+            case "get_todos": return [];
+            case "list_named_sets": return [];
+            case "routine_offers": return [];
+            case "resolve_work_set":
+                return { kind: "best", value: { id: "ws", title: "Parser", reason: "", score: 1, items: [item("earlier"), item("latest")] } };
+            case "open_work_set":
+                return (payload?.memoryIds as string[]).map((memoryId) => ({ memoryId, label: `Item ${memoryId}`, ok: true, detail: "Opened", outcome: { kind: "opened" } }));
+            case "reopen_memory": return { kind: "opened" };
+            default: throw new Error(`unexpected ${command}`);
+        }
+    });
+}
+
+function calls(command: string) {
+    return vi.mocked(invoke).mock.calls.filter((call) => call[0] === command);
+}
+
+function recentWork() {
+    return within(screen.getByRole("region", { name: "Pick up where you left off" }));
+}
+
+beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    resumeRows = [[thread()]];
+    route();
+});
+afterEach(() => {
+    cleanup();
+    localStorage.clear();
+});
 
 describe("Resume Work on Home", () => {
     it("loads recent work through the existing IPC and opens exact cited memories", async () => {
-        vi.mocked(invoke).mockResolvedValue([thread()]);
         const onOpenMemory = vi.fn();
         const onOpenVault = vi.fn();
         render(<ResumeWork onOpenMemory={onOpenMemory} onOpenVault={onOpenVault} />);
 
-        expect(screen.getByRole("status")).toHaveTextContent("Loading recent work");
+        expect(recentWork().getByRole("status")).toHaveTextContent("Loading recent work");
         expect(await screen.findByText("Fixed weekday aliases")).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledWith("resume_work", { hours: 24, budgetTokens: 800 });
         expect(screen.getByText("12 min ago")).toBeInTheDocument();
@@ -39,43 +90,122 @@ describe("Resume Work on Home", () => {
         expect(onOpenMemory).toHaveBeenLastCalledWith("earlier");
         fireEvent.click(screen.getByRole("button", { name: "Open Vault" }));
         expect(onOpenVault).toHaveBeenCalledOnce();
-        expect(invoke).toHaveBeenCalledOnce();
+        expect(calls("resume_work")).toHaveLength(1);
+    });
+
+    it("says which shared words made several windows one thread, and nothing for a single window", async () => {
+        resumeRows = [[
+            { ...thread("Smart Reminders"), grouped_by: ["Smart Reminders", "Reminders launch"] },
+            { ...thread("Parser"), grouped_by: [] },
+        ]];
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+
+        expect(await screen.findByText("Grouped by the words its windows share: Smart Reminders, Reminders launch")).toBeInTheDocument();
+        expect(screen.getAllByText(/^Grouped by/)).toHaveLength(1);
+    });
+
+    it("leaves out the sections the person turned off in Settings", async () => {
+        localStorage.setItem("fndr-home-sections", JSON.stringify({ deadlines: false, sets: false }));
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+
+        await screen.findByText("Fixed weekday aliases");
+        expect(screen.queryByText("Nothing is due in the next three days.")).toBeNull();
+        expect(screen.queryByRole("region", { name: /your sets/i })).toBeNull();
+        expect(calls("resume_work")).toHaveLength(1);
+    });
+
+    it("shows nothing and loads nothing when every section is off", () => {
+        localStorage.setItem(
+            "fndr-home-sections",
+            JSON.stringify({ routine: false, deadlines: false, threads: false, sets: false }),
+        );
+        const { container } = render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        expect(container).toBeEmptyDOMElement();
+        expect(calls("resume_work")).toHaveLength(0);
+    });
+
+    it("never resolves or opens a set on page load", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        await screen.findByText("Fixed weekday aliases");
+        await screen.findByText("Nothing is due in the next three days.");
+        expect(calls("resolve_work_set")).toHaveLength(0);
+        expect(calls("open_work_set")).toHaveLength(0);
+        expect(calls("reopen_memory")).toHaveLength(0);
+    });
+
+    it("continues a thread directly and opens its whole set only on a separate tap", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Continue Parser from latest source" }));
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_memory", { memoryId: "latest" }));
+        expect(calls("resolve_work_set")).toHaveLength(0);
+        fireEvent.click(await screen.findByRole("button", { name: "Open all for Parser" }));
+        expect(await screen.findByText("Opened 2 of 2")).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith("resolve_work_set", { query: "Parser" });
+        expect(screen.queryByRole("button", { name: "Mark this task done" })).not.toBeInTheDocument();
+    });
+
+    it("passes a layout when Arrange side by side is on", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        fireEvent.click(screen.getByRole("checkbox", { name: "Open places side by side" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Open all for Parser" }));
+        await screen.findByText(/Opened 2 of 2/);
+        expect(invoke).toHaveBeenCalledWith("open_work_set", { memoryIds: ["earlier", "latest"], layout: "left_right_split" });
+    });
+
+    it("shows what changed in a thread by its key", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        expect(await screen.findByRole("button", { name: "3 new pages in the last day" })).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledWith("what_changed_since", { threadKey: "key:Parser" });
+    });
+
+    it("shows the other Home sections with their honest empty states", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        expect(await screen.findByRole("heading", { name: "Due soon" })).toBeInTheDocument();
+        expect(await screen.findByText(/No saved sets yet/)).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Your sets" })).toBeInTheDocument();
+    });
+
+    it("puts recent work before the secondary Home sections", async () => {
+        render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
+        const recent = await screen.findByRole("heading", { name: "Pick up where you left off" });
+        const due = screen.getByRole("heading", { name: "Due soon" });
+        const sets = screen.getByRole("heading", { name: "Your sets" });
+        expect(recent.compareDocumentPosition(due) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(due.compareDocumentPosition(sets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("shows only three threads without presenting uncited suggestions", async () => {
         const first = thread("First");
         first.suggested_next_steps[0].source_memory_id = "missing";
-        vi.mocked(invoke).mockResolvedValue([first, thread("Second"), thread("Third"), thread("Fourth")]);
+        resumeRows = [[first, thread("Second"), thread("Third"), thread("Fourth")]];
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
 
         await screen.findByRole("heading", { name: "First" });
-        expect(screen.getAllByRole("listitem")).toHaveLength(3);
+        expect(recentWork().getAllByRole("heading", { level: 3 })).toHaveLength(3);
         expect(screen.queryByRole("heading", { name: "Fourth" })).not.toBeInTheDocument();
         expect(screen.getAllByText("Suggested next step")).toHaveLength(2);
     });
 
     it("teaches the next action when no recent memories are available", async () => {
-        vi.mocked(invoke).mockResolvedValue([]);
+        resumeRows = [[]];
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
         expect(await screen.findByText(/No recent work yet/)).toHaveTextContent("find older memories");
-        expect(screen.queryByRole("list")).not.toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "Parser" })).not.toBeInTheDocument();
     });
 
     it("offers retry after an error without exposing backend details", async () => {
-        vi.mocked(invoke).mockRejectedValueOnce(new Error("private filesystem path"));
-        vi.mocked(invoke).mockResolvedValueOnce([thread()]);
+        resumeRows = [new Error("private filesystem path"), [thread()]];
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
-        expect(await screen.findByRole("alert")).toHaveTextContent("Recent work couldn’t be loaded");
+        expect(await recentWork().findByRole("alert")).toHaveTextContent("Recent work couldn’t be loaded");
         expect(screen.queryByText(/private filesystem/)).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Retry" }));
         expect(await screen.findByText("Fixed weekday aliases")).toBeInTheDocument();
-        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        expect(recentWork().queryByRole("alert")).not.toBeInTheDocument();
     });
 
     it("refreshes from current rows and removes old citations while loading", async () => {
-        vi.mocked(invoke).mockResolvedValueOnce([thread()]);
         let completeRefresh!: (rows: ResumeThread[]) => void;
-        vi.mocked(invoke).mockReturnValueOnce(new Promise<ResumeThread[]>((resolve) => { completeRefresh = resolve; }));
+        resumeRows = [[thread()], new Promise<ResumeThread[]>((resolve) => { completeRefresh = resolve; })];
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
         await screen.findByText("Fixed weekday aliases");
         fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
@@ -87,14 +217,13 @@ describe("Resume Work on Home", () => {
 
     it("reloads when Home reopens and ignores an older unmounted request", async () => {
         let completeOld!: (rows: ResumeThread[]) => void;
-        vi.mocked(invoke).mockReturnValueOnce(new Promise<ResumeThread[]>((resolve) => { completeOld = resolve; }));
+        resumeRows = [new Promise<ResumeThread[]>((resolve) => { completeOld = resolve; }), [thread("Current")]];
         const first = render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
         first.unmount();
-        vi.mocked(invoke).mockResolvedValueOnce([thread("Current")]);
         render(<ResumeWork onOpenMemory={vi.fn()} onOpenVault={vi.fn()} />);
         await screen.findByRole("heading", { name: "Current" });
         await act(async () => completeOld([thread("Stale")]));
         expect(screen.queryByRole("heading", { name: "Stale" })).not.toBeInTheDocument();
-        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(calls("resume_work")).toHaveLength(2));
     });
 });

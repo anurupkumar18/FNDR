@@ -67,12 +67,12 @@
     padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.025);
+    background: color-mix(in srgb, var(--text-primary) 2.5%, transparent);
 }
 
 .sg-readiness.is-ready {
-    border-color: rgba(74, 142, 221, 0.35);
-    background: rgba(50, 118, 210, 0.08);
+    border-color: color-mix(in srgb, var(--info) 35%, transparent);
+    background: color-mix(in srgb, var(--info) 8%, transparent);
 }
 
 .sg-readiness-dot {
@@ -85,8 +85,8 @@
 }
 
 .sg-readiness.is-ready .sg-readiness-dot {
-    background: #54a8ff;
-    box-shadow: 0 0 10px rgba(54, 145, 255, 0.55);
+    background: var(--info);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--info) 55%, transparent);
     opacity: 1;
 }
 
@@ -113,7 +113,7 @@
 .sg-status-warning {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.02);
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 
 .sg-setting-row {
@@ -179,8 +179,8 @@
 }
 
 .sg-shortcut-row input:focus {
-    border-color: rgba(74, 142, 221, 0.6);
-    box-shadow: 0 0 0 2px rgba(74, 142, 221, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .sg-shortcut-row .ui-action-btn,
@@ -210,7 +210,7 @@
     width: 34px;
     height: 18px;
     flex: 0 0 auto;
-    accent-color: #358ddd;
+    accent-color: var(--info);
 }
 
 .sg-ask-card {
@@ -252,8 +252,8 @@
 }
 
 .sg-question-row input:focus {
-    border-color: rgba(74, 142, 221, 0.6);
-    box-shadow: 0 0 0 2px rgba(74, 142, 221, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .sg-ask-button {
@@ -281,15 +281,15 @@
 }
 
 .sg-diagnostics-card .sg-diagnostics-warning {
-    color: #e8bf75;
+    color: var(--warning);
 }
 
 .sg-diagnostics-card .sg-diagnostics-state {
-    color: #8fc7ff;
+    color: var(--info);
 }
 
 .sg-diagnostics-card .sg-diagnostics-error {
-    color: var(--danger, #ff8f8f);
+    color: var(--danger);
 }
 
 .sg-diagnostics-actions {
@@ -305,10 +305,10 @@
 
 .sg-hold-button {
     min-height: 48px;
-    border: 1px solid rgba(72, 143, 224, 0.35);
+    border: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
     border-radius: 12px;
-    color: #94c9ff;
-    background: rgba(40, 112, 202, 0.1);
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 10%, transparent);
     font: inherit;
     font-size: 0.82rem;
     font-weight: 650;
@@ -317,7 +317,7 @@
 }
 
 .sg-hold-button:hover:not(:disabled) {
-    border-color: rgba(92, 171, 255, 0.65);
+    border-color: color-mix(in srgb, var(--info) 65%, transparent);
     background: rgba(40, 112, 202, 0.17);
 }
 
@@ -377,12 +377,12 @@
     justify-content: space-between;
     gap: 16px;
     padding: 12px 16px;
-    border-color: rgba(224, 174, 84, 0.36);
-    background: rgba(224, 174, 84, 0.08);
+    border-color: color-mix(in srgb, var(--warning) 36%, transparent);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
 .sg-status-warning strong {
-    color: #e8bf75;
+    color: var(--warning);
     font-size: 0.8rem;
 }
 
@@ -394,7 +394,7 @@
 }
 
 .sg-privacy-note strong {
-    color: #8fc7ff;
+    color: var(--info);
     font-size: 0.78rem;
 }
 
@@ -415,10 +415,10 @@
     justify-content: space-between;
     gap: 16px;
     padding: 12px 14px;
-    border: 1px solid rgba(239, 143, 143, 0.34);
+    border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
     border-radius: var(--radius-md);
-    color: #ef9d9d;
-    background: rgba(181, 63, 63, 0.09);
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 9%, transparent);
 }
 
 .sg-panel-error p {
@@ -487,6 +487,45 @@
     margin-right: 16px;
 }
 
+.sg-operator-permissions .ui-action-btn {
+    white-space: nowrap;
+}
+
+.sg-permission-state {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.sg-permission-state em {
+    font-size: 0.72rem;
+    font-style: normal;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.sg-permission-state em.is-allowed {
+    color: var(--text-secondary);
+}
+
+.sg-permission-state em.is-denied {
+    color: var(--danger);
+}
+
+.sg-operator-note {
+    margin: 0;
+    padding: 0 16px;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.sg-operator-note.is-error {
+    color: var(--danger);
+}
+
 .sg-labs-tag {
     margin-left: 6px;
     padding: 1px 6px;
@@ -496,4 +535,177 @@
     font-weight: 500;
     opacity: 0.7;
     vertical-align: middle;
+}
+
+/* ===== Bento layout: one page, three columns of tiles, no page scrolling ===== */
+.sg-panel-body.sg-bento {
+    width: min(1240px, calc(100% - 48px));
+    padding: 20px 0 24px;
+    gap: 14px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.sg-bento-grid {
+    display: grid;
+    flex: 1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    align-items: start;
+}
+
+.sg-bento-col {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.sg-bento .sg-readiness,
+.sg-bento .sg-settings-card,
+.sg-bento .sg-ask-card,
+.sg-bento .sg-diagnostics-card,
+.sg-bento .sg-privacy-note,
+.sg-bento .sg-bento-voice > section {
+    border-radius: 20px;
+    border-color: color-mix(in srgb, var(--border) 80%, transparent);
+    background:
+        linear-gradient(160deg, color-mix(in srgb, var(--text-primary) 5%, transparent), transparent 62%),
+        color-mix(in srgb, var(--surface-elevated, #202020) 70%, transparent);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent) inset;
+    transition: border-color 220ms ease, transform 220ms ease;
+}
+
+.sg-bento .sg-settings-card:hover,
+.sg-bento .sg-ask-card:hover,
+.sg-bento .sg-bento-voice > section:hover {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.sg-bento .sg-readiness {
+    padding: 14px 18px;
+}
+
+.sg-tile-title {
+    margin: 4px 4px -6px;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.sg-bento .sg-setting-row {
+    min-height: 56px;
+    gap: 14px;
+    padding: 10px 16px;
+}
+
+.sg-bento .sg-setting-row strong {
+    font-size: 0.82rem;
+}
+
+.sg-bento .sg-setting-row small {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.sg-bento .sg-shortcut-row {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 16px;
+}
+
+.sg-bento .sg-ask-card {
+    padding: 14px 16px;
+    gap: 10px;
+}
+
+.sg-bento .sg-diagnostics-card {
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px;
+}
+
+.sg-bento .sg-diagnostics-card p {
+    max-width: none;
+}
+
+.sg-bento .sg-diagnostics-actions {
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.sg-bento .sg-privacy-note {
+    padding: 14px 16px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.sg-bento .sg-privacy-note strong {
+    color: var(--text-primary);
+    font-size: 0.78rem;
+}
+
+.sg-bento .sg-privacy-note p {
+    margin: 4px 0 0;
+}
+
+.sg-more {
+    padding: 0 16px 12px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.sg-more summary {
+    width: max-content;
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.sg-more p {
+    margin: 6px 0 0;
+}
+
+@media (max-width: 1100px) {
+    .sg-bento-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 720px) {
+    .sg-bento-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .sg-bento-col > * {
+        animation: sg-tile-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .sg-bento-col:nth-child(2) > * {
+        animation-delay: 70ms;
+    }
+
+    .sg-bento-col:nth-child(3) > * {
+        animation-delay: 140ms;
+    }
+}
+
+@keyframes sg-tile-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
 }

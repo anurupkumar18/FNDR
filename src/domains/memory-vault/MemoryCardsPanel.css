@@ -629,18 +629,18 @@
     margin: 12px auto 0;
     max-width: 920px;
     width: calc(100% - 40px);
-    border: 1px solid rgba(255, 107, 107, 0.28);
+    border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
     border-radius: 8px;
-    background: rgba(255, 107, 107, 0.08);
-    color: #ffb3b3;
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    color: var(--danger);
     padding: 10px 12px;
     font-size: 12px;
 }
 
 [data-theme="light"] .memory-cards-inline-error {
-    border-color: rgba(200, 30, 30, 0.35);
-    background: rgba(240, 100, 100, 0.12);
-    color: #c91a1a;
+    border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
 }
 
 .memory-cards-state {
@@ -923,13 +923,13 @@
 /* ===== Light Theme ===== */
 /* `.memory-browse-url` uses a semantic blue link color in light mode */
 [data-theme="light"] .memory-browse-url {
-    color: #2060c0;
-    background: rgba(30, 100, 200, 0.05);
-    border-color: rgba(30, 100, 200, 0.15);
+    color: var(--info);
+    background: color-mix(in srgb, var(--info) 5%, transparent);
+    border-color: color-mix(in srgb, var(--info) 15%, transparent);
 }
 
 [data-theme="light"] .memory-browse-url:hover {
-    background: rgba(30, 100, 200, 0.1);
+    background: color-mix(in srgb, var(--info) 10%, transparent);
 }
 
 /* Compact Vault toolbar: search, filters, count and secondary views on one row. */

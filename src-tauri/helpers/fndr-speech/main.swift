@@ -21,6 +21,30 @@ private final class LineWriter: @unchecked Sendable {
     }
 }
 
+/// Polls the spotter so a segment is decided once it has been quiet for
+/// `StopWordSpotter.quietSeconds`, even when the recognizer reports no final.
+private final class SpotTicker: @unchecked Sendable {
+    private var timer: DispatchSourceTimer?
+
+    func start(_ tick: @escaping @Sendable () -> Void) {
+        stop()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+        timer.setEventHandler(handler: tick)
+        timer.resume()
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+}
+
+private func uptime() -> TimeInterval {
+    ProcessInfo.processInfo.systemUptime
+}
+
 @available(macOS 26.0, *)
 private final class AnalyzerSpeechSession: @unchecked Sendable {
     private let writer: LineWriter
@@ -32,14 +56,26 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
     private var tapInstalled = false
     private var active = false
     private let transcript = StreamingTranscriptBuffer()
+    /// Spotting: only `stop_word` or `speech_ignored` leave, never the words.
+    private var spotting = false
+    private let spotter = StopWordSpotter()
+    private let ticker = SpotTicker()
 
     init(writer: LineWriter) {
         self.writer = writer
     }
 
-    func start() {
+    func start(spotting: Bool) {
         guard !active, analysisTask == nil else { return }
         transcript.reset()
+        spotter.reset()
+        self.spotting = spotting
+        if spotting {
+            ticker.start { [weak self] in
+                guard let self, let verdict = self.spotter.tick(at: uptime()) else { return }
+                self.writer.emit(verdict)
+            }
+        }
         active = true
         analysisTask = Task { [weak self] in
             await self?.startAnalysis()
@@ -120,6 +156,17 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
                     for try await result in transcriber.results {
                         guard let self else { return }
                         let text = String(result.text.characters)
+                        if spotting {
+                            if let verdict = spotter.observe(
+                                text,
+                                segmentFinal: result.isFinal,
+                                cumulative: false,
+                                at: uptime()
+                            ) {
+                                writer.emit(verdict)
+                            }
+                            continue
+                        }
                         if let emission = transcript.observe(text, recognizerFinal: result.isFinal) {
                             writer.emit(emission.type, ["text": emission.text])
                         }
@@ -172,7 +219,9 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
             if let lastSampleTime = try await analyzer.analyzeSequence(inputs) {
                 try await analyzer.finalizeAndFinish(through: lastSampleTime)
                 await resultTask?.value
-                if let text = transcript.finish() {
+                if spotting {
+                    // Spotting never reports what was said.
+                } else if let text = transcript.finish() {
                     writer.emit("final", ["text": text])
                 } else {
                     writer.emit("error", [
@@ -209,6 +258,8 @@ private final class AnalyzerSpeechSession: @unchecked Sendable {
 
     private func finish() {
         stopAudio()
+        ticker.stop()
+        spotter.reset()
         continuation = nil
         analyzer = nil
         resultTask = nil
@@ -226,6 +277,10 @@ private final class SpeechHelper: @unchecked Sendable {
     private var task: SFSpeechRecognitionTask?
     private var analyzerSession: AnyObject?
     private var active = false
+    private var spotting = false
+    private let spotter = StopWordSpotter()
+    private let ticker = SpotTicker()
+    private var latestSpotText = ""
 
     func run() {
         writer.emit("ready")
@@ -243,7 +298,9 @@ private final class SpeechHelper: @unchecked Sendable {
         case "":
             return
         case "start":
-            start()
+            start(spotting: false)
+        case "spot":
+            start(spotting: true)
         case "stop":
             stop()
         case "cancel":
@@ -256,8 +313,9 @@ private final class SpeechHelper: @unchecked Sendable {
         }
     }
 
-    private func start() {
+    private func start(spotting: Bool) {
         guard !active else { return }
+        self.spotting = spotting
 
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -300,7 +358,7 @@ private final class SpeechHelper: @unchecked Sendable {
                 session = AnalyzerSpeechSession(writer: writer)
                 analyzerSession = session
             }
-            session.start()
+            session.start(spotting: spotting)
         } else {
             startRecognition()
         }
@@ -365,9 +423,33 @@ private final class SpeechHelper: @unchecked Sendable {
             try engine.start()
             active = true
             writer.emit("listening", ["level": 0.0])
+            if spotting {
+                spotter.reset()
+                ticker.start { [weak self] in
+                    guard let self else { return }
+                    let full = self.request == nil ? nil : self.latestSpotText
+                    if let verdict = self.spotter.tick(at: uptime(), fullText: full) {
+                        self.writer.emit(verdict)
+                    }
+                }
+            }
             task = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
-                if let result {
+                if let result, self.spotting {
+                    let text = result.bestTranscription.formattedString
+                    self.latestSpotText = text
+                    if let verdict = self.spotter.observe(
+                        text,
+                        segmentFinal: result.isFinal,
+                        cumulative: true,
+                        at: uptime()
+                    ) {
+                        self.writer.emit(verdict)
+                    }
+                    if result.isFinal {
+                        self.cleanup()
+                    }
+                } else if let result {
                     let text = result.bestTranscription.formattedString
                     if !text.isEmpty {
                         self.writer.emit(result.isFinal ? "final" : "partial", ["text": text])
@@ -412,6 +494,8 @@ private final class SpeechHelper: @unchecked Sendable {
     }
 
     private func cleanup() {
+        ticker.stop()
+        latestSpotText = ""
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
