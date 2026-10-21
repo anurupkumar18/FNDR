@@ -21,6 +21,7 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/shared/ipc/tauri", () => ipc);
 vi.mock("./CodexAccountCard", () => ({ CodexAccountCard: () => <div>ChatGPT account</div> }));
+vi.mock("@/domains/smart-fill/SmartFillSetting", () => ({ SmartFillSetting: () => null }));
 
 import { AgentWorkspace } from "./AgentWorkspace";
 
