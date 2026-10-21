@@ -28,6 +28,7 @@ CHUNK_TABLES = (V5_PARENT_TABLE, CHUNK_TABLE)
 
 STRUCTURED_FIELDS = ("project", "topic", "outcome", "next_steps", "decisions", "errors")
 EXACT_REOPEN_KINDS = frozenset(("browser_url", "file_path", "app_deep_link"))
+REOPEN_KIND_CATEGORIES = EXACT_REOPEN_KINDS | frozenset(("app_bundle", "unknown"))
 PARENT_AGGREGATE_COLUMNS = (
     "timestamp",
     "embedding",
@@ -90,6 +91,13 @@ def _safe_summary_source(value) -> str:
         return "<missing>"
     label = value.strip().casefold()
     return label if label in SUMMARY_SOURCE_CATEGORIES else "<other>"
+
+
+def _safe_reopen_kind(value) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return "<missing>"
+    label = value.strip().casefold()
+    return label if label in REOPEN_KIND_CATEGORIES else "<other>"
 
 
 def _safe_text_source(raw_evidence) -> str:
@@ -168,6 +176,7 @@ def _empty_table_health(name: str, role: str) -> dict:
         "summary_source": None,
         "text_source": None,
         "exact_reopen_pct": None,
+        "reopen_kind_counts": None,
     }
 
 
@@ -211,6 +220,7 @@ def _table_health(
         "summary_source": None,
         "text_source": None,
         "exact_reopen_pct": None,
+        "reopen_kind_counts": None,
     }
     if not parent:
         return health
@@ -222,10 +232,23 @@ def _table_health(
     source_lengths = collections.defaultdict(list)
     for source, length in zip(values["raw_evidence"], text_lengths):
         source_lengths[source if source in TEXT_SOURCE_CATEGORIES else "unknown"].append(length)
+    reopen_kind_labels = [_safe_reopen_kind(value) for value in values["reopen_kind"]]
+    reopen_kind_counter = collections.Counter(reopen_kind_labels)
     exact_reopens = sum(
-        1
-        for value in values["reopen_kind"]
-        if isinstance(value, str) and value.strip() in EXACT_REOPEN_KINDS
+        count
+        for kind, count in reopen_kind_counter.items()
+        if kind in EXACT_REOPEN_KINDS
+    )
+    reopen_kind_counts = (
+        {
+            kind: {
+                "rows": count,
+                "share_pct": _pct(count, rows),
+            }
+            for kind, count in sorted(reopen_kind_counter.items())
+        }
+        if rows
+        else None
     )
     health.update(
         {
@@ -249,6 +272,7 @@ def _table_health(
                 for source, lengths in sorted(source_lengths.items())
             } if rows else None,
             "exact_reopen_pct": _pct(exact_reopens, rows) if rows else None,
+            "reopen_kind_counts": reopen_kind_counts,
         }
     )
     return health
@@ -395,6 +419,23 @@ def render(report: dict) -> str:
                 f"{metrics['clean_text_chars_p50']:g} | {metrics['under_200_chars_pct']}% |"
                 for source, metrics in sorted(row["text_source"].items())
                 if source in TEXT_SOURCE_CATEGORIES
+            ]
+        if row.get("reopen_kind_counts"):
+            lines += [
+                "",
+                f"## Reopen targets: `{name}`",
+                "",
+                "Stored `reopen_kind` only; counts are aggregate labels, never URLs or paths.",
+                "",
+                f"Reopen specific share (browser URL, file path, or app deep link): "
+                f"{_display(row['exact_reopen_pct'], suffix='%')}.",
+                "",
+                "| kind | rows | share |",
+                "|---|---:|---:|",
+            ]
+            lines += [
+                f"| {kind} | {metrics['rows']} | {metrics['share_pct']}% |"
+                for kind, metrics in sorted(row["reopen_kind_counts"].items())
             ]
     return "\n".join(lines) + "\n"
 

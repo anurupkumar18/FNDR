@@ -168,11 +168,35 @@ describe("EngineMetricsCard", () => {
 
         expect(await screen.findByText("No latency samples yet.")).toBeInTheDocument();
         expect(screen.getByText("No recent operations yet.")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Reopen this session" })).toBeInTheDocument();
+        expect(screen.getAllByText("0%").length).toBeGreaterThanOrEqual(8);
+        expect(screen.queryByText("reopen.outcome.opened")).not.toBeInTheDocument();
         expect(screen.getAllByText("0 B").length).toBeGreaterThan(0);
         expect(screen.getByRole("meter", { name: "CPU core 0 usage" })).toHaveAttribute(
             "aria-valuenow",
             "0",
         );
+    });
+
+    it("shows reopen session counters separately from generic event counters", async () => {
+        const snapshot = runtimeSnapshot();
+        snapshot.counters = {
+            "reopen.outcome.opened": 2,
+            "reopen.kind.browser_url": 2,
+            "mem.outcome.new": 5,
+        };
+        mocks.getRuntimeMetrics.mockResolvedValue(snapshot);
+
+        render(<EngineMetricsCard enabled />);
+
+        expect(await screen.findByRole("heading", { name: "Reopen this session" })).toBeInTheDocument();
+        const outcomesTable = screen.getByRole("table", { name: "Reopen outcomes this session" });
+        const openedRow = within(outcomesTable).getByRole("row", { name: /^Opened 2 100\.0%$/ });
+        expect(within(openedRow).getByText("2")).toBeInTheDocument();
+        expect(within(openedRow).getByText("100.0%")).toBeInTheDocument();
+        expect(screen.getByText("mem.outcome.new")).toBeInTheDocument();
+        expect(screen.queryByText("reopen.outcome.opened")).not.toBeInTheDocument();
+        expect(screen.queryByText("reopen.kind.browser_url")).not.toBeInTheDocument();
     });
 
     it("keeps failures actionable with a manual retry", async () => {

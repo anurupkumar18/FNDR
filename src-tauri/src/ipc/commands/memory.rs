@@ -2,8 +2,9 @@
 
 use crate::graph::GraphStore;
 use crate::memory::reopen::{
-    is_blocked_scheme, pick_moved_file, should_reveal_in_finder, url_with_pdf_page,
-    url_with_text_anchor, volume_is_disconnected, volume_root, ReopenKind, ReopenOutcome,
+    is_blocked_scheme, pick_moved_file, record_reopen_session_metrics, should_reveal_in_finder,
+    url_with_pdf_page, url_with_text_anchor, volume_is_disconnected, volume_root, ReopenKind,
+    ReopenOutcome,
 };
 use crate::storage::Store;
 use crate::AppState;
@@ -119,6 +120,7 @@ pub async fn reopen_memory(
     if let Some(action) = plan.action {
         open_reopen_target(action)?;
     }
+    record_reopen_session_metrics(&plan.outcome, &record.reopen_kind);
     Ok(plan.outcome)
 }
 
