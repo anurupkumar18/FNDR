@@ -594,6 +594,10 @@ pub struct AutofillConfig {
     /// Maximum number of candidates to return for quick-pick conflict resolution.
     #[serde(default = "default_autofill_max_candidates")]
     pub max_candidates: usize,
+    /// Smart Fill: two taps of Command write the text for the focused box
+    /// with the person's ChatGPT plan. Off until turned on.
+    #[serde(default)]
+    pub smart_fill: bool,
 }
 
 impl Default for AutofillConfig {
@@ -605,6 +609,7 @@ impl Default for AutofillConfig {
             auto_inject_threshold: default_autofill_auto_inject_threshold(),
             prefer_typed_injection: default_autofill_prefer_typed_injection(),
             max_candidates: default_autofill_max_candidates(),
+            smart_fill: false,
         }
     }
 }

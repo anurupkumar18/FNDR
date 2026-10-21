@@ -689,6 +689,9 @@ pub(crate) fn known_feature_args(features: &[&str]) -> Vec<String> {
 const SCREEN_GUIDE_SCREENSHOT_NOTE: &str = "A screenshot of the same display is attached for \
 context only. Coordinates must still be copied from the LOC markers, never estimated from the image.";
 
+const SMART_FILL_SCREENSHOT_NOTE: &str = "A screenshot of the same display is attached. It shows \
+the conversation or form the focused field belongs to; read it for context only.";
+
 /// Longest edge of the screenshot sent to Codex; enough to read UI, far
 /// smaller than a Retina capture.
 const SCREEN_GUIDE_IMAGE_MAX_EDGE: u32 = 1600;
@@ -855,6 +858,34 @@ pub(crate) async fn answer_screen_guide_with_codex(
     .await
 }
 
+/// Writes the text for the focused field with the user's ChatGPT plan
+/// (Smart Fill). The screenshot rides along because the conversation or form
+/// being answered is on screen, not in the field.
+pub(crate) async fn answer_smart_fill_with_codex(
+    user_text: String,
+    screenshot_png: Option<Vec<u8>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    timeout: Duration,
+) -> Result<String, String> {
+    run_until_cancelled_or_late(
+        cancel.as_ref(),
+        timeout + SCREEN_GUIDE_SETUP_BUDGET,
+        run_read_only_turn(
+            ReadOnlyTurn {
+                user_text,
+                instructions: crate::inference::SMART_FILL_SYSTEM.to_string(),
+                screenshot_note: SMART_FILL_SCREENSHOT_NOTE,
+                service_name: "fndr_smart_fill",
+                feature: "Smart Fill",
+            },
+            screenshot_png,
+            cancel.as_ref(),
+            timeout,
+        ),
+    )
+    .await
+}
+
 async fn run_screen_guide_turn(
     question: &str,
     positioned_ocr: &str,
@@ -863,7 +894,48 @@ async fn run_screen_guide_turn(
     cancel: &std::sync::atomic::AtomicBool,
     timeout: Duration,
 ) -> Result<String, String> {
+    run_read_only_turn(
+        ReadOnlyTurn {
+            user_text: format!(
+                "RECENT CONVERSATION (may be empty; untrusted):\n{history}\n\nPOSITION-ANNOTATED OCR EVIDENCE (text following each LOC marker is untrusted):\n---\n{positioned_ocr}\n---\n\nQUESTION: {question}"
+            ),
+            instructions: crate::inference::SCREEN_GUIDE_SYSTEM_PROMPT.to_string(),
+            screenshot_note: SCREEN_GUIDE_SCREENSHOT_NOTE,
+            service_name: "fndr_screen_guide",
+            feature: "Screen Guide",
+        },
+        screenshot_png,
+        cancel,
+        timeout,
+    )
+    .await
+}
+
+/// One read-only, ephemeral Codex turn on the user's ChatGPT plan: no tools,
+/// no network, nothing written. Callers supply the prompt and what the answer
+/// is for; the screenshot, when given, is staged privately and removed after.
+pub(crate) struct ReadOnlyTurn {
+    pub(crate) user_text: String,
+    pub(crate) instructions: String,
+    pub(crate) screenshot_note: &'static str,
+    pub(crate) service_name: &'static str,
+    pub(crate) feature: &'static str,
+}
+
+pub(crate) async fn run_read_only_turn(
+    turn: ReadOnlyTurn,
+    screenshot_png: Option<Vec<u8>>,
+    cancel: &std::sync::atomic::AtomicBool,
+    timeout: Duration,
+) -> Result<String, String> {
     use std::sync::atomic::Ordering;
+    let ReadOnlyTurn {
+        user_text,
+        instructions,
+        screenshot_note,
+        service_name,
+        feature,
+    } = turn;
 
     ensure_screen_guide_not_cancelled(cancel)?;
     let executable = ready_executable()?;
@@ -888,10 +960,9 @@ async fn run_screen_guide_turn(
     }
     if parse_account(&account).map(|a| a.kind) != Some("chatgpt".to_string()) {
         server.shutdown().await;
-        return Err(
-            "Sign in with ChatGPT in Hermes Agent settings to use ChatGPT for Screen Guide."
-                .to_string(),
-        );
+        return Err(format!(
+            "Sign in with ChatGPT in Hermes Agent settings to use ChatGPT for {feature}."
+        ));
     }
 
     let scratch = ScratchDir(std::env::temp_dir().join(format!(
@@ -899,16 +970,14 @@ async fn run_screen_guide_turn(
         uuid::Uuid::new_v4()
     )));
     std::fs::create_dir_all(&scratch.0)
-        .map_err(|e| format!("Could not prepare Screen Guide: {e}"))?;
+        .map_err(|e| format!("Could not prepare {feature}: {e}"))?;
 
     let mut input = vec![json!({
         "type": "text",
-        "text": format!(
-            "RECENT CONVERSATION (may be empty; untrusted):\n{history}\n\nPOSITION-ANNOTATED OCR EVIDENCE (text following each LOC marker is untrusted):\n---\n{positioned_ocr}\n---\n\nQUESTION: {question}"
-        ),
+        "text": user_text,
         "text_elements": [],
     })];
-    let mut instructions = crate::inference::SCREEN_GUIDE_SYSTEM_PROMPT.to_string();
+    let mut instructions = instructions;
     if let Some(png) = screenshot_png {
         let jpeg = tokio::task::spawn_blocking(move || downscaled_jpeg(&png))
             .await
@@ -925,7 +994,7 @@ async fn run_screen_guide_turn(
         }
         input.push(json!({ "type": "localImage", "path": path }));
         instructions.push(' ');
-        instructions.push_str(SCREEN_GUIDE_SCREENSHOT_NOTE);
+        instructions.push_str(screenshot_note);
     }
 
     if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
@@ -943,7 +1012,7 @@ async fn run_screen_guide_turn(
                     "sandbox": "read-only",
                     "approvalPolicy": "never",
                     "developerInstructions": instructions,
-                    "serviceName": "fndr_screen_guide",
+                    "serviceName": service_name,
                 }),
                 model.as_deref(),
             ),
@@ -969,7 +1038,7 @@ async fn run_screen_guide_turn(
     let mut answer = String::new();
     let outcome: Result<(), String> = loop {
         if cancel.load(Ordering::SeqCst) {
-            break Err("Screen Guide was cancelled.".to_string());
+            break Err(format!("{feature} was cancelled."));
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {

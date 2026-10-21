@@ -779,6 +779,13 @@ fn main() {
                 );
             }
 
+            // Smart Fill: the glow window, and the Command watch if it is on.
+            fndr_lib::smart_fill::overlay::create(app.handle());
+            fndr_lib::smart_fill::apply_setting(
+                app.handle(),
+                state.config.read().autofill.smart_fill,
+            );
+
             // Pre-create the notch HUD (hidden) and register its toggle.
             ipc::commands::create_notch_hud_window(app.handle());
             if let Err(err) = ipc::commands::register_notch_hud_shortcut(app.handle()) {
@@ -1035,6 +1042,8 @@ fn main() {
             ipc::commands::set_focus_task,
             ipc::commands::get_focus_status,
             // Auto-fill
+            fndr_lib::smart_fill::get_smart_fill_enabled,
+            fndr_lib::smart_fill::set_smart_fill_enabled,
             ipc::commands::get_autofill_settings,
             ipc::commands::set_autofill_settings,
             ipc::commands::get_voice_output_settings,
