@@ -1118,13 +1118,29 @@ impl Store {
         &self,
         record: &MemoryRecord,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if record.id.trim().is_empty() {
+        self.replace_memories_preserving_chunks(std::slice::from_ref(record))
+            .await
+    }
+
+    /// Batch form of `replace_memory_preserving_chunks`: one merge-insert,
+    /// so one table version, for the whole slice.
+    pub async fn replace_memories_preserving_chunks(
+        &self,
+        records: &[MemoryRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if records.iter().any(|record| record.id.trim().is_empty()) {
             return Err("Refusing to replace a memory with empty id".into());
         }
         // Note: deliberately not touching memory chunks: children outlive a
         // parent review pass.
-        let normalized = normalize_record_for_index(record);
-        let batch = records_to_batch(&[normalized])?;
+        let normalized = records
+            .iter()
+            .map(normalize_record_for_index)
+            .collect::<Vec<_>>();
+        let batch = records_to_batch(&normalized)?;
         let schema = Arc::new(memory_schema());
         let iter = RecordBatchIterator::new(vec![Ok(batch)], schema);
         let mut merge = self.table.merge_insert(&["id"]);
@@ -1135,7 +1151,7 @@ impl Store {
             .execute(Box::new(iter) as Box<dyn RecordBatchReader + Send>)
             .await?;
         self.rows_since_fts_optimize
-            .fetch_add(1, AtomicOrdering::Relaxed);
+            .fetch_add(normalized.len(), AtomicOrdering::Relaxed);
         self.build_fts_indexes_after_write().await;
         Ok(())
     }

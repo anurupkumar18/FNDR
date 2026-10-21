@@ -384,6 +384,10 @@ fn main() {
                 fndr_lib::memory_review::spawn_worker(review_state, MEMORY_REVIEW_INTERVAL);
             }
 
+            // Background: one resumable pass that stores better reopen targets
+            // for memories captured before capture recorded them (RE-11).
+            fndr_lib::memory::reopen_backfill::spawn(state.clone(), MAINTENANCE_FIRST_DELAY);
+
             // Background: daily memory-review scheduler. Wakes hourly and runs
             // the previous calendar day's batch review pass once per day when
             // the inference engine is loaded and the pressure gate allows. The

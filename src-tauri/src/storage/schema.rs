@@ -551,6 +551,20 @@ impl MemoryRecord {
             text_anchor: self.reopen_text_anchor.clone(),
         }
     }
+
+    pub fn apply_reopen_target(&mut self, target: ReopenTarget) {
+        self.reopen_kind = target.kind;
+        self.reopen_url = target.url;
+        self.reopen_file_path = target.file_path;
+        self.reopen_app_bundle_id = target.app_bundle_id;
+        self.reopen_app_name = target.app_name;
+        self.reopen_app_deep_link = target.app_deep_link;
+        self.reopen_captured_at_ms = target.captured_at_ms;
+        self.reopen_confidence = target.confidence;
+        self.reopen_validation_status = target.validation_status;
+        self.reopen_page = target.page;
+        self.reopen_text_anchor = target.text_anchor;
+    }
 }
 
 impl Default for MemoryRecord {
