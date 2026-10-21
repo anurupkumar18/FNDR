@@ -1372,6 +1372,36 @@ mod tests {
 
     /// One real ChatGPT turn with synthetic OCR; run with `--ignored`.
     #[tokio::test]
+    #[ignore = "Requires signed-in Codex and makes live ChatGPT requests with synthetic text; run: cargo test --lib live_smart_fill -- --ignored --nocapture"]
+    async fn live_smart_fill_writes_a_reply_only_when_the_screen_gives_one() {
+        use crate::smart_fill::prompt::{clean_reply, user_text, FillContext};
+
+        let ask = |screen_text: &'static str| async move {
+            let text = user_text(&FillContext {
+                app_name: "Messages",
+                window_title: "Sam",
+                field_label: "",
+                current_value: "",
+                screen_text,
+                notes: &[],
+            });
+            answer_smart_fill_with_codex(
+                text,
+                None,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Duration::from_secs(90),
+            )
+            .await
+            .expect("codex answers")
+        };
+        let with_message = ask("Sam: are you free for dinner tonight around 7?\nSam: i was thinking the new ramen place").await;
+        println!("with message: {with_message:?}");
+        assert!(clean_reply(&with_message).is_some(), "a visible message gets a reply");
+        let blank = ask("").await;
+        println!("blank: {blank:?}");
+    }
+
+    #[tokio::test]
     #[ignore = "Requires signed-in Codex and makes a live ChatGPT request with synthetic OCR; run: cargo test --lib live_screen_guide_turn_returns_a_point_tag -- --ignored --nocapture"]
     async fn live_screen_guide_turn_returns_a_point_tag() {
         let ocr = "[LOC:0.120,0.050] File  Edit  View\n[LOC:0.850,0.060] Share\n[LOC:0.500,0.500] Untitled document";

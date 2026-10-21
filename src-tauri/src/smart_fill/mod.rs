@@ -32,6 +32,10 @@ use prompt::{FillContext, MemoryNote};
 const CODEX_TIMEOUT: Duration = Duration::from_secs(45);
 /// How much of the screen's text goes to the model.
 const SCREEN_TEXT_CHARS: usize = 6_000;
+/// Less on-screen text than this counts as "Accessibility read nothing".
+const MIN_SCREEN_TEXT_CHARS: usize = 40;
+/// Shown when FNDR can neither read the window's text nor see the screen.
+const SCREEN_RECORDING_HINT: &str = "FNDR can't see the screen. Turn FNDR on under Screen & System Audio Recording in System Settings (remove it and add it again after an update), then reopen FNDR.";
 /// How long the word-by-word reveal takes in total, however long the text.
 const REVEAL_TOTAL: Duration = Duration::from_millis(1_800);
 
@@ -175,9 +179,35 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         let pid = field.pid;
         tokio::task::spawn_blocking(move || gather(pid, whose)).await
     };
-    let Ok(gathered) = gathered else {
+    let Ok(mut gathered) = gathered else {
         return Outcome::Failed("The screen could not be read.".to_string());
     };
+    let screen_visible = crate::capture::permissions::preflight_screen_capture_access().0;
+    if !screen_visible {
+        // Without the permission the capture shows only the wallpaper.
+        gathered.screenshot = None;
+    }
+    if gathered.screen_text.trim().chars().count() < MIN_SCREEN_TEXT_CHARS {
+        if let Some(image) = gathered.screenshot.clone() {
+            if let Ok(read) =
+                tokio::task::spawn_blocking(move || crate::accessibility::ocr_screen_text(&image))
+                    .await
+            {
+                gathered.screen_text = read;
+            }
+        }
+    }
+    let text_chars = gathered.screen_text.trim().chars().count();
+    tracing::info!(
+        text_chars,
+        screenshot = gathered.screenshot.is_some(),
+        screen_visible,
+        web_field = field.web,
+        "smart_fill:read the screen"
+    );
+    if text_chars < MIN_SCREEN_TEXT_CHARS && gathered.screenshot.is_none() {
+        return Outcome::Failed(SCREEN_RECORDING_HINT.to_string());
+    }
     if cancel.load(Ordering::SeqCst) {
         return Outcome::Stopped;
     }
@@ -209,7 +239,11 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         Err(message) => return Outcome::Failed(message),
     };
     let Some(reply) = prompt::clean_reply(&answer) else {
-        return Outcome::Nothing("Nothing to write here.");
+        tracing::info!(
+            answer_chars = answer.chars().count(),
+            "smart_fill:no text to write"
+        );
+        return Outcome::Nothing("ChatGPT could not tell what to write in this box.");
     };
 
     let handle = app.clone();
