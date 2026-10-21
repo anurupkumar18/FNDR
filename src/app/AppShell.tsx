@@ -3,6 +3,7 @@ import { MotionWallpaper } from "@/shared/components/MotionWallpaper";
 import { useActiveCinematicPalette } from "@/shared/hooks/useActiveCinematicPalette";
 import { useActiveWallpaper } from "@/shared/hooks/useActiveWallpaper";
 import { WorkModeShell } from "./WorkModeShell";
+import { ActionApprovalPanel } from "@/domains/actions/ActionApprovalPanel";
 import "./styles/wallpaper.css";
 
 /**
@@ -25,6 +26,7 @@ export function AppShell() {
             </div>
             <div className="fndr-app-chrome">
                 <WorkModeShell />
+                <ActionApprovalPanel />
             </div>
         </MotionConfig>
     );

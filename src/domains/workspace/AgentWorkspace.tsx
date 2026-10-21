@@ -21,6 +21,7 @@ import {
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { PanelState } from "@/shared/components/PanelState";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     beginActivityTrace,
@@ -442,14 +443,9 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                     />
                 ) : (
                     <div className="aw-thread">
-                        {messages.length === 0 && !sending ? (
-                            <div className="aw-empty">
-                                <h3>What should we work on?</h3>
-                                <p>
-                                    Ask Hermes to plan, draft or research. Use <strong>Memories</strong> to hand it
-                                    things you saw on screen, like a doc, a thread or a bug you were looking at.
-                                </p>
-                            </div>
+                        {!hermes ? <PanelState kind="loading" title="Loading Hermes" description="Checking the local agent connection." /> : null}
+                        {hermes && messages.length === 0 && !sending ? (
+                            <PanelState kind="empty" title="What should we work on?" description="Ask Hermes to plan, draft, or research with the memories you choose as context." action={{ label: "Attach memories", onAction: () => setPickerOpen(true) }} />
                         ) : null}
                         {messages.map((message, index) => (
                             <div key={`${message.at}-${index}`} className={`aw-message aw-${message.role}`}>
@@ -494,11 +490,7 @@ export function AgentWorkspace({ isVisible, onClose }: AgentWorkspaceProps) {
                     </div>
                 )}
 
-                {error ? (
-                    <p className="aw-error" role="alert">
-                        {error}
-                    </p>
-                ) : null}
+                {error ? <PanelState kind="error" title="Hermes needs attention" description={error} action={{ label: "Try again", onAction: () => void refreshHermes() }} /> : null}
 
                 {!showSetup ? (
                     <div className="aw-composer">

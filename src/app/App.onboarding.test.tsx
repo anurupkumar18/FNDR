@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const getOnboardingState = vi.hoisted(() => vi.fn());
 const useSearchMock = vi.hoisted(() => vi.fn());
 const resumeWork = vi.hoisted(() => vi.fn());
+const recordOnboardingFunnelEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("./AppPanels", () => ({
     AppPanels: ({
@@ -18,6 +19,7 @@ vi.mock("./AppPanels", () => ({
         ? <><button type="button" onClick={onClosePanel}>Close mock panel</button><span data-testid="vault-focus">{memoryVaultFocusId}</span></>
         : null,
 }));
+vi.mock("@/shared/voice/VoiceOutputSection", () => ({ VoiceOutputSection: () => null }));
 vi.mock("./BiometricLockScreen", () => ({
     BiometricLockScreen: ({ onUnlock }: { onUnlock: () => void }) => <button data-testid="biometric-lock" onClick={onUnlock}>Unlock mock</button>,
 }));
@@ -46,10 +48,16 @@ vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: vi.fn() }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState,
+    recordOnboardingFunnelEvent,
+    getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
     listAvailableModels: vi.fn().mockResolvedValue([]),
     saveOnboardingState: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/shared/ipc/tauri", () => ({
+    getActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    setActionSettings: vi.fn().mockResolvedValue({ actions_kill_switch: false, confirm_unnamed_apps: false }),
+    listActionApprovals: vi.fn().mockResolvedValue([]),
+    resolveActionApproval: vi.fn().mockResolvedValue(undefined),
     CAPTURE_STATUS_EVENT: "capture-status",
     OMNIBAR_OPEN_MEMORY_EVENT: "omnibar-open-memory",
     PRIVACY_ALERTS_EVENT: "privacy-alerts",
@@ -81,11 +89,18 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getFunGreeting: vi.fn().mockResolvedValue("Welcome back to FNDR."),
     resumeWork,
+    getTodos: vi.fn().mockResolvedValue([]),
+    notchDoSkills: vi.fn().mockResolvedValue([]),
+    notchDoRuns: vi.fn().mockResolvedValue([]),
+    listNamedSets: vi.fn().mockResolvedValue([]),
+    routineOffers: vi.fn().mockResolvedValue([]),
+    whatChangedSince: vi.fn().mockRejectedValue(new Error("not modeled")),
 }));
 
 import App from "./App";
 
 beforeEach(() => {
+    localStorage.clear();
     getOnboardingState.mockReset();
     useSearchMock.mockReset();
     resumeWork.mockReset();
@@ -120,6 +135,13 @@ describe("App onboarding gate", () => {
 
         expect(await screen.findByTestId("home")).toBeInTheDocument();
         expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
+    });
+
+    it("records only that a deliberate search was submitted", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        render(<App />);
+        fireEvent.click(await screen.findByRole("button", { name: "Run search" }));
+        expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("search_submitted");
     });
 
     it("shows recent work on Home after onboarding", async () => {
@@ -174,6 +196,44 @@ describe("App onboarding gate", () => {
         fireEvent.click(screen.getByRole("button", { name: "Close mock panel" }));
         await waitFor(() => expect(background).not.toHaveAttribute("inert"));
         await waitFor(() => expect(sidebarButton).toHaveFocus());
+    });
+
+    it("groups the five destinations and Labs in the sidebar", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        render(<App />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Open sidebar" }));
+
+        expect(screen.getByText("Navigate")).toBeInTheDocument();
+        expect(screen.getByText("Labs (experimental)")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Search & Ask FNDR" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Memory Vault" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Daily Brief" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Trust & Settings" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Screen Guide" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Hermes Agent" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Stats" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "To-dos" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "FNDR Wrapped" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Privacy Activity" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Engine diagnostics" })).toBeNull();
+
+        fireEvent.click(screen.getByRole("button", { name: "Trust & Settings" }));
+        expect(await screen.findByRole("dialog", { name: /^settings$/i })).toBeInTheDocument();
+    });
+
+    it("reveals Engine diagnostics only after Developer Mode is enabled", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        render(<App />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Open sidebar" }));
+        fireEvent.click(screen.getByRole("button", { name: "Trust & Settings" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Enable Developer Mode" }));
+        fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
+
+        fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
+        expect(screen.getByRole("button", { name: "Engine diagnostics" })).toBeInTheDocument();
     });
 
     it("marks only the submitted-search layout for narrow-screen chrome clearance", async () => {

@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-const OMNIBAR_LABEL: &str = "omnibar";
+pub(crate) const OMNIBAR_LABEL: &str = "omnibar";
 const OMNIBAR_WIDTH: f64 = 680.0;
 const OMNIBAR_HEIGHT: f64 = 480.0;
 pub const OMNIBAR_SHORTCUT: &str = "Alt+Space";
@@ -69,6 +69,7 @@ fn toggle_omnibar<R: tauri::Runtime>(app: &AppHandle<R>) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
+            crate::operator::native::remember_app_in_front();
             super::screen_guide::schedule_fndr_window_activation_after_screen_guide_cancel_with_work(
                 &handle,
                 move |work_handle| {

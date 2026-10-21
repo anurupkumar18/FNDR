@@ -5,6 +5,7 @@ import {
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import { PanelState } from "@/shared/components/PanelState";
 import {
     getMemoryReviewStatus,
     getRuntimeMetrics,
@@ -193,25 +194,17 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                 />
             )}
 
+            {runtimeMetricsLoading && !runtimeMetrics && !runtimeMetricsError ? (
+                <PanelState kind="loading" title="Loading engine diagnostics" description="Collecting local runtime counters." />
+            ) : null}
+
             {runtimeMetricsError && (
-                <div className="pipeline-error pipeline-diagnostic-error" role="alert">
-                    <div>
-                        <strong>
-                            {runtimeMetrics
-                                ? "Live refresh failed. Showing the last successful snapshot."
-                                : "Engine diagnostics could not load."}
-                        </strong>
-                        <p>{runtimeMetricsError}</p>
-                    </div>
-                    <button
-                        type="button"
-                        className="ui-action-btn"
-                        aria-label="Retry engine diagnostics"
-                        onClick={() => void loadRuntimeMetrics(() => mountedRef.current)}
-                    >
-                        Retry
-                    </button>
-                </div>
+                <PanelState
+                    kind="error"
+                    title={runtimeMetrics ? "Live refresh failed" : "Engine diagnostics could not load"}
+                    description={runtimeMetrics ? `Showing the last successful snapshot. ${runtimeMetricsError}` : runtimeMetricsError}
+                    action={{ label: "Retry engine diagnostics", onAction: () => void loadRuntimeMetrics(() => mountedRef.current) }}
+                />
             )}
 
             {runtimeMetrics && (
@@ -229,6 +222,10 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                             {runtimeMetrics.capture.frames_captured} captured ·{" "}
                             {runtimeMetrics.capture.frames_dropped} dropped
                         </dd>
+                        {runtimeMetrics.aggregates.import_first_answer && <>
+                            <dt>First imported answer</dt>
+                            <dd>{(runtimeMetrics.aggregates.import_first_answer.avg_ms / 1000).toFixed(1)} seconds · {runtimeMetrics.counters.import_first_answer_count ?? 0} opened result</dd>
+                        </>}
                         <dt>CLIP vision</dt>
                         <dd>
                             {runtimeMetrics.embedding.clip_session_loaded ? "loaded" : "idle"} · last{" "}

@@ -168,12 +168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut voice_stored, mut voice_shown): (BTreeMap<String, usize>, BTreeMap<String, usize>) =
             (BTreeMap::new(), BTreeMap::new());
         let mut other_first_words: BTreeMap<String, usize> = BTreeMap::new();
+        let mut other_title_overlap: BTreeMap<String, usize> = BTreeMap::new();
         for row in rows.iter().filter(|row| fndr_lib::memory_quality::record_low_signal_reason(row).is_none()) {
             tally(&mut voice_stored, opening(&row.display_summary));
             // The line a card shows: voice cleanup, then a title-based
             // fallback when the sentence is still about the screen.
             let (shown, _fell_back) = fndr_lib::summariser::narration_filter::clean_or_fallback_display_summary(
                 &row.display_summary,
+                &row.app_name,
                 &row.window_title,
                 row.url.as_deref(),
                 row.timestamp,
@@ -183,6 +185,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Four words show the sentence pattern without quoting the memory.
                 let opener = shown.split_whitespace().take(4).collect::<Vec<_>>().join(" ").to_lowercase();
                 tally(&mut other_first_words, &opener);
+                // Is the line only a label? How much of it is the window
+                // title, and how much more with the app's name counted.
+                let words = |text: &str| -> Vec<String> {
+                    text.to_lowercase()
+                        .split(|c: char| !c.is_alphanumeric())
+                        .filter(|word| word.len() >= 2)
+                        .map(str::to_string)
+                        .collect()
+                };
+                let line = words(&shown);
+                let title = words(&row.window_title);
+                let app = words(&row.app_name);
+                let in_title = line.iter().filter(|word| title.contains(word)).count();
+                let in_either = line.iter().filter(|word| title.contains(word) || app.contains(word)).count();
+                let bucket = if line.is_empty() {
+                    "no words"
+                } else if in_title == line.len() {
+                    "every word is in the window title"
+                } else if in_either == line.len() {
+                    "every word is in the title or the app name"
+                } else if in_either * 2 >= line.len() {
+                    "half or more of the words are in the title or app name"
+                } else {
+                    "mostly its own words"
+                };
+                tally(&mut other_title_overlap, &format!("{bucket}, {} words", if line.len() <= 8 { "8 or fewer" } else { "over 8" }));
             }
         }
         let mut common_other: Vec<_> = other_first_words.into_iter().collect();
@@ -496,7 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "memories": rows.len(),
             "summary_quality": { "placeholder": pct(placeholder), "narrated": pct(narrated), "cut_inside_token": pct(cut), "no_why_it_mattered": pct(no_why) },
             "vector_health": { "zero_primary_vector": pct(zero_vec), "primary_equals_snippet_vector": pct(same_vec), "embedding_text_carries_session_id": pct(session_noise), "model_and_dim": by_model },
-            "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other },
+            "voice": { "stored": voice_stored, "shown_after_cleanup": voice_shown, "first_words_not_past_tense": common_other, "other_lines_and_the_title": other_title_overlap },
             "weak_summaries": weak_summaries,
             "labels": { "summary_source": by_source, "enrichment_status": by_status, "intent": by_intent, "activity_type": by_activity, "reviewing_agent_output_by_app": agent_review_by_app },
 "project": by_project,

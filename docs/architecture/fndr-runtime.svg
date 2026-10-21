@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">FNDR runtime architecture</title>
+  <desc id="desc">A local macOS screen-context pipeline transforms privacy-admitted observations into local indexed memories. Search plans several retrieval routes, rechecks source visibility, fuses evidence, then serves people and agents. External task sending crosses a separate review and egress gate.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#09111f"/>
+      <stop offset="1" stop-color="#111b2e"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17243a"/>
+      <stop offset="1" stop-color="#111c30"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#40516a" stroke-opacity=".12" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#6b84a6"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#52d6c7"/>
+    </marker>
+    <style>
+      text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .eyebrow { fill:#91a7c4; font-size:14px; font-weight:700; letter-spacing:2.6px; }
+      .title { fill:#f3f7ff; font-size:38px; font-weight:750; letter-spacing:-.7px; }
+      .subtitle { fill:#a8b8cd; font-size:17px; }
+      .boundary { fill:#0d1728; stroke:#344965; stroke-width:1.5; }
+      .boundary-label { fill:#75ddcf; font-size:13px; font-weight:750; letter-spacing:2px; }
+      .card { fill:url(#panel); stroke:#2a3d59; stroke-width:1.2; }
+      .card-title { fill:#f1f5fb; font-size:18px; font-weight:700; }
+      .card-copy { fill:#b8c6d8; font-size:14px; }
+      .card-mono { fill:#7e9ab9; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+      .number { fill:#09111f; font-size:13px; font-weight:800; text-anchor:middle; dominant-baseline:central; }
+      .connector { fill:none; stroke:#6b84a6; stroke-width:2; marker-end:url(#arrow); }
+      .connector-teal { fill:none; stroke:#52d6c7; stroke-width:2.2; marker-end:url(#arrowTeal); }
+      .fine { fill:#7186a2; font-size:12px; }
+      .outside { fill:#132235; stroke:#52d6c7; stroke-opacity:.72; stroke-width:1.3; }
+      .outside-title { fill:#e4fbf7; font-size:17px; font-weight:700; }
+      .outside-copy { fill:#acc6c8; font-size:14px; }
+    </style>
+  </defs>
+  <rect width="1600" height="1040" rx="28" fill="url(#bg)"/>
+  <rect width="1600" height="1040" rx="28" fill="url(#grid)"/>
+
+  <text x="64" y="66" class="eyebrow">FNDR / RUNTIME MAP</text>
+  <text x="64" y="116" class="title">From observed context to accountable recall</text>
+  <text x="64" y="147" class="subtitle">A local data plane for capture, memory construction, retrieval and cited output, with a separate gate for network egress.</text>
+
+  <rect x="38" y="176" width="1524" height="622" rx="22" class="boundary"/>
+  <text x="66" y="210" class="boundary-label">LOCAL MACOS DATA PLANE / DEFAULT PATH</text>
+
+  <!-- Capture and durable memory construction -->
+  <g>
+    <rect x="66" y="236" width="254" height="188" rx="15" class="card"/>
+    <circle cx="92" cy="263" r="13" fill="#52d6c7"/><text x="92" y="263" class="number">1</text>
+    <text x="116" y="269" class="card-title">Observe</text>
+    <text x="88" y="307" class="card-copy">ScreenCaptureKit sample</text>
+    <text x="88" y="331" class="card-copy">Frontmost app + window</text>
+    <text x="88" y="355" class="card-copy">Capture runs while enabled</text>
+    <text x="88" y="399" class="card-mono">capture/  |  macOS APIs</text>
+
+    <path d="M322 330H355" class="connector"/>
+    <rect x="366" y="236" width="254" height="188" rx="15" class="card"/>
+    <circle cx="392" cy="263" r="13" fill="#78a8ff"/><text x="392" y="263" class="number">2</text>
+    <text x="416" y="269" class="card-title">Admit safely</text>
+    <text x="388" y="307" class="card-copy">Permissions + blocklists</text>
+    <text x="388" y="331" class="card-copy">Private / low-signal checks</text>
+    <text x="388" y="355" class="card-copy">Dedupe + focus continuity</text>
+    <text x="388" y="399" class="card-mono">privacy/  |  capture/</text>
+
+    <path d="M622 330H655" class="connector"/>
+    <rect x="666" y="236" width="254" height="188" rx="15" class="card"/>
+    <circle cx="692" cy="263" r="13" fill="#b69cff"/><text x="692" y="263" class="number">3</text>
+    <text x="716" y="269" class="card-title">Extract + normalize</text>
+    <text x="688" y="307" class="card-copy">Accessibility text first</text>
+    <text x="688" y="331" class="card-copy">Apple Vision OCR fallback</text>
+    <text x="688" y="355" class="card-copy">Metadata + source provenance</text>
+    <text x="688" y="399" class="card-mono">ocr/  |  memory/</text>
+
+    <path d="M922 330H955" class="connector"/>
+    <rect x="966" y="236" width="254" height="188" rx="15" class="card"/>
+    <circle cx="992" cy="263" r="13" fill="#ffca7a"/><text x="992" y="263" class="number">4</text>
+    <text x="1016" y="269" class="card-title">Build retrieval inputs</text>
+    <text x="988" y="307" class="card-copy">Canonical embedding document</text>
+    <text x="988" y="331" class="card-copy">MiniLM ONNX vector / 384-d</text>
+    <text x="988" y="355" class="card-copy">Source + model manifest</text>
+    <text x="988" y="399" class="card-mono">memory_embedding_document.rs</text>
+
+    <path d="M1222 330H1255" class="connector"/>
+    <rect x="1266" y="236" width="254" height="188" rx="15" class="card"/>
+    <circle cx="1292" cy="263" r="13" fill="#52d6c7"/><text x="1292" y="263" class="number">5</text>
+    <text x="1316" y="269" class="card-title">Persist locally</text>
+    <text x="1288" y="307" class="card-copy">LanceDB memory records</text>
+    <text x="1288" y="331" class="card-copy">Lexical + vector indexes</text>
+    <text x="1288" y="355" class="card-copy">Chunks + relations persist separately</text>
+    <text x="1288" y="399" class="card-mono">storage/lance_store/</text>
+  </g>
+
+  <path d="M1393 426V454H216V478" fill="none" stroke="#7186a2" stroke-width="1.8" stroke-dasharray="6 6" marker-end="url(#arrow)"/>
+  <text x="690" y="449" class="fine">indexed records and relationships</text>
+
+  <!-- Retrieval and presentation -->
+  <g>
+    <rect x="66" y="488" width="324" height="190" rx="15" class="card"/>
+    <circle cx="92" cy="515" r="13" fill="#78a8ff"/><text x="92" y="515" class="number">6</text>
+    <text x="116" y="521" class="card-title">Plan the query</text>
+    <text x="88" y="559" class="card-copy">Intent + topic hints</text>
+    <text x="88" y="583" class="card-copy">Time / app filters</text>
+    <text x="88" y="607" class="card-copy">Entity aliases / temporal hints</text>
+    <text x="88" y="653" class="card-mono">context_runtime/query_plan.rs</text>
+
+    <path d="M392 582H425" class="connector"/>
+    <rect x="436" y="488" width="372" height="190" rx="15" class="card"/>
+    <circle cx="462" cy="515" r="13" fill="#b69cff"/><text x="462" y="515" class="number">7</text>
+    <text x="486" y="521" class="card-title">Run selected routes</text>
+    <text x="458" y="559" class="card-copy">Vector + BM25; temporal + entity</text>
+    <text x="458" y="583" class="card-copy">Optional BGE chunk-first retrieval</text>
+    <text x="458" y="607" class="card-copy">Graph retrieval not in active query plan</text>
+    <text x="458" y="653" class="card-mono">context_runtime/*_route.rs</text>
+
+    <path d="M810 582H843" class="connector"/>
+    <rect x="854" y="488" width="324" height="190" rx="15" class="card"/>
+    <circle cx="880" cy="515" r="13" fill="#ffca7a"/><text x="880" y="515" class="number">8</text>
+    <text x="904" y="521" class="card-title">Authorize + compose</text>
+    <text x="876" y="559" class="card-copy">Recheck current record visibility</text>
+    <text x="876" y="583" class="card-copy">Weighted fusion + strong-match gate</text>
+    <text x="876" y="607" class="card-copy">Collect evidence, verify, cite / refuse</text>
+    <text x="876" y="653" class="card-mono">retrieve.rs  |  verifier.rs</text>
+
+    <path d="M1180 582H1213" class="connector-teal"/>
+    <rect x="1224" y="488" width="296" height="190" rx="15" class="card"/>
+    <circle cx="1250" cy="515" r="13" fill="#52d6c7"/><text x="1250" y="515" class="number">9</text>
+    <text x="1274" y="521" class="card-title">Serve bounded output</text>
+    <text x="1246" y="559" class="card-copy">Search / Ask / Memory Vault</text>
+    <text x="1246" y="583" class="card-copy">Resume + related context</text>
+    <text x="1246" y="607" class="card-copy">MCP reads + scoped tools</text>
+    <text x="1246" y="653" class="card-mono">React UI  |  Tauri IPC  |  MCP</text>
+  </g>
+
+  <text x="66" y="739" class="fine">Raw screen pixels are transient inputs. Durable memory is a structured record with source and embedding provenance, not a screenshot file.</text>
+  <text x="66" y="763" class="fine">Vector spaces are versioned. Optional chunk retrieval uses its own BGE contract and resolves child hits to parent memory records.</text>
+
+  <!-- Explicit network boundary -->
+  <rect x="38" y="826" width="1524" height="164" rx="22" fill="#0b1524" stroke="#52d6c7" stroke-opacity=".48" stroke-width="1.3"/>
+  <text x="66" y="861" class="boundary-label">SEPARATE EGRESS / ACTION BOUNDARY</text>
+  <rect x="66" y="882" width="432" height="82" rx="13" class="outside"/>
+  <text x="88" y="914" class="outside-title">Review + policy gate</text>
+  <text x="88" y="940" class="outside-copy">Explicit request, exact payload, current source authorization</text>
+  <path d="M500 923H560" class="connector-teal"/>
+  <rect x="572" y="882" width="428" height="82" rx="13" class="outside"/>
+  <text x="594" y="914" class="outside-title">Destination and action checks</text>
+  <text x="594" y="940" class="outside-copy">Peer identity / endpoint checks, or run / ask / never policy</text>
+  <path d="M1002 923H1062" class="connector-teal"/>
+  <rect x="1074" y="882" width="446" height="82" rx="13" class="outside"/>
+  <text x="1096" y="914" class="outside-title">Untrusted external result</text>
+  <text x="1096" y="940" class="outside-copy">A2A peer / chosen provider; response is evidence, never authority</text>
+  <path d="M1370 679V814" fill="none" stroke="#52d6c7" stroke-width="1.8" stroke-dasharray="6 6" marker-end="url(#arrowTeal)"/>
+</svg>

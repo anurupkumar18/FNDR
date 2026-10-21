@@ -33,8 +33,10 @@
     --accent-light: color-mix(in srgb, var(--accent) 16%, transparent);
     --danger: var(--alarm);
     --danger-light: color-mix(in srgb, var(--alarm) 18%, transparent);
-    --success: var(--accent-3);
-    --success-light: color-mix(in srgb, var(--accent-3) 16%, transparent);
+    --success: var(--status-success);
+    --success-light: color-mix(in srgb, var(--status-success) 16%, transparent);
+    --warning: var(--status-warning);
+    --info: var(--status-info);
 
     /* Page background — subtle warm vignette behind the aurora wallpaper.
        Mostly transparent now so the WebGL canvas reads through. */
@@ -91,8 +93,10 @@
     --accent-light: color-mix(in srgb, var(--accent) 14%, transparent);
     --danger: var(--alarm);
     --danger-light: color-mix(in srgb, var(--alarm) 14%, transparent);
-    --success: var(--accent-3);
-    --success-light: color-mix(in srgb, var(--accent-3) 14%, transparent);
+    --success: var(--status-success);
+    --success-light: color-mix(in srgb, var(--status-success) 14%, transparent);
+    --warning: var(--status-warning);
+    --info: var(--status-info);
     --page-bg:
         radial-gradient(ellipse 80% 58% at 50% 42%, color-mix(in srgb, var(--bg-3) 30%, transparent), transparent 70%),
         linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);

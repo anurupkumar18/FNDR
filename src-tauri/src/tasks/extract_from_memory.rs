@@ -9,6 +9,14 @@ pub struct TaskCandidate {
     pub confidence: f32,
 }
 
+/// Import pipeline diagnostics are not errors observed in the source image.
+pub(crate) fn is_internal_extraction_issue(error: &str) -> bool {
+    matches!(
+        error.trim(),
+        "vision_semantic_extraction_failed" | "visual_metadata_fallback"
+    )
+}
+
 /// Extract task candidates from a memory's next steps, its decisions that
 /// state work to do, and its errors. Does NOT call any model.
 pub fn extract_task_candidates(record: &MemoryRecord) -> Vec<TaskCandidate> {
@@ -42,7 +50,7 @@ pub fn extract_task_candidates(record: &MemoryRecord) -> Vec<TaskCandidate> {
     }
 
     for error in &record.errors {
-        if error.trim().is_empty() {
+        if error.trim().is_empty() || is_internal_extraction_issue(error) {
             continue;
         }
         candidates.push(candidate(format!("Fix: {}", error.trim()), 0.65));
@@ -110,6 +118,18 @@ mod tests {
         };
         let tasks = extract_task_candidates(&record);
         assert!(tasks.iter().any(|t| t.title.starts_with("Fix:")));
+    }
+
+    #[test]
+    fn legacy_import_diagnostics_are_not_user_tasks() {
+        let record = MemoryRecord {
+            id: "imported-image".to_string(),
+            source_type: "meta_glasses_import".to_string(),
+            errors: vec!["vision_semantic_extraction_failed".to_string()],
+            confidence_score: 0.7,
+            ..Default::default()
+        };
+        assert!(extract_task_candidates(&record).is_empty());
     }
 
     #[test]

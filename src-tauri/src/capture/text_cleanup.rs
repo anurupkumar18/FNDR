@@ -219,15 +219,6 @@ fn title_is_generic_for_app(app_name: &str, title: &str) -> bool {
     )
 }
 
-fn is_browser_app(app_name: &str) -> bool {
-    let lower = app_name.to_lowercase();
-    lower.contains("chrome")
-        || lower.contains("safari")
-        || lower.contains("arc")
-        || lower.contains("firefox")
-        || lower.contains("edge")
-}
-
 fn is_code_app(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
     lower.contains("terminal")
@@ -267,7 +258,7 @@ fn is_generic_browser_label(line: &str) -> bool {
 }
 
 fn should_drop_line(app_name: &str, line: &str) -> bool {
-    let browser_app = is_browser_app(app_name);
+    let browser_app = crate::browsers::is_browser(app_name);
     let code_app = is_code_app(app_name);
     let mail_app = is_mail_app(app_name);
 

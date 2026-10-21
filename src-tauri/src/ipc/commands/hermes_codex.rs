@@ -231,6 +231,17 @@ pub(crate) fn pinned_hermes_dir(runtime_root: &Path) -> PathBuf {
     runtime_root.join("src")
 }
 
+fn configure_pinned_origin(target: &Path) -> Result<(), String> {
+    let action = if git_in(target, &["remote", "get-url", "origin"]).is_ok() {
+        "set-url"
+    } else {
+        "add"
+    };
+    git_in(target, &["remote", action, "origin", HERMES_REPO_URL])
+        .map(|_| ())
+        .map_err(|error| format!("Installing Hermes failed: {error}"))
+}
+
 /// Clones Hermes at the pinned commit into FNDR's app data.
 pub(crate) fn clone_pinned_hermes(runtime_root: &Path) -> Result<PathBuf, String> {
     let target = pinned_hermes_dir(runtime_root);
@@ -255,7 +266,7 @@ pub(crate) fn clone_pinned_hermes(runtime_root: &Path) -> Result<PathBuf, String
     };
     crate::privacy_proof::record_egress("github.com");
     git(&["init", "-q"])?;
-    git(&["remote", "add", "origin", HERMES_REPO_URL])?;
+    configure_pinned_origin(&target)?;
     git(&[
         "fetch",
         "-q",
@@ -271,6 +282,36 @@ pub(crate) fn clone_pinned_hermes(runtime_root: &Path) -> Result<PathBuf, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_install_reuses_origin_after_an_interrupted_clone() {
+        let root = tempfile::tempdir().unwrap();
+        let fresh = root.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        git_in(&fresh, &["init", "-q"]).unwrap();
+        configure_pinned_origin(&fresh).unwrap();
+        assert_eq!(
+            git_in(&fresh, &["remote", "get-url", "origin"]).unwrap(),
+            HERMES_REPO_URL
+        );
+
+        let target = root.path().join("src");
+        std::fs::create_dir(&target).unwrap();
+        git_in(&target, &["init", "-q"]).unwrap();
+        git_in(
+            &target,
+            &["remote", "add", "origin", "https://example.invalid/old.git"],
+        )
+        .unwrap();
+
+        configure_pinned_origin(&target).unwrap();
+        configure_pinned_origin(&target).unwrap();
+
+        assert_eq!(
+            git_in(&target, &["remote", "get-url", "origin"]).unwrap(),
+            HERMES_REPO_URL
+        );
+    }
 
     fn read(path: &Path) -> Value {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
@@ -359,7 +400,7 @@ mod tests {
         let yaml = hermes_mcp_yaml("http://127.0.0.1:5123/mcp", "t0k\"en");
         assert!(yaml.contains("url: \"http://127.0.0.1:5123/mcp\""));
         assert!(yaml.contains("Authorization: \"Bearer t0k\\\"en\""));
-        assert!(yaml.contains("include: [\"memory.search_full_context\""));
+        assert!(yaml.contains("include: [\"fndr.search\""));
         assert!(!yaml.contains("remember"));
         assert!(!yaml.contains("agent.run"));
     }

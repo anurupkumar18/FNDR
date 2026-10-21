@@ -605,6 +605,15 @@ pub fn is_suggestion(task: &Task) -> bool {
     task.source_app.starts_with("Memory:") || task.source_app.eq_ignore_ascii_case("auto")
 }
 
+/// Whether a suggestion quotes an app the person has blocked since. It is no
+/// longer offered, as its memory is no longer shown. A task the person
+/// accepted or wrote is theirs and stays.
+pub fn suggested_from_blocked_app(task: &Task, blocklist: &[String]) -> bool {
+    task.source_app
+        .strip_prefix("Memory:")
+        .is_some_and(|app| crate::privacy::Blocklist::is_blocked(app.trim(), blocklist))
+}
+
 /// A suggestion the person accepted: theirs now, still linked to its memory.
 pub fn is_accepted(task: &Task) -> bool {
     task.source_app.starts_with("Accepted:")

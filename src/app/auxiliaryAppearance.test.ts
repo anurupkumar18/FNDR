@@ -32,7 +32,7 @@ describe("syncAuxiliaryAppearance", () => {
 
         expect(document.documentElement).toHaveAttribute("data-theme", "dark");
         expect(document.getElementById("cinematic-palette-vars")).toHaveTextContent(
-            '--cp-active-palette: "system"',
+            '--cp-active-palette: "film"',
         );
     });
 });

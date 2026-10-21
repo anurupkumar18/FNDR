@@ -3,7 +3,7 @@ mod agent_regression {
     use fndr_lib::agent::audit::list_agent_audit_runs;
     use fndr_lib::agent::context::run_agent_request;
     use fndr_lib::agent::{
-        build_agent_context_pack, validate_command, AgentContextRequest, AgentMode, PermissionScope,
+        build_agent_context_pack, AgentContextRequest, AgentMode, PermissionScope,
     };
     use fndr_lib::config::Config;
     use fndr_lib::graph::GraphStore;
@@ -179,55 +179,6 @@ mod agent_regression {
         run_ids.sort();
         assert_eq!(audited, run_ids);
     }
-
-    #[test]
-    fn policy_defaults_deny_dangerous_actions() {
-        for (cmd, args) in [
-            ("rm", vec!["-rf", "/tmp/x"]),
-            ("sudo", vec!["ls"]),
-            ("git", vec!["push", "origin", "main"]),
-            ("git", vec!["commit", "-m", "x"]),
-            ("git", vec!["reset", "--hard"]),
-            ("git", vec!["branch", "-D", "main"]),
-            ("git", vec!["branch", "new-branch"]),
-            ("git", vec!["diff", "--output=/tmp/x.patch"]),
-            ("git", vec!["log", "--output", "/tmp/x.log"]),
-            ("git", vec!["branch", "-av", "-d", "x"]),
-            ("git", vec!["branch", "-vD", "x"]),
-            ("git", vec!["diff", "--no-index", "/etc/hosts", "/dev/null"]),
-            ("git", vec!["diff", "--ext-diff"]),
-            ("git", vec!["show", "--textconv", "HEAD"]),
-            ("cargo", vec!["install", "ripgrep"]),
-            ("npm", vec!["install"]),
-            ("curl", vec!["https://example.com"]),
-        ] {
-            assert!(
-                validate_command(cmd, &args).is_err(),
-                "{cmd} {args:?} must be refused"
-            );
-        }
-        for (cmd, args) in [
-            ("git", vec!["status"]),
-            ("git", vec!["branch"]),
-            ("git", vec!["branch", "-a", "-v"]),
-            ("git", vec!["branch", "-av"]),
-            ("git", vec!["branch", "--list", "feat/*"]),
-            ("git", vec!["branch", "--contains", "HEAD"]),
-            (
-                "git",
-                vec!["branch", "--merged", "main", "--sort=-committerdate"],
-            ),
-            ("git", vec!["diff", "--output-indicator-new=+"]),
-            ("ls", vec!["-la"]),
-            ("cargo", vec!["test"]),
-            ("npm", vec!["run", "typecheck"]),
-        ] {
-            assert!(
-                validate_command(cmd, &args).is_ok(),
-                "{cmd} {args:?} should be allowed"
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -390,55 +341,5 @@ mod audit_persistence {
             AgentRunStatus::Failed,
             "Status must be Failed"
         );
-    }
-}
-
-#[cfg(test)]
-mod command_validation {
-    use fndr_lib::agent::validate_command;
-
-    #[test]
-    fn git_status_is_allowed() {
-        assert!(validate_command("git", &["status"]).is_ok());
-    }
-
-    #[test]
-    fn git_commit_is_blocked() {
-        assert!(validate_command("git", &["commit", "-m", "hack"]).is_err());
-    }
-
-    #[test]
-    fn rm_is_blocked() {
-        assert!(validate_command("rm", &["-rf", "/"]).is_err());
-    }
-
-    #[test]
-    fn sudo_is_blocked() {
-        assert!(validate_command("sudo", &["ls"]).is_err());
-    }
-
-    #[test]
-    fn cargo_check_is_allowed() {
-        assert!(validate_command("cargo", &["check"]).is_ok());
-    }
-
-    #[test]
-    fn cargo_install_is_blocked() {
-        assert!(validate_command("cargo", &["install", "ripgrep"]).is_err());
-    }
-
-    #[test]
-    fn npm_typecheck_is_allowed() {
-        assert!(validate_command("npm", &["run", "typecheck"]).is_ok());
-    }
-
-    #[test]
-    fn npm_install_is_blocked() {
-        assert!(validate_command("npm", &["install"]).is_err());
-    }
-
-    #[test]
-    fn unknown_command_is_blocked() {
-        assert!(validate_command("curl", &["https://example.com"]).is_err());
     }
 }

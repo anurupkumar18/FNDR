@@ -80,3 +80,9 @@ The one real query that became weak is "the product requirements doc I drafted l
 The gate passes on all three sets. `retrieval_qa` now names each real query it marks weak, with the routes and the words found.
 
 Note for anyone running the gate: `QA_SKIP_SEED=1` reuses a profile whose dates were written when it was seeded. On a later day every "yesterday" query misses and the gate reports FAIL. Reseed first.
+
+## Generic query word, 2026-10-09
+
+On a fresh Office PM synthetic profile using the installed MiniLM assets, "notes from the podcast about sourdough baking" was marked strong for a hiring scorecard. The top hit matched only "notes" and "about"; its vector signal was 0.245 and fused score was 0.369. `QueryContext` omitted many common words but kept "about", so two of five single-word anchors counted as enough keyword support to bypass the low-vector check. Removing "about" from anchor terms made that query weak. The Office PM product flag changed from 2 of 8 no-match queries marked strong to 1 of 8; real queries marked weak stayed 4 of 33. The Office PM retrieval gate passed, with Recall@5 0.950 on Search, Ask, and Retrieve.
+
+The remaining false strong query asks for sales director candidates. Its top hit is a Senior Product Designer hiring pipeline with vector signal 0.470 and fused score 0.537. The rule treats that as semantic support; a generic threshold change would also risk real paraphrases. This role mismatch needs a separate discriminating signal and fresh labeled checks.

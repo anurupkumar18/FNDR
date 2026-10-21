@@ -84,21 +84,10 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    fn temp_quality_dir(label: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "fndr-quality-logger-{label}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time")
-                .as_nanos()
-        ));
-        create_dir_all(&base).expect("create temp quality dir");
-        base
-    }
-
     #[test]
     fn concurrent_appends_produce_parseable_jsonl_rows() {
-        let app_dir = Arc::new(temp_quality_dir("concurrent"));
+        let temp = tempfile::tempdir().unwrap();
+        let app_dir = Arc::new(temp.path().to_path_buf());
         let file_name = "signals.jsonl";
         let thread_count = 8usize;
         let rows_per_thread = 40usize;

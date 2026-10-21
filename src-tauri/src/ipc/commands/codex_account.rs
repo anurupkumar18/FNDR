@@ -131,6 +131,23 @@ impl AppServer {
         executable: &Path,
         extra_args: &[String],
     ) -> Result<Self, String> {
+        Self::spawn_opted(executable, extra_args, false).await
+    }
+
+    /// As [`Self::spawn_with`], opted into Codex's experimental methods
+    /// (`thread/realtime/*` answers only on such a connection).
+    pub(crate) async fn spawn_experimental(
+        executable: &Path,
+        extra_args: &[String],
+    ) -> Result<Self, String> {
+        Self::spawn_opted(executable, extra_args, true).await
+    }
+
+    async fn spawn_opted(
+        executable: &Path,
+        extra_args: &[String],
+        experimental: bool,
+    ) -> Result<Self, String> {
         let mut child = Command::new(executable)
             .args(["app-server", "-c", FILE_CREDENTIAL_STORE])
             .args(extra_args)
@@ -179,18 +196,17 @@ impl AppServer {
             last_error_line,
         };
 
-        server
-            .request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "fndr",
-                        "title": "FNDR",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    }
-                }),
-            )
-            .await?;
+        let mut initialize = json!({
+            "clientInfo": {
+                "name": "fndr",
+                "title": "FNDR",
+                "version": env!("CARGO_PKG_VERSION"),
+            }
+        });
+        if experimental {
+            initialize["capabilities"] = json!({ "experimentalApi": true });
+        }
+        server.request("initialize", initialize).await?;
         server.notify("initialized", json!({})).await?;
         Ok(server)
     }
@@ -214,11 +230,19 @@ impl AppServer {
             .await
     }
 
-    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    /// Sends a request without waiting for it. Its response arrives through
+    /// `read_raw` with the returned id, among notifications, for callers
+    /// that read one stream (Notch Do, a hand-off worker).
+    pub(crate) async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id += 1;
         self.write(json!({ "method": method, "id": id, "params": params }))
             .await?;
+        Ok(id)
+    }
+
+    pub(crate) async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.send(method, params).await?;
 
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
@@ -280,7 +304,7 @@ impl AppServer {
     /// Next response or notification. Server-initiated requests (approvals,
     /// elicitations, token refresh) carry both a method and an id; callers
     /// that don't handle them explicitly never grant them.
-    async fn read_message(&mut self) -> Result<Value, String> {
+    pub(crate) async fn read_message(&mut self) -> Result<Value, String> {
         loop {
             let message = self.read_raw().await?;
             if let (Some(id), Some(method)) = (message.get("id").cloned(), message.get("method")) {
@@ -331,7 +355,7 @@ pub(crate) fn parse_account(result: &Value) -> Option<CodexAccount> {
     })
 }
 
-fn parse_window(window: Option<&Value>) -> Option<CodexUsageWindow> {
+pub(crate) fn parse_window(window: Option<&Value>) -> Option<CodexUsageWindow> {
     let window = window?.as_object()?;
     Some(CodexUsageWindow {
         used_percent: window.get("usedPercent")?.as_f64()?,
@@ -405,7 +429,7 @@ fn parse_models(result: &Value) -> Vec<CodexModel> {
 
 pub(crate) fn ready_executable() -> Result<PathBuf, String> {
     detect_codex_executable().ok_or_else(|| {
-        "Codex isn't installed. Install it with `brew install codex` or `npm install -g @openai/codex@0.151.0`, then try again."
+        "Codex isn't installed. Install it from Settings → Setup and updates, then try again."
             .to_string()
     })
 }
@@ -613,6 +637,7 @@ pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), Stri
         .env("PATH", child_path_env(executable))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| format!("Could not ask Codex for its features: {e}"))?;
@@ -629,9 +654,19 @@ pub(crate) async fn refresh_codex_features(executable: &Path) -> Result<(), Stri
     Ok(())
 }
 
-/// `--disable` flags for every acting feature the installed Codex has.
-fn disable_flags(known: Option<&[String]>) -> Vec<String> {
-    READ_ONLY_DISABLED_FEATURES
+/// Whether the Codex last asked has a feature by this name; `None` before
+/// any Codex was asked.
+pub(crate) fn codex_knows_feature(name: &str) -> Option<bool> {
+    KNOWN_CODEX_FEATURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|known| known.iter().any(|feature| feature == name))
+}
+
+/// `--disable` flags for each of `features` the installed Codex has.
+fn disable_flags(features: &[&str], known: Option<&[String]>) -> Vec<String> {
+    features
         .iter()
         .filter(|feature| known.is_none_or(|known| known.iter().any(|name| name == *feature)))
         .flat_map(|feature| ["--disable".to_string(), (*feature).to_string()])
@@ -640,10 +675,15 @@ fn disable_flags(known: Option<&[String]>) -> Vec<String> {
 
 /// The flags for the Codex last asked; every flag when none was asked yet.
 pub(crate) fn read_only_feature_args() -> Vec<String> {
+    known_feature_args(READ_ONLY_DISABLED_FEATURES)
+}
+
+/// `--disable` flags for `features`, filtered through the Codex last asked.
+pub(crate) fn known_feature_args(features: &[&str]) -> Vec<String> {
     let known = KNOWN_CODEX_FEATURES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    disable_flags(known.as_deref())
+    disable_flags(features, known.as_deref())
 }
 
 const SCREEN_GUIDE_SCREENSHOT_NOTE: &str = "A screenshot of the same display is attached for \
@@ -702,17 +742,21 @@ impl Drop for ScratchDir {
     }
 }
 
+/// A name Codex's `-c` parser reaches bare. It splits keys on dots and keeps
+/// quotes as part of a name, so a quoted key addresses a new entry; `@`
+/// (plugin names such as `browser@openai-bundled`) works bare (hand-off
+/// spike S1, Codex 0.151.0).
 pub(crate) fn is_plain_config_key(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '@'))
 }
 
 /// Arguments that turn the user's Codex config into a tool-less session for
 /// this process only: acting features off and every configured MCP server
 /// disabled by name. Nothing is written to their config.toml.
-fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn read_only_session_args(mcp_server_names: &[String]) -> Result<Vec<String>, String> {
     let mut args = read_only_feature_args();
     for name in mcp_server_names {
         if !is_plain_config_key(name) {
@@ -761,6 +805,30 @@ fn ensure_screen_guide_not_cancelled(cancel: &std::sync::atomic::AtomicBool) -> 
     }
 }
 
+/// Time allowed for everything before the turn: finding Codex, listing its
+/// features and MCP servers, starting the session.
+const SCREEN_GUIDE_SETUP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Runs `work` until it ends, `cancel` is set, or `limit` passes. Dropping
+/// `work` kills any Codex child it started and removes its scratch directory.
+async fn run_until_cancelled_or_late<T>(
+    cancel: &std::sync::atomic::AtomicBool,
+    limit: Duration,
+    work: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let watch = async {
+        loop {
+            ensure_screen_guide_not_cancelled(cancel)?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::select! {
+        result = work => result,
+        stopped = watch => stopped,
+        () = tokio::time::sleep(limit) => Err("ChatGPT took too long to answer.".to_string()),
+    }
+}
+
 /// Answers a Screen Guide question with the user's ChatGPT plan. Uses the
 /// same prompt and [POINT] contract as the on-device model, so FNDR's
 /// grounding and freshness checks apply unchanged to the result.
@@ -772,18 +840,41 @@ pub(crate) async fn answer_screen_guide_with_codex(
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     timeout: Duration,
 ) -> Result<String, String> {
+    run_until_cancelled_or_late(
+        cancel.as_ref(),
+        timeout + SCREEN_GUIDE_SETUP_BUDGET,
+        run_screen_guide_turn(
+            question,
+            positioned_ocr,
+            history,
+            screenshot_png,
+            cancel.as_ref(),
+            timeout,
+        ),
+    )
+    .await
+}
+
+async fn run_screen_guide_turn(
+    question: &str,
+    positioned_ocr: &str,
+    history: &str,
+    screenshot_png: Option<Vec<u8>>,
+    cancel: &std::sync::atomic::AtomicBool,
+    timeout: Duration,
+) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     let executable = ready_executable()?;
     let mcp_names = configured_mcp_server_names(&executable).await?;
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     refresh_codex_features(&executable).await?;
     let args = read_only_session_args(&mcp_names)?;
-    ensure_screen_guide_not_cancelled(cancel.as_ref())?;
+    ensure_screen_guide_not_cancelled(cancel)?;
     let mut server = AppServer::spawn_with(&executable, &args).await?;
 
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -791,7 +882,7 @@ pub(crate) async fn answer_screen_guide_with_codex(
     let account = server
         .request("account/read", json!({ "refreshToken": false }))
         .await?;
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -822,13 +913,13 @@ pub(crate) async fn answer_screen_guide_with_codex(
         let jpeg = tokio::task::spawn_blocking(move || downscaled_jpeg(&png))
             .await
             .map_err(|_| "Screenshot preparation stopped unexpectedly.".to_string())??;
-        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
             server.shutdown().await;
             return Err(error);
         }
         let path = stage_private_screenshot(&scratch.0, &jpeg)
             .map_err(|e| format!("Could not stage the screenshot: {e}"))?;
-        if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+        if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
             server.shutdown().await;
             return Err(error);
         }
@@ -837,7 +928,7 @@ pub(crate) async fn answer_screen_guide_with_codex(
         instructions.push_str(SCREEN_GUIDE_SCREENSHOT_NOTE);
     }
 
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
@@ -863,21 +954,16 @@ pub(crate) async fn answer_screen_guide_with_codex(
         .and_then(Value::as_str)
         .ok_or("Codex did not start a thread.")?
         .to_string();
-    if let Err(error) = ensure_screen_guide_not_cancelled(cancel.as_ref()) {
+    if let Err(error) = ensure_screen_guide_not_cancelled(cancel) {
         server.shutdown().await;
         return Err(error);
     }
-    let turn = server
+    server
         .request(
             "turn/start",
             json!({ "threadId": thread_id, "input": input, "effort": "low" }),
         )
         .await?;
-    let turn_id = turn
-        .pointer("/turn/id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
 
     let deadline = tokio::time::Instant::now() + timeout;
     let mut answer = String::new();
@@ -925,14 +1011,6 @@ pub(crate) async fn answer_screen_guide_with_codex(
         }
     };
 
-    if outcome.is_err() && !turn_id.is_empty() {
-        let _ = server
-            .request(
-                "turn/interrupt",
-                json!({ "threadId": thread_id, "turnId": turn_id }),
-            )
-            .await;
-    }
     server.shutdown().await;
     drop(scratch);
     outcome.map(|()| answer)
@@ -956,7 +1034,9 @@ mod tests {
         assert_eq!(thread["model"], "gpt-5.6-sol");
         // Nothing listed: Codex keeps its own choice.
         assert_eq!(pick_model(&[]), None);
-        assert!(with_model(json!({ "ephemeral": true }), None).get("model").is_none());
+        assert!(with_model(json!({ "ephemeral": true }), None)
+            .get("model")
+            .is_none());
     }
 
     #[test]
@@ -966,13 +1046,23 @@ mod tests {
             "shell_tool   stable   true\nunified_exec stable true\nmemories stable true\n",
         );
         assert_eq!(known, ["shell_tool", "unified_exec", "memories"]);
-        let flags = disable_flags(Some(&known));
+        let flags = disable_flags(READ_ONLY_DISABLED_FEATURES, Some(&known));
         assert_eq!(
             flags,
-            ["--disable", "shell_tool", "--disable", "unified_exec", "--disable", "memories"]
+            [
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "unified_exec",
+                "--disable",
+                "memories"
+            ]
         );
         // Before any Codex was asked, nothing is left out.
-        assert_eq!(disable_flags(None).len(), READ_ONLY_DISABLED_FEATURES.len() * 2);
+        assert_eq!(
+            disable_flags(READ_ONLY_DISABLED_FEATURES, None).len(),
+            READ_ONLY_DISABLED_FEATURES.len() * 2
+        );
     }
 
     #[test]
@@ -1083,6 +1173,28 @@ mod tests {
     fn refuses_mcp_server_names_it_cannot_address() {
         assert!(read_only_session_args(&["weird name".into()]).is_err());
         assert!(read_only_session_args(&["a.b".into()]).is_err());
+        assert!(read_only_session_args(&["\"quoted\"".into()]).is_err());
+        assert!(is_plain_config_key("browser@openai-bundled"));
+    }
+
+    #[tokio::test]
+    async fn a_stuck_setup_ends_at_the_deadline_and_at_a_cancel() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let never = || std::future::pending::<Result<String, String>>();
+        let idle = Arc::new(AtomicBool::new(false));
+        let late = run_until_cancelled_or_late(&idle, Duration::from_millis(50), never()).await;
+        assert_eq!(late.unwrap_err(), "ChatGPT took too long to answer.");
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+        let stopped = run_until_cancelled_or_late(&cancel, Duration::from_secs(30), never()).await;
+        assert_eq!(stopped.unwrap_err(), "Screen Guide was cancelled.");
     }
 
     #[test]
@@ -1092,6 +1204,40 @@ mod tests {
             ensure_screen_guide_not_cancelled(&cancel),
             Err("Screen Guide was cancelled.".to_string())
         );
+    }
+
+    /// A stand-in for `codex app-server` that answers every request with
+    /// its own id, so a test can see which id each call used.
+    fn fake_app_server(dir: &Path) -> PathBuf {
+        let path = dir.join("codex");
+        std::fs::write(
+            &path,
+            "#!/usr/bin/env python3\nimport json, sys\nfor line in sys.stdin:\n    m = json.loads(line)\n    if 'id' in m and 'method' in m:\n        print(json.dumps({'id': m['id'], 'result': {'echo': m['method']}}), flush=True)\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[tokio::test]
+    async fn sent_and_awaited_requests_never_share_an_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = AppServer::spawn_with(&fake_app_server(dir.path()), &[])
+            .await
+            .unwrap();
+        let first = server.send("turn/start", json!({})).await.unwrap();
+        let reply = server.read_raw().await.unwrap();
+        assert_eq!(reply["id"], json!(first));
+        assert_eq!(reply["result"]["echo"], "turn/start");
+        let awaited = server.request("config/read", json!({})).await.unwrap();
+        assert_eq!(awaited["echo"], "config/read");
+        let second = server.send("turn/interrupt", json!({})).await.unwrap();
+        assert!(second > first + 1, "request used the id between them");
+        server.shutdown().await;
     }
 
     #[test]

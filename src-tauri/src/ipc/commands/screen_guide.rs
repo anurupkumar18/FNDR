@@ -4528,7 +4528,7 @@ fn screen_guide_context_probe_rank(context: &FrontmostAppContext) -> u8 {
     if !context.window_title_verified {
         return 1;
     }
-    if crate::capture::macos::is_browser_app(&context.app_name) && context.browser_url.is_none() {
+    if crate::browsers::is_browser(&context.app_name) && context.browser_url.is_none() {
         return 2;
     }
     3
@@ -4645,7 +4645,7 @@ fn screen_guide_context_verification_error(
             context.app_name
         ));
     }
-    if crate::capture::macos::is_browser_app(&context.app_name) && browser_url.is_none() {
+    if crate::browsers::is_browser(&context.app_name) && browser_url.is_none() {
         return Some(format!(
             "Screen Guide verified the {} window but couldn't read its active page URL. Open a normal web page in that browser, then try again.",
             context.app_name

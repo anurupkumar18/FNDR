@@ -88,3 +88,25 @@ With FNDR closed and the database backed up (`com.fndr.app.lancedb-backup-202610
 | Search by window title: a memory with that title in the top five | 10 of 11 |
 | Search by summary gist: a memory with the same title in the top five | 37 of 40 |
 | Search by summary gist: the exact memory in the top five | 34 of 40 |
+
+## The scorecard and the product disagreed about title-only lines, 2026-10-09
+
+The scorecard's "shown" figures ran the full display cleanup on every stored summary. A card only runs the narrator and tense part of it, so "Viewed {title}." appeared for new and repaired captures and not for older stored ones. The earlier figure for that rule (51 to 55 past-tense lines) described the cleanup, not what a card showed.
+
+Fixed by making stored text right, since that is the one place every surface reads:
+
+- the title rule also counts the app's name ("System Settings." in the app System Settings), and the cleanup takes the app name at every call site;
+- the repair tool applies the same rule and the new subjectless present-tense leads ("Discusses ..." becomes "Discussed ...") to stored summaries.
+
+On a copy of the owner's vault (162 memories) the repair rewrote and re-embedded 19 rows. Stored and shown now agree on past-tense lines:
+
+| Visible card lines | Before the repair | After |
+|---|---|---|
+| Past-tense verb, stored | 60 | 65 |
+| Past-tense verb, shown | 60 | 65 |
+| Other (titles, noun phrases) | 29 | 24 |
+| In voice | 62 percent | 66 percent |
+
+Search on the copy is unchanged: a memory with the same title in the top five for 7 of 8 title searches and 36 of 40 gist searches. `make qa-vault` passes. Of the 24 lines still "other", 20 are mostly the model's own words and 4 are half title.
+
+Not applied to the owner's vault. It needs FNDR closed, a backup, and the owner's go-ahead: `cargo run --example repair_truncated_summaries -- --data-dir "<profile>" --allow-real-profile --apply`.

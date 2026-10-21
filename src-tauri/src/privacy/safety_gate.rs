@@ -1,3 +1,5 @@
+use super::exclusions;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SafetyDecision {
     Allow,
@@ -26,7 +28,6 @@ pub fn evaluate(
     user_blocklist: &[String],
 ) -> SafetyDecision {
     let app = app_name.unwrap_or("").to_ascii_lowercase();
-    let bundle = bundle_id.unwrap_or("").to_ascii_lowercase();
     let title = window_title.unwrap_or("").to_ascii_lowercase();
     let url_lower = url.unwrap_or("").to_ascii_lowercase();
     let text_lower = ocr_text.unwrap_or("").to_ascii_lowercase();
@@ -47,50 +48,28 @@ pub fn evaluate(
         }
     }
 
-    const PASSWORD_MANAGERS: &[&str] = &[
-        "1password",
-        "bitwarden",
-        "keychain",
-        "lastpass",
-        "dashlane",
-        "keepass",
-    ];
-    for pm in PASSWORD_MANAGERS {
-        if app.contains(pm) || bundle.contains(pm) {
-            return SafetyDecision::SkipStorage;
-        }
+    if exclusions::is_credential_or_settings_app(app_name.unwrap_or(""), bundle_id) {
+        return SafetyDecision::SkipStorage;
     }
 
+    if exclusions::is_private_browser_window(app_name.unwrap_or(""), bundle_id, &title) {
+        return SafetyDecision::SkipStorage;
+    }
     if title.contains("private") && (title.contains("browsing") || title.contains("window")) {
         return SafetyDecision::SkipStorage;
     }
-    if title.contains("incognito") {
+
+    if exclusions::BANKING_URL_MARKERS
+        .iter()
+        .any(|marker| url_lower.contains(marker))
+        || exclusions::is_banking_host(url)
+    {
         return SafetyDecision::SkipStorage;
     }
-
-    const BANKING_DOMAINS: &[&str] = &[
-        "chase.com",
-        "bankofamerica",
-        "wellsfargo",
-        "citibank",
-        "capitalone",
-        "usbank",
-        "fidelity",
-        "vanguard",
-        "schwab",
-        "americanexpress",
-        "discover.com",
-        "paypal.com",
-        "venmo.com",
-        "robinhood.com",
-    ];
-    for domain in BANKING_DOMAINS {
-        if url_lower.contains(domain) {
-            return SafetyDecision::SkipStorage;
-        }
-    }
-    const BANKING_TITLES: &[&str] = &["online banking", "mobile banking", "bank account portal"];
-    if BANKING_TITLES.iter().any(|marker| title.contains(marker)) {
+    if exclusions::BANKING_TITLE_MARKERS
+        .iter()
+        .any(|marker| title.contains(marker))
+    {
         return SafetyDecision::SkipStorage;
     }
 

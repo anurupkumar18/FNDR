@@ -38,7 +38,7 @@ pub fn window_start_ms(mode: &str, now: DateTime<Local>) -> i64 {
 }
 
 /// A summary fit to quote: neutral voice, and not a placeholder or narration.
-fn quotable(summary: &str) -> Option<String> {
+pub(crate) fn quotable(summary: &str) -> Option<String> {
     use crate::summariser::narration_filter::{
         is_placeholder_summary, narration_filter_hits, neutral_voice,
     };
@@ -100,9 +100,9 @@ pub async fn briefing_for(state: &crate::AppState, mode: &str, now: DateTime<Loc
         .await
         .unwrap_or_default();
     let (mut shown, _hidden) = crate::memory_quality::partition_surfaceable(results);
-    shown.retain(|result| {
-        !crate::privacy::Blocklist::is_internal_app(&result.app_name, result.bundle_id.as_deref())
-    });
+    let blocklist = state.config.read().blocklist.clone();
+    shown
+        .retain(|result| crate::context_runtime::retrieve::result_is_permitted(result, &blocklist));
     shown.sort_by_key(|result| std::cmp::Reverse(result.timestamp));
     let activity: Vec<(String, String, String)> = shown
         .into_iter()

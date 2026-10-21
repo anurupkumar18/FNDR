@@ -7,22 +7,43 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
-static TOKEN: OnceLock<String> = OnceLock::new();
+/// The token in use. Rotating replaces it, so it is not a `OnceLock`.
+static TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
-fn token_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".fndr")
-        .join("mcp_token")
+pub(super) fn token_path() -> PathBuf {
+    super::fndr_home().join("mcp_token")
 }
 
 /// Load the existing token from disk, or generate and persist a new one.
 pub fn load_or_create() -> String {
-    TOKEN
-        .get_or_init(|| load_or_create_at(&token_path()))
+    let mut cached = TOKEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cached
+        .get_or_insert_with(|| load_or_create_at(&token_path()))
         .clone()
+}
+
+/// Replaces the token with a new random one and returns it. The old token
+/// stops working once the server restarts with this one: the file and the
+/// cache change here, the running server holds its own copy.
+pub fn rotate() -> std::io::Result<String> {
+    let token = rotate_at(&token_path())?;
+    *TOKEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(token.clone());
+    Ok(token)
+}
+
+fn rotate_at(path: &Path) -> std::io::Result<String> {
+    let token = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_owner_only(path, &token)?;
+    Ok(token)
 }
 
 /// The token at `path`, created if missing or empty. The file is readable by
@@ -154,5 +175,17 @@ mod tests {
         file.set_len(0).unwrap();
         file.write_all(b"new-secret-token").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "new-secret-token");
+    }
+
+    #[test]
+    fn rotating_writes_a_new_owner_only_token_over_the_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_token");
+        let first = load_or_create_at(&path);
+        let second = rotate_at(&path).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(&path).unwrap(), second);
+        assert_eq!(load_or_create_at(&path), second);
+        assert_eq!(mode(&path), 0o600);
     }
 }

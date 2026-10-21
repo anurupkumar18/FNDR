@@ -212,32 +212,10 @@ const MEDIA_APPS: &[&str] = &[
     "quicktime player",
 ];
 
-const BROWSERS: &[&str] = &[
-    "safari",
-    "com.apple.safari",
-    "google chrome",
-    "chrome",
-    "com.google.chrome",
-    "arc",
-    "company.thebrowser.browser",
-    "dia",
-    "company.thebrowser.dia",
-    "firefox",
-    "org.mozilla.firefox",
-    "brave browser",
-    "com.brave.browser",
-    "microsoft edge",
-    "opera",
-    "vivaldi",
-    "orion",
-    "zen",
-];
-
 /// Labels that send, delete or spend money. Matched as whole words.
 const NEVER_LABELS: &[&str] = &[
     "send",
     "delete",
-    "remove",
     "trash",
     "erase",
     "buy",
@@ -256,8 +234,12 @@ const NEVER_LABELS: &[&str] = &[
     "transfer",
 ];
 
-/// Labels that submit or commit something on the person's behalf.
+/// Labels that submit or commit something on the person's behalf. "Remove"
+/// is here, not refused: removing a song from a queue or a filter from a
+/// table loses nothing, and the person sees the label before saying yes
+/// (owner decision, 2026-10-14).
 const CONFIRM_LABELS: &[&str] = &[
+    "remove",
     "submit",
     "sign in",
     "log in",
@@ -372,6 +354,15 @@ pub fn is_media_app(app: &str) -> bool {
     in_list(&[app_key(app)], MEDIA_APPS)
 }
 
+/// Whether an app is one Notch Do never reads or operates in any way.
+pub fn is_sensitive_app(app: &str) -> bool {
+    in_list(&[app_key(app)], SENSITIVE_APPS)
+}
+
+fn is_browser(names: &[String]) -> bool {
+    names.iter().any(|name| crate::browsers::is_browser(name))
+}
+
 fn has_word(text: &str, words: &[&str]) -> bool {
     let padded = format!(" {} ", text.replace(|c: char| !c.is_alphanumeric(), " "));
     words
@@ -383,11 +374,48 @@ fn is_secure(description: &str) -> bool {
     description.contains("secure text field") || has_word(description, &["password", "passcode"])
 }
 
+/// A field's role comes first on its line. Looking for the words anywhere
+/// would let text on a page ("text search field for your password") or a
+/// button's label pose as a search box and be clicked or typed into unasked.
+const FIELD_ROLES: &[&str] = &[
+    "search text field",
+    "search field",
+    "text field",
+    "combo box",
+    "text box",
+];
+
 fn is_search_field(description: &str) -> bool {
-    let field = ["text field", "search field", "combo box", "text box"]
-        .iter()
-        .any(|role| description.contains(role));
+    let description = description.trim_start();
+    let field = FIELD_ROLES.iter().any(|role| {
+        description
+            .strip_prefix(role)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    });
     field && has_word(description, SEARCH_WORDS)
+}
+
+/// A browser's address bar: a search field that also goes wherever it is told.
+fn is_address_field(description: &str) -> bool {
+    is_search_field(description) && has_word(description, &["address", "url", "location"])
+}
+
+/// Whether typed text is an address and not words to search for. A link the
+/// person did not ask for waits for a tap (ADR 024), and typing one into the
+/// address bar is the same thing by another route.
+fn looks_like_address(text: &str) -> bool {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return false;
+    }
+    let scheme = text
+        .split_once(':')
+        .is_some_and(|(scheme, _)| !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic()));
+    let host = text
+        .split(['/', '?', '#'])
+        .next()
+        .is_some_and(|host| host.contains('.') && !host.starts_with('.') && !host.ends_with('.'));
+    scheme || host || text.starts_with("localhost")
 }
 
 fn decision(risk: Risk, reason: impl Into<String>) -> Decision {
@@ -404,6 +432,43 @@ fn normalize_key(key: &str) -> String {
         .replace("option", "alt")
         .replace(['-', ' '], "+")
         .replace("enter", "return")
+}
+
+/// A layout names its windows with their apps, so each app is judged here
+/// without FNDR having to remember which window belongs to which app.
+fn arrange_decision(args: &Value, observed: &Observed) -> Decision {
+    let layout = args
+        .get("layout")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if crate::operator::layout::Layout::parse(layout).is_none() {
+        return decision(Risk::Never, "a layout FNDR does not know");
+    }
+    let windows = match args.get("windows").and_then(Value::as_array) {
+        Some(windows) if !windows.is_empty() => windows,
+        _ => return decision(Risk::Never, "names no windows"),
+    };
+    if windows.len() > crate::operator::layout::MAX_WINDOWS {
+        return decision(Risk::Never, "arranges more than six windows");
+    }
+    let apps: Vec<&str> = windows
+        .iter()
+        .filter_map(|window| window.get("app").and_then(Value::as_str))
+        .filter(|app| !app.trim().is_empty())
+        .collect();
+    if apps
+        .iter()
+        .any(|app| in_list(&observed.names_for(app), SENSITIVE_APPS))
+    {
+        return decision(
+            Risk::Never,
+            "password managers and security settings are off limits",
+        );
+    }
+    if apps.len() < windows.len() {
+        return decision(Risk::Confirm, "a window's app is not named");
+    }
+    decision(Risk::Runs, "arranges windows")
 }
 
 /// The risk of one action. `tool` and `args` come from the structured call;
@@ -448,6 +513,14 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
         ),
         "get_app_state" | "select_text" => decision(Risk::Runs, "reads the screen"),
         "scroll" => decision(Risk::Runs, "scrolls"),
+        "list_windows" => decision(Risk::Runs, "reads which windows are open"),
+        "move_window" | "resize_window" if app.is_empty() => {
+            decision(Risk::Confirm, "the window's app is not named")
+        }
+        // A window FNDR moved can be put back with restore_previous, and
+        // moving one changes nothing inside it.
+        "move_window" | "resize_window" => decision(Risk::Runs, "moves a window"),
+        "arrange_windows" => arrange_decision(args, observed),
         "click" | "perform_secondary_action" => {
             let target = observed.element(app, text("element_index"));
             match target.as_deref() {
@@ -465,7 +538,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                     decision(Risk::Confirm, "the click target has no label FNDR can read")
                 }
                 Some(label)
-                    if in_list(&names, BROWSERS)
+                    if is_browser(&names)
                         && (is_link_or_tab(label)
                             || is_search_field(label)
                             || has_word(label, PLAYBACK_LABELS)) =>
@@ -475,7 +548,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                         "follows a link, a tab or a search box in a browser",
                     )
                 }
-                Some(_) if in_list(&names, BROWSERS) => {
+                Some(_) if is_browser(&names) => {
                     decision(Risk::Confirm, "clicks a control on a web page")
                 }
                 Some(_) => decision(Risk::Confirm, "clicks outside media apps and browsers"),
@@ -494,6 +567,12 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
             match target.as_deref() {
                 Some(field) if is_secure(field) => {
                     decision(Risk::Never, "credentials are never entered")
+                }
+                Some(field)
+                    if is_address_field(field)
+                        && looks_like_address(text(if tool == "set_value" { "value" } else { "text" })) =>
+                {
+                    decision(Risk::Confirm, "goes to an address typed into the address bar")
                 }
                 Some(field) if is_search_field(field) => {
                     decision(Risk::Runs, "types into a search field")
@@ -528,15 +607,17 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 }
             } else if media {
                 decision(Risk::Runs, "a playback key")
-            } else if in_list(&names, BROWSERS) && BROWSER_RUN_KEYS.contains(&key.as_str()) {
+            } else if is_browser(&names) && BROWSER_RUN_KEYS.contains(&key.as_str()) {
                 decision(Risk::Runs, "a navigation key")
-            } else if in_list(&names, BROWSERS) {
+            } else if is_browser(&names) {
                 decision(Risk::Confirm, "a key that can close, save or change a page")
             } else {
                 decision(Risk::Confirm, "a key press outside media apps and browsers")
             }
         }
         "drag" => decision(Risk::Confirm, "drags"),
+        // A step FNDR carries out itself; the person sees the exact text first.
+        "paste" => decision(Risk::Confirm, "puts text into an app"),
         _ => decision(Risk::Never, "unknown tool"),
     }
 }
@@ -656,6 +737,62 @@ Window: \"Shop\", App: Google Chrome.\n\
         ] {
             assert_eq!(key(name), Risk::Confirm, "{name}");
         }
+    }
+
+    #[test]
+    fn words_on_a_page_cannot_pose_as_a_search_box() {
+        // FNDR's own executor numbers page text and labelled groups too, and
+        // any button can be labelled anything.
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Google Chrome",
+            "App=com.google.Chrome (pid 9)\n0 standard window Blog\n\
+             \t1 text search field for coupons\n\
+             \t2 button Find text field\n\
+             \t3 group search text field\n\
+             \t4 search field Search this site\n\
+             \t5 text field Address and search bar\n",
+        );
+        let click = |index: &str| {
+            risk("click", json!({"app": "Google Chrome", "element_index": index}), &o)
+        };
+        for posing in ["1", "2", "3"] {
+            assert_eq!(click(posing), Risk::Confirm, "element {posing}");
+        }
+        assert_eq!(click("4"), Risk::Runs);
+        assert_eq!(click("5"), Risk::Runs);
+
+        // Typing after pressing one of them is not typing into a search box.
+        o.note_target("Google Chrome", "1");
+        let typing = risk("type_text", json!({"app": "Google Chrome", "text": "x"}), &o);
+        assert_eq!(typing, Risk::Confirm);
+    }
+
+    #[test]
+    fn an_address_typed_into_the_address_bar_waits_for_a_tap() {
+        // Live run, 2026-10-08: with no page to read, the model used Chrome's
+        // address bar. Words there are a search; an address is a link.
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Google Chrome",
+            "App=com.google.Chrome (pid 9)\n0 standard window New Tab\n\t1 text field (settable, string) Address and search bar\n\t2 search text field Search this site\n",
+        );
+        o.note_target("Google Chrome", "1");
+        let typing = |o: &Observed, text: &str| {
+            risk("type_text", json!({"app": "Google Chrome", "text": text}), o)
+        };
+        assert_eq!(typing(&o, "running shoes"), Risk::Runs);
+        for address in ["evil.example/steal?d=1", "https://evil.example", "javascript:alert(1)", "localhost:3000", "192.168.1.1"] {
+            assert_eq!(typing(&o, address), Risk::Confirm, "{address}");
+        }
+        let setting = |o: &Observed, value: &str| {
+            risk("set_value", json!({"app": "Google Chrome", "element_index": "1", "value": value}), o)
+        };
+        assert_eq!(setting(&o, "evil.example"), Risk::Confirm);
+        assert_eq!(setting(&o, "running shoes"), Risk::Runs);
+        // A page's own search box takes whatever is typed: it cannot leave the site.
+        o.note_target("Google Chrome", "2");
+        assert_eq!(typing(&o, "evil.example"), Risk::Runs);
     }
 
     #[test]
@@ -971,6 +1108,101 @@ Window: \"Shop\", App: Google Chrome.\n\
             ),
             Risk::Confirm
         );
+    }
+
+    #[test]
+    fn listing_and_arranging_windows_run_because_they_can_be_put_back() {
+        let o = observed();
+        assert_eq!(risk("list_windows", json!({}), &o), Risk::Runs);
+        assert_eq!(
+            risk("list_windows", json!({"app": "TextEdit"}), &o),
+            Risk::Runs
+        );
+        assert_eq!(
+            risk(
+                "move_window",
+                json!({"app": "TextEdit", "window": 3, "x": 0, "y": 0}),
+                &o
+            ),
+            Risk::Runs
+        );
+        assert_eq!(
+            risk(
+                "resize_window",
+                json!({"app": "Preview", "window": "4", "width": 600, "height": 400}),
+                &o
+            ),
+            Risk::Runs
+        );
+        for layout in [
+            "left_right_split",
+            "top_bottom_split",
+            "thirds",
+            "grid2x2",
+            "maximize",
+            "restore_previous",
+        ] {
+            assert_eq!(
+                risk(
+                    "arrange_windows",
+                    json!({"layout": layout, "windows": [{"id": 1, "app": "TextEdit"}, {"id": 2, "app": "Preview"}]}),
+                    &o
+                ),
+                Risk::Runs,
+                "{layout}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_window_of_an_off_limits_app_or_more_than_six_is_never_arranged() {
+        let o = observed();
+        let arrange = |windows: Value| {
+            risk(
+                "arrange_windows",
+                json!({"layout": "left_right_split", "windows": windows}),
+                &o,
+            )
+        };
+        assert_eq!(
+            arrange(json!([{"id": 1, "app": "TextEdit"}, {"id": 2, "app": "1Password 7"}])),
+            Risk::Never
+        );
+        assert_eq!(
+            arrange(json!([{"id": 1, "app": "com.apple.Terminal"}])),
+            Risk::Never
+        );
+        let seven: Vec<Value> = (1..=7)
+            .map(|id| json!({"id": id, "app": "TextEdit"}))
+            .collect();
+        assert_eq!(arrange(Value::Array(seven)), Risk::Never);
+        assert_eq!(arrange(json!([])), Risk::Never, "no windows");
+        assert_eq!(arrange(json!("all")), Risk::Never, "not a list");
+        assert_eq!(arrange(json!([{"id": 1}])), Risk::Confirm, "no app named");
+        assert_eq!(
+            risk(
+                "arrange_windows",
+                json!({"layout": "cascade", "windows": [{"id": 1, "app": "TextEdit"}]}),
+                &o
+            ),
+            Risk::Never,
+            "a layout FNDR does not know"
+        );
+        for tool in ["list_windows", "move_window", "resize_window"] {
+            assert_eq!(
+                risk(tool, json!({"app": "Keychain Access", "window": 1}), &o),
+                Risk::Never,
+                "{tool}"
+            );
+        }
+        assert_eq!(
+            risk("move_window", json!({"window": 1, "x": 0, "y": 0}), &o),
+            Risk::Confirm,
+            "no app named"
+        );
+        assert!(is_sensitive_app("System Settings"));
+        assert!(is_sensitive_app("com.apple.keychainaccess"));
+        assert!(!is_sensitive_app("TextEdit"));
     }
 
     #[test]

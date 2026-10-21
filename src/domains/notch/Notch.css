@@ -589,3 +589,140 @@ body,
 .notch-operator-controls:empty {
     display: none;
 }
+
+/* Turn-taking states (docs/product/voice-ux.md, "Visual language in the notch"). */
+
+.notch-operator-caption {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #ffffff;
+}
+
+/* The speaker glyph stands in for the pulse when motion is reduced. */
+.notch-operator-speaker {
+    display: none;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.notch-operator-chip {
+    justify-self: start;
+    margin: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.notch-operator-chip.is-cue {
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    animation: notch-operator-cue 600ms ease-out 1;
+}
+
+@keyframes notch-operator-cue {
+    from {
+        transform: scale(0.96);
+        background: rgba(255, 255, 255, 0.28);
+    }
+}
+
+.notch-operator-provider {
+    margin: 0;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* listening: the status line glows at rest. */
+.notch-operator.is-turn-listening .notch-operator-status,
+.notch-operator.is-turn-hearing .notch-operator-status {
+    color: #ffffff;
+}
+
+/* working: the current step shimmers left to right on a 1.6 s loop. */
+.notch-operator.is-turn-working .notch-operator-step.is-current .notch-operator-step-label {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.55) 0%, #ffffff 50%, rgba(255, 255, 255, 0.55) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: notch-operator-shimmer 1.6s linear infinite;
+}
+
+@keyframes notch-operator-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: -100% 0;
+    }
+}
+
+/* speaking: the orb and caption pulse while FNDR talks. */
+.notch-operator.is-speaking .notch-operator-caption {
+    animation: notch-operator-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes notch-operator-pulse {
+    50% {
+        opacity: 0.72;
+    }
+}
+
+/* awaiting_approval: a 2 px amber edge, 3:1 or better on the black panel. */
+.notch-operator-approval {
+    box-shadow:
+        inset 2px 0 0 #ffb340,
+        inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+/* interrupted: steps dim except the one that was running. */
+.notch-operator.is-turn-interrupted .notch-operator-step:not(.is-current) {
+    opacity: 0.55;
+    transition: opacity 200ms ease-out;
+}
+
+/* error: a red-tinted status, never flashing. */
+.notch-operator.is-turn-error .notch-operator-status {
+    color: #ff8a80;
+}
+
+/* Hit targets stay at least 24 px. */
+.notch-operator-btn {
+    min-width: 24px;
+}
+
+.notch-operator-btn:focus-visible {
+    outline: 2px solid #0a84ff;
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .notch-operator.is-turn-working .notch-operator-step.is-current .notch-operator-step-label {
+        animation: none;
+        background: none;
+        color: #ffffff;
+        font-weight: 700;
+    }
+
+    .notch-operator.is-turn-working .notch-operator-step.is-current .notch-operator-dot {
+        background: #ffffff;
+    }
+
+    .notch-operator.is-speaking .notch-operator-caption,
+    .notch-operator-chip.is-cue {
+        animation: none;
+    }
+
+    .notch-operator.is-speaking .notch-operator-speaker {
+        display: inline;
+    }
+
+    .notch-operator.is-turn-interrupted .notch-operator-step:not(.is-current) {
+        transition: none;
+    }
+}

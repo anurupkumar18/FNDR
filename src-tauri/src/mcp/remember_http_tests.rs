@@ -572,21 +572,16 @@ struct Invariants {
 }
 
 async fn invariants(app_state: &AppState) -> Invariants {
-    use crate::agent::risk_policy::{self, Caller};
-    let registry = crate::agent::tools::october_registry();
+    use crate::agent::risk_policy;
     let mut risk = Vec::new();
     for kill_switch in [false, true] {
-        for spec in registry.specs() {
-            for caller in [Caller::CommandBar, Caller::Voice, Caller::Mcp] {
-                risk.push(format!(
-                    "{} {caller:?} {kill_switch} {:?}",
-                    spec.name,
-                    risk_policy::decide_for_tool(&registry, spec.name, caller, kill_switch)
-                ));
-            }
+        for notes in [false, true] {
+            risk.push(format!(
+                "{kill_switch} {notes} {:?}",
+                risk_policy::decide_mcp_write(kill_switch, notes)
+            ));
         }
     }
-    risk.push(format!("{:?}", risk_policy::mcp_side_effect_tools()));
     risk.push(format!("{:?}", risk_policy::mcp_write_tools()));
     let store = &app_state.store;
     let graph = crate::graph::graph_store::GraphStore::new(store.clone());

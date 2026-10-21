@@ -310,9 +310,13 @@ describe("MemoryJourneyInspector", () => {
                     duration_ms: 12,
                     result_ids: queryKind === "unsupported" ? [] : [memoryId],
                     citation_ids: queryKind === "grounded" ? [memoryId] : [],
-                    refusal: queryKind === "unsupported",
+                    refusal: queryKind === "unsupported" || (activeFixtureId === "case-two" && queryKind === "grounded"),
                 };
-                return Promise.resolve({ manifest: { ...manifest, query_runs: [queryRun] }, cards: [], answer: "Supported answer" });
+                return Promise.resolve({
+                    manifest: { ...manifest, query_runs: [queryRun] },
+                    cards: [],
+                    answer: queryRun.refusal ? "I couldn't find that in your memories." : "Supported answer",
+                });
             }
             return Promise.resolve(status);
         });
@@ -322,8 +326,10 @@ describe("MemoryJourneyInspector", () => {
 
         await screen.findByText(/Gold set 2\/2 fixtures finished/);
         expect(screen.getByText("case-one: 4/4 checks passed")).toBeInTheDocument();
-        expect(screen.getByText("case-two: 4/4 checks passed")).toBeInTheDocument();
-        expect(screen.getByText(/8 checks passed; 0 checks need review; 0 checks not run; 0 fixture errors/)).toBeInTheDocument();
+        expect(screen.getByText("case-two: 3/4 checks passed")).toBeInTheDocument();
+        expect(screen.getByText(/7 checks passed; 1 checks need review; 0 checks not run; 0 fixture errors/)).toBeInTheDocument();
+        expect(screen.getAllByText("grounded: Review · target cited · refused")).toHaveLength(1);
+        expect(screen.getAllByText("paraphrase: Pass · target rank 1")).toHaveLength(2);
         const fixtureStages = calls
             .filter((call) => ["replay_quality_lab_fixture", "create_reconstructed_memory_journey", "run_memory_journey_query"].includes(call.command))
             .map((call) => call.command === "run_memory_journey_query" ? `query:${call.args?.query}` : call.command);

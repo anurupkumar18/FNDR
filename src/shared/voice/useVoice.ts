@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriEvent } from "@/shared/hooks/useTauriEvent";
 
 export type VoiceSurface = "home_search" | "screen_guide" | "notch_ask" | "notch_do";
-export type VoiceMode = "toggle" | "push_to_talk";
+/** `stop_words`: Notch Do while it works. The helper hears only "stop" or
+ *  "cancel" and sends no text (ADR 020 amendment, 2026-10-09). */
+export type VoiceMode = "toggle" | "push_to_talk" | "stop_words";
 export type VoicePermission = "microphone" | "speech_recognition";
 export type VoiceSettingsPane = "microphone" | "speech-recognition";
 export type VoiceErrorCode =
@@ -28,6 +30,8 @@ export type VoiceState =
     | { kind: "listening"; level: number }
     | { kind: "partial"; text: string }
     | { kind: "final"; text: string }
+    | { kind: "stop_word" }
+    | { kind: "speech_ignored" }
     | { kind: "error"; code: VoiceErrorCode; message: string }
     | {
           kind: "unavailable";
@@ -53,6 +57,10 @@ export interface UseVoiceOptions {
     mode: VoiceMode;
     onPartial?: (text: string) => void;
     onFinal?: (text: string) => void;
+    /** Stop-only sessions: the spotter heard the stop word. */
+    onStopWord?: () => void;
+    /** Stop-only sessions: speech that was not the stop word was dropped. */
+    onIgnoredSpeech?: () => void;
 }
 
 export interface VoiceController {
@@ -74,7 +82,7 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
-export function useVoice({ surface, mode, onPartial, onFinal }: UseVoiceOptions): VoiceController {
+export function useVoice({ surface, mode, onPartial, onFinal, onStopWord, onIgnoredSpeech }: UseVoiceOptions): VoiceController {
     const [state, setState] = useState<VoiceState>(idleState);
     const [level, setLevel] = useState(0);
     const [sessionId, setSessionId] = useState<string | null>(null);
@@ -82,11 +90,24 @@ export function useVoice({ surface, mode, onPartial, onFinal }: UseVoiceOptions)
     const startingRef = useRef(false);
     const partialRef = useRef(onPartial);
     const finalRef = useRef(onFinal);
+    const stopWordRef = useRef(onStopWord);
+    const ignoredRef = useRef(onIgnoredSpeech);
     partialRef.current = onPartial;
     finalRef.current = onFinal;
+    stopWordRef.current = onStopWord;
+    ignoredRef.current = onIgnoredSpeech;
 
     useTauriEvent<VoiceStateEvent>("voice://state", (event) => {
         if (event.version !== 1 || event.sessionId !== sessionRef.current) return;
+        const kind = event.state.kind;
+        if (kind === "stop_word" || kind === "speech_ignored") {
+            if (mode !== "stop_words") return;
+            if (kind === "stop_word") stopWordRef.current?.();
+            else ignoredRef.current?.();
+            return;
+        }
+        // A stop-only session never passes text on, whatever arrives.
+        if (mode === "stop_words" && (kind === "partial" || kind === "final")) return;
 
         setState((current) => {
             if (event.state.kind !== "idle") return event.state;

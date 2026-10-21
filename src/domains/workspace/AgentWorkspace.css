@@ -204,7 +204,7 @@
 }
 
 .aw-status-dot.is-ready {
-    background: #30d158;
+    background: var(--success);
 }
 
 .aw-thread {
@@ -262,7 +262,7 @@
     padding: 9px 14px;
     border-radius: 18px;
     background: var(--accent);
-    color: #ffffff;
+    color: var(--on-accent);
 }
 
 .aw-assistant .aw-bubble {
@@ -387,7 +387,7 @@
     border: 0;
     border-radius: 50%;
     background: var(--accent);
-    color: #ffffff;
+    color: var(--on-accent);
     cursor: pointer;
 }
 
@@ -591,7 +591,7 @@
     border: 0;
     border-radius: 999px;
     background: var(--accent);
-    color: #ffffff;
+    color: var(--on-accent);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;

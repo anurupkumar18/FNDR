@@ -748,16 +748,28 @@ pub fn assert_memory_contract(record: &MemoryRecord) -> Result<(), String> {
         }
     }
 
-    // Invariant 4: every non-empty structured field is supported by the
-    // evidence or cleared. High-confidence extractions are allowed to keep
-    // an unsupported value (mirrors the live scrub gate in capture::mod).
-    if record.extraction_confidence < 0.8 {
-        let evidence_norm = crate::capture::normalize_evidence_text(&format!(
-            "{} {} {}",
-            record.app_name, record.window_title, record.clean_text
+    // Invariant 4: a project groups work across surfaces, so confidence alone
+    // never substitutes for source support. Other high-confidence fields keep
+    // the existing tolerance for incomplete captured text.
+    let evidence_norm = crate::capture::normalize_evidence_text(&format!(
+        "{} {} {}",
+        record.app_name, record.window_title, record.clean_text
+    ));
+    if !record.project.trim().is_empty()
+        && !crate::capture::project_supported_by_evidence(
+            &record.project,
+            &record.app_name,
+            &record.window_title,
+            &record.clean_text,
+        )
+    {
+        return Err(format!(
+            "invariant 4 (grounding): project {:?} is not supported by evidence and was not cleared",
+            record.project
         ));
-        let scalar_fields: [(&str, &str); 6] = [
-            ("project", &record.project),
+    }
+    if record.extraction_confidence < 0.8 {
+        let scalar_fields: [(&str, &str); 5] = [
             ("topic", &record.topic),
             ("workflow", &record.workflow),
             ("user_intent", &record.user_intent),
@@ -996,6 +1008,18 @@ mod tests {
         record.extraction_confidence = 0.95;
         record.topic = "completely unrelated fabricated topic".to_string();
         assert_eq!(assert_memory_contract(&record), Ok(()));
+    }
+
+    #[test]
+    fn contract_rejects_unsupported_project_even_at_high_confidence() {
+        let mut record = valid_memory_record();
+        record.extraction_confidence = 0.95;
+        record.project = "Smart Reminders launch".to_string();
+        let err = assert_memory_contract(&record).unwrap_err();
+        assert!(
+            err.contains("invariant 4") && err.contains("project"),
+            "{err}"
+        );
     }
 
     #[test]
