@@ -49,6 +49,38 @@ function formatSnapshotTime(timestampMs: number): string {
     });
 }
 
+const REOPEN_OUTCOME_METRICS: { key: string; label: string }[] = [
+    { key: "reopen.outcome.opened", label: "Opened" },
+    { key: "reopen.outcome.opened_moved", label: "Opened (moved)" },
+    { key: "reopen.outcome.missing", label: "Missing" },
+    { key: "reopen.outcome.drive_not_connected", label: "Drive not connected" },
+    { key: "reopen.outcome.app_missing", label: "App missing" },
+    { key: "reopen.outcome.app_only", label: "App only" },
+    { key: "reopen.outcome.blocked", label: "Blocked" },
+    { key: "reopen.outcome.no_target", label: "No target" },
+];
+
+const REOPEN_KIND_METRICS: { key: string; label: string }[] = [
+    { key: "reopen.kind.browser_url", label: "Browser URL" },
+    { key: "reopen.kind.file_path", label: "File path" },
+    { key: "reopen.kind.app_bundle", label: "App bundle" },
+    { key: "reopen.kind.app_deep_link", label: "App deep link" },
+    { key: "reopen.kind.unknown", label: "Unknown" },
+];
+
+function isReopenSessionCounterKey(key: string): boolean {
+    return key.startsWith("reopen.outcome.") || key.startsWith("reopen.kind.");
+}
+
+function reopenAttemptShare(count: number, total: number): string {
+    if (total <= 0) return "0%";
+    return `${((count / total) * 100).toFixed(1)}%`;
+}
+
+function sumReopenOutcomeAttempts(counters: Record<string, number>): number {
+    return REOPEN_OUTCOME_METRICS.reduce((sum, { key }) => sum + (counters[key] ?? 0), 0);
+}
+
 interface EngineMetricsCardProps {
     /** When false, polling is disabled. */
     enabled: boolean;
@@ -442,11 +474,72 @@ export function EngineMetricsCard({ enabled, title }: EngineMetricsCardProps) {
                             </tbody>
                         </table>
                     </div>
-                    {Object.keys(runtimeMetrics.counters).length > 0 && (
+                    <h4>Reopen this session</h4>
+                    <p className="pipeline-muted pipeline-section-help">
+                        Process-lifetime reopen attempts since launch; counts reset when FNDR quits.
+                    </p>
+                    {(() => {
+                        const counters = runtimeMetrics.counters;
+                        const outcomeAttempts = sumReopenOutcomeAttempts(counters);
+                        const kindAttempts = REOPEN_KIND_METRICS.reduce(
+                            (sum, { key }) => sum + (counters[key] ?? 0),
+                            0,
+                        );
+                        return (
+                            <div className="pipeline-metrics-table-wrap">
+                                <table className="pipeline-metrics-table">
+                                    <caption className="pipeline-sr-only">Reopen outcomes this session</caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Outcome</th>
+                                            <th scope="col">Count</th>
+                                            <th scope="col">Share of attempts</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {REOPEN_OUTCOME_METRICS.map(({ key, label }) => {
+                                            const count = counters[key] ?? 0;
+                                            return (
+                                                <tr key={key}>
+                                                    <td>{label}</td>
+                                                    <td>{count}</td>
+                                                    <td>{reopenAttemptShare(count, outcomeAttempts)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                                <table className="pipeline-metrics-table">
+                                    <caption className="pipeline-sr-only">Stored reopen kinds attempted this session</caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Stored kind</th>
+                                            <th scope="col">Count</th>
+                                            <th scope="col">Share of attempts</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {REOPEN_KIND_METRICS.map(({ key, label }) => {
+                                            const count = counters[key] ?? 0;
+                                            return (
+                                                <tr key={key}>
+                                                    <td>{label}</td>
+                                                    <td>{count}</td>
+                                                    <td>{reopenAttemptShare(count, kindAttempts)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        );
+                    })()}
+                    {Object.keys(runtimeMetrics.counters).some((key) => !isReopenSessionCounterKey(key)) && (
                         <>
                             <h4>Timeouts and events</h4>
                             <ul className="pipeline-counter-list">
                                 {Object.keys(runtimeMetrics.counters)
+                                    .filter((key) => !isReopenSessionCounterKey(key))
                                     .sort()
                                     .map((key) => (
                                         <li key={key}>

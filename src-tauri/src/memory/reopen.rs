@@ -32,6 +32,17 @@ impl ReopenKind {
             _ => Self::Unknown,
         }
     }
+
+    /// Process-lifetime counter name for Engine diagnostics (no PII).
+    pub fn counter_name(&self) -> &'static str {
+        match self {
+            Self::BrowserUrl => "reopen.kind.browser_url",
+            Self::FilePath => "reopen.kind.file_path",
+            Self::AppBundle => "reopen.kind.app_bundle",
+            Self::AppDeepLink => "reopen.kind.app_deep_link",
+            Self::Unknown => "reopen.kind.unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -687,6 +698,28 @@ pub enum ReopenOutcome {
     NoTarget,
     /// No source was opened because the id, its eligibility, or its store was unavailable.
     Unavailable,
+}
+
+impl ReopenOutcome {
+    /// Process-lifetime counter name for Engine diagnostics (no PII).
+    pub fn counter_name(&self) -> &'static str {
+        match self {
+            Self::Opened => "reopen.outcome.opened",
+            Self::OpenedMoved { .. } => "reopen.outcome.opened_moved",
+            Self::Missing { .. } => "reopen.outcome.missing",
+            Self::DriveNotConnected { .. } => "reopen.outcome.drive_not_connected",
+            Self::AppMissing { .. } => "reopen.outcome.app_missing",
+            Self::AppOnly { .. } => "reopen.outcome.app_only",
+            Self::Blocked { .. } => "reopen.outcome.blocked",
+            Self::NoTarget => "reopen.outcome.no_target",
+        }
+    }
+}
+
+/// Bump session counters for one completed reopen attempt (RE-13).
+pub fn record_reopen_session_metrics(outcome: &ReopenOutcome, kind: &ReopenKind) {
+    crate::telemetry::runtime_metrics::bump(outcome.counter_name());
+    crate::telemetry::runtime_metrics::bump(kind.counter_name());
 }
 
 /// External-drive root (`/Volumes/<name>`) when `path` lives on one.
@@ -1996,6 +2029,86 @@ mod tests {
             upgraded_reopen_target(&document).is_none(),
             "the stored document path wins the tie against files_touched"
         );
+    }
+
+    #[test]
+    fn reopen_outcome_counter_names_are_static_and_payload_free() {
+        let cases = [
+            (ReopenOutcome::Opened, "reopen.outcome.opened"),
+            (
+                ReopenOutcome::OpenedMoved {
+                    new_path: "/secret/moved.pdf".into(),
+                },
+                "reopen.outcome.opened_moved",
+            ),
+            (
+                ReopenOutcome::Missing {
+                    path: "/secret/missing.pdf".into(),
+                },
+                "reopen.outcome.missing",
+            ),
+            (
+                ReopenOutcome::DriveNotConnected {
+                    volume: "Disk".into(),
+                    path: "/Volumes/Disk/a.pdf".into(),
+                },
+                "reopen.outcome.drive_not_connected",
+            ),
+            (
+                ReopenOutcome::AppMissing {
+                    bundle_id: "com.example.app".into(),
+                    app_name: Some("Example".into()),
+                },
+                "reopen.outcome.app_missing",
+            ),
+            (
+                ReopenOutcome::AppOnly {
+                    app_name: Some("Preview".into()),
+                },
+                "reopen.outcome.app_only",
+            ),
+            (
+                ReopenOutcome::Blocked {
+                    target: "javascript:alert(1)".into(),
+                },
+                "reopen.outcome.blocked",
+            ),
+            (ReopenOutcome::NoTarget, "reopen.outcome.no_target"),
+        ];
+        for (outcome, expected) in cases {
+            assert_eq!(outcome.counter_name(), expected);
+            assert!(!expected.contains('/'));
+        }
+    }
+
+    #[test]
+    fn reopen_kind_counter_names_match_stored_labels() {
+        let cases = [
+            (ReopenKind::BrowserUrl, "reopen.kind.browser_url"),
+            (ReopenKind::FilePath, "reopen.kind.file_path"),
+            (ReopenKind::AppBundle, "reopen.kind.app_bundle"),
+            (ReopenKind::AppDeepLink, "reopen.kind.app_deep_link"),
+            (ReopenKind::Unknown, "reopen.kind.unknown"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.counter_name(), expected);
+            assert_eq!(kind.as_str(), expected.strip_prefix("reopen.kind.").unwrap());
+        }
+    }
+
+    #[test]
+    fn record_reopen_session_metrics_bumps_outcome_and_kind() {
+        use crate::telemetry::runtime_metrics::counter;
+
+        const OUTCOME: &str = "reopen.outcome.opened";
+        const KIND: &str = "reopen.kind.file_path";
+        let before_outcome = counter(OUTCOME);
+        let before_kind = counter(KIND);
+
+        record_reopen_session_metrics(&ReopenOutcome::Opened, &ReopenKind::FilePath);
+
+        assert_eq!(counter(OUTCOME), before_outcome + 1);
+        assert_eq!(counter(KIND), before_kind + 1);
     }
 
     #[test]
