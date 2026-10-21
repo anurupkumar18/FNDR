@@ -8,6 +8,7 @@ import { RoutineOfferCard } from "./RoutineOfferCard";
 import { SaveAsSet } from "./SaveAsSet";
 import { ThreadChanges } from "./ThreadChanges";
 import { WorkSetOpener, type WorkSetLoad } from "./WorkSetOpener";
+import { OpenSourceButton } from "@/shared/components/OpenSourceButton";
 import "./ResumeWork.css";
 
 interface ResumeWorkProps {
@@ -106,7 +107,10 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                                         {thread.key && <ThreadChanges threadKey={thread.key} title={title} />}
                                         <WorkSetOpener name={title} load={load} continueMemoryId={latestSource} arrange={arrange}>
                                             {latestSource && (
-                                                <button type="button" aria-label={`View latest source for ${thread.title}`} onClick={() => onOpenMemory(latestSource)}>View latest source</button>
+                                                <>
+                                                    <button type="button" aria-label={`View latest source for ${thread.title}`} onClick={() => onOpenMemory(latestSource)}>View latest source</button>
+                                                    <OpenSourceButton memoryId={latestSource} />
+                                                </>
                                             )}
                                             <SaveAsSet name={title} load={load} onSaved={() => setSetsVersion((value) => value + 1)} />
                                         </WorkSetOpener>
@@ -115,6 +119,7 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                                                 <span>Suggested next step</span>
                                                 <p>{suggestion.title}</p>
                                                 <button type="button" aria-label={`View source for suggested step: ${suggestion.title}`} onClick={() => onOpenMemory(suggestion.source_memory_id)}>View source</button>
+                                                <OpenSourceButton memoryId={suggestion.source_memory_id} />
                                             </div>
                                         )}
                                     </li>

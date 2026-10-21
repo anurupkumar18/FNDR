@@ -128,8 +128,8 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-/// How to get back to the memory, as `fndr.open_target` would hand it over.
-/// `target` is the single best choice; the parts stay available.
+/// Stored reopen fields for search provenance. Opening uses `fndr.open_target`
+/// (after approval) or `reopen_memory`, which share the same typed outcome.
 pub(super) fn reopen(result: &SearchResult) -> Value {
     let target = non_empty(&result.reopen_url)
         .or_else(|| non_empty(&result.reopen_app_deep_link))

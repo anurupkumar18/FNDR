@@ -58,6 +58,7 @@ const REOPEN_OUTCOME_METRICS: { key: string; label: string }[] = [
     { key: "reopen.outcome.app_only", label: "App only" },
     { key: "reopen.outcome.blocked", label: "Blocked" },
     { key: "reopen.outcome.no_target", label: "No target" },
+    { key: "reopen.outcome.unavailable", label: "Unavailable" },
 ];
 
 const REOPEN_KIND_METRICS: { key: string; label: string }[] = [

@@ -154,6 +154,20 @@ describe("Timeline", () => {
         expect(screen.queryByRole("button", { name: "Delete this memory" })).not.toBeInTheDocument();
     });
 
+    it("shows Open source when the card has a reopen target", () => {
+        render(
+            <Timeline
+                results={[{ ...sample, reopen_target: "https://example.com/doc" }]}
+                isLoading={false}
+                query="test"
+                selectedResultId={null}
+                onSelectResult={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByRole("button", { name: "Open source" })).toBeInTheDocument();
+    });
+
     it("uses a real, named button to select a result instead of nesting controls in a button", () => {
         const onSelectResult = vi.fn();
         render(

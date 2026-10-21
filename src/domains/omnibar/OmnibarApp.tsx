@@ -23,6 +23,7 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import { OpenSourceButton } from "@/shared/components/OpenSourceButton";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const CLIP_DEBOUNCE_MS = 150;
@@ -425,6 +426,21 @@ export function OmnibarApp() {
         [reset]
     );
 
+    const handleQuickFindReopenOutcome = useCallback(
+        (message: string, outcomeKind: string) => {
+            if (outcomeKind === "opened" || outcomeKind === "opened_moved") {
+                void dismissOmnibar()
+                    .then(() => reset())
+                    .catch(() => {
+                        setFeedback({ kind: "status", message });
+                    });
+                return;
+            }
+            setFeedback({ kind: "status", message });
+        },
+        [reset],
+    );
+
     const copyClip = useCallback(
         (clip: ClipboardEntry) => {
             const seq = ++actionSeq.current;
@@ -742,28 +758,36 @@ export function OmnibarApp() {
                         </button>
                     )}
                     {results.map((card, index) => (
-                        <button
+                        <div
                             key={card.id}
                             id={`omnibar-memory-result-${index + actionRows}`}
-                            type="button"
                             role="option"
                             aria-selected={index + actionRows === selectedIndex}
                             data-selected={index + actionRows === selectedIndex}
-                            className="omnibar-result"
+                            className="omnibar-result-row"
                             onMouseEnter={() => setSelectedIndex(index + actionRows)}
-                            onClick={() => openMemory(card.id)}
                         >
-                            <span className="omnibar-result-title">
-                                {card.title || card.window_title}
-                            </span>
-                            <span className="omnibar-result-snippet">
-                                {card.display_summary || card.summary}
-                            </span>
-                            <span className="omnibar-result-meta">
-                                {card.app_name} ·{" "}
-                                {formatTimestamp(card.timestamp)}
-                            </span>
-                        </button>
+                            <button
+                                type="button"
+                                className="omnibar-result omnibar-result-main"
+                                onClick={() => openMemory(card.id)}
+                            >
+                                <span className="omnibar-result-title">
+                                    {card.title || card.window_title}
+                                </span>
+                                <span className="omnibar-result-snippet">
+                                    {card.display_summary || card.summary}
+                                </span>
+                                <span className="omnibar-result-meta">
+                                    {card.app_name} ·{" "}
+                                    {formatTimestamp(card.timestamp)}
+                                </span>
+                            </button>
+                            <OpenSourceButton
+                                memoryId={card.id}
+                                onOutcome={handleQuickFindReopenOutcome}
+                            />
+                        </div>
                     ))}
                     {!results.length && query.trim() && !searching && !feedback && (
                         <div className="omnibar-empty">No memory matches this search.</div>

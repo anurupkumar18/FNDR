@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { AskPanel } from "./AskPanel";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 
-vi.mock("@/shared/ipc/tauri", () => ({ fndrAnswer: vi.fn() }));
+vi.mock("@/shared/ipc/tauri", () => ({ fndrAnswer: vi.fn(), reopenMemory: vi.fn() }));
 
 const source: MemoryCard = {
     id: "demo-wed-chunking-paper",
@@ -64,6 +64,19 @@ describe("AskPanel", () => {
         expect(screen.getByRole("heading", { name: "Search & Ask FNDR" })).toBeInTheDocument();
         expect(screen.getByLabelText("Search or ask FNDR")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Search & Ask" })).toBeInTheDocument();
+    });
+
+    it("shows Open source beside a cited memory that has a reopen target", async () => {
+        vi.mocked(fndrAnswer).mockResolvedValue(
+            answer({ cards: [{ ...source, reopen_target: "https://example.com/paper" }] }),
+        );
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), {
+            target: { value: "chunk size" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
+        await screen.findByText(/512-token parents/);
+        expect(screen.getByRole("button", { name: "Open source" })).toBeInTheDocument();
     });
 
     it("shows a grounded answer with clickable cited sources", async () => {

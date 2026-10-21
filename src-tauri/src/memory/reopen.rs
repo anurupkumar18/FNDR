@@ -712,6 +712,7 @@ impl ReopenOutcome {
             Self::AppOnly { .. } => "reopen.outcome.app_only",
             Self::Blocked { .. } => "reopen.outcome.blocked",
             Self::NoTarget => "reopen.outcome.no_target",
+            Self::Unavailable => "reopen.outcome.unavailable",
         }
     }
 }
@@ -2074,6 +2075,7 @@ mod tests {
                 "reopen.outcome.blocked",
             ),
             (ReopenOutcome::NoTarget, "reopen.outcome.no_target"),
+            (ReopenOutcome::Unavailable, "reopen.outcome.unavailable"),
         ];
         for (outcome, expected) in cases {
             assert_eq!(outcome.counter_name(), expected);

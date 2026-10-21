@@ -127,6 +127,22 @@ body,
     min-height: 0;
 }
 
+.omnibar-result-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 4px;
+}
+
+.omnibar-result-row[data-selected="true"] .omnibar-result-main {
+    border-color: var(--hairline-2, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-3));
+}
+
+.omnibar-result-main {
+    width: 100%;
+}
+
 .omnibar-result,
 .omnibar-citation {
     display: flex;

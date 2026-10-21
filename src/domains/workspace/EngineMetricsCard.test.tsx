@@ -182,7 +182,7 @@ describe("EngineMetricsCard", () => {
         expect(await screen.findByText("No latency samples yet.")).toBeInTheDocument();
         expect(screen.getByText("No recent operations yet.")).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Reopen this session" })).toBeInTheDocument();
-        expect(screen.getAllByText("0%").length).toBeGreaterThanOrEqual(8);
+        expect(screen.getAllByText("0%").length).toBeGreaterThanOrEqual(9);
         expect(screen.queryByText("reopen.outcome.opened")).not.toBeInTheDocument();
         expect(screen.getAllByText("0 B").length).toBeGreaterThan(0);
         expect(screen.getByRole("meter", { name: "CPU core 0 usage" })).toHaveAttribute(
