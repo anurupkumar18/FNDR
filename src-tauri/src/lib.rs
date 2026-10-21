@@ -43,6 +43,7 @@ pub mod privacy_proof;
 pub mod proactive_signals;
 pub mod resume;
 pub mod search;
+pub mod smart_fill;
 pub mod speech;
 pub mod speech_out;
 pub mod spotlight;

@@ -1316,6 +1316,7 @@ pub async fn set_autofill_settings(
         };
     }
 
+    crate::smart_fill::apply_setting(&app, normalized.smart_fill);
     Ok(normalized)
 }
 

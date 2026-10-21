@@ -1,0 +1,35 @@
+.smart-fill-setting {
+    margin-top: 14px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 0.5px solid var(--hairline, rgba(255, 255, 255, 0.12));
+    background: var(--bg-2, rgba(255, 255, 255, 0.04));
+}
+
+.smart-fill-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.smart-fill-row strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.smart-fill-row small {
+    display: block;
+    margin-top: 4px;
+    max-width: 52ch;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--fg-2, rgba(255, 255, 255, 0.62));
+}
+
+.smart-fill-error {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--danger, #ff6b6b);
+}

@@ -31,6 +31,7 @@ import type { ActivityTraceSnapshot } from "@/shared/activity/activityTrace";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import { AgentReply } from "./AgentReply";
 import { CodexAccountCard } from "./CodexAccountCard";
+import { SmartFillSetting } from "@/domains/smart-fill/SmartFillSetting";
 import { PeerDirectory } from "./PeerDirectory";
 import "./AgentWorkspace.css";
 
@@ -804,6 +805,7 @@ function AgentSetup({ hermes, onSaved, onInstalled }: AgentSetupProps) {
             />
 
             {provider === "codex" ? <CodexAccountCard onStatusChange={onCodexStatus} /> : null}
+            {provider === "codex" ? <SmartFillSetting /> : null}
             {provider === "ollama" && !hermes.ollama_reachable ? (
                 <p className="aw-hint">
                     {hermes.ollama_installed ? "Ollama isn't running. Open Ollama, then come back." : "Install Ollama from ollama.com to run models on this Mac."}

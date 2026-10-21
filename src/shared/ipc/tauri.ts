@@ -2730,6 +2730,8 @@ export interface AutofillSettings {
     auto_inject_threshold: number;
     prefer_typed_injection: boolean;
     max_candidates: number;
+    /** Smart Fill: two taps of Command write the focused text box with ChatGPT. */
+    smart_fill: boolean;
 }
 
 export interface AutofillCandidate {
@@ -2774,6 +2776,15 @@ export async function getAutofillSettings(): Promise<AutofillSettings> {
 
 export async function setAutofillSettings(settings: AutofillSettings): Promise<AutofillSettings> {
     return invoke<AutofillSettings>("set_autofill_settings", { settings });
+}
+
+/** Smart Fill: two taps of Command write the focused text box with ChatGPT. */
+export async function getSmartFillEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_smart_fill_enabled");
+}
+
+export async function setSmartFillEnabled(enabled: boolean): Promise<boolean> {
+    return invoke<boolean>("set_smart_fill_enabled", { enabled });
 }
 
 /** How FNDR speaks: `config.toml` [voice_output]. */

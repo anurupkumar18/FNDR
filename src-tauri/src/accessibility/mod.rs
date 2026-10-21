@@ -4,6 +4,7 @@
 //! 1. Identify the currently focused input field's label in any app
 //! 2. Inject text directly into that field without requiring keyboard focus
 
+pub mod fill;
 mod operate;
 mod text_tree;
 
