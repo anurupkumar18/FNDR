@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { resolveWorkSet, resumeWork, type ResumeThread } from "@/shared/ipc/tauri";
 import { useHomeSections } from "@/shared/home/homeSections";
 import { pickSet } from "./homeWorkSet";
+import { HomeReveal } from "./HomeReveal";
 import { HomeDeadlines } from "./HomeDeadlines";
 import { HomeSets } from "./HomeSets";
 import { RoutineOfferCard } from "./RoutineOfferCard";
@@ -68,6 +69,7 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
     return (
         <div className="home-work">
             {shown.threads && (
+                <HomeReveal>
                 <section className="resume-work" aria-labelledby="resume-work-title" aria-busy={status === "loading"}>
                     <div className="resume-work-header">
                         <div>
@@ -123,16 +125,29 @@ export function ResumeWork({ onOpenMemory, onOpenVault }: ResumeWorkProps) {
                         </ul>
                     )}
                 </section>
+                </HomeReveal>
             )}
-            {shown.deadlines && <HomeDeadlines arrange={arrange} />}
-            {shown.routine && <RoutineOfferCard arrange={arrange} />}
+            {shown.deadlines && (
+                <HomeReveal>
+                    <HomeDeadlines arrange={arrange} />
+                </HomeReveal>
+            )}
+            {shown.routine && (
+                <HomeReveal>
+                    <RoutineOfferCard arrange={arrange} />
+                </HomeReveal>
+            )}
             {shown.sets && (
-                <HomeSets refreshKey={setsVersion} arrange={arrange} />
+                <HomeReveal>
+                    <HomeSets refreshKey={setsVersion} arrange={arrange} />
+                </HomeReveal>
             )}
-            <div className="home-work-options">
-                <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
-                <label htmlFor={arrangeId}>Open places side by side</label>
-            </div>
+            <HomeReveal>
+                <div className="home-work-options">
+                    <input id={arrangeId} type="checkbox" checked={arrange} onChange={(event) => setArrange(event.target.checked)} />
+                    <label htmlFor={arrangeId}>Open places side by side</label>
+                </div>
+            </HomeReveal>
         </div>
     );
 }
