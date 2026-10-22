@@ -16,10 +16,14 @@ import {
     useTransform,
 } from "framer-motion";
 import { useReducedMotionSafe } from "@/shared/motion/useReducedMotionSafe";
+import { GooeyActions } from "@/shared/components/GooeyActions";
 import { VoiceButton } from "@/shared/voice/VoiceButton";
 import { VoiceStatus } from "@/shared/voice/VoiceStatus";
 import { useVoice } from "@/shared/voice/useVoice";
 import "./HomeHero.css";
+
+/** Submit button width (44) plus the gap (8): how far Speak slides to make room. */
+const SUBMIT_SLOT_PX = 52;
 
 // ─── Greeting helpers ─────────────────────────────────────────────────────────
 
@@ -229,21 +233,24 @@ export function HomeHero({
                         spellCheck={false}
                     />
 
-                    <div className="home-hero__actions">
-                        <VoiceButton
-                            mode={voice.mode}
-                            state={voice.state}
-                            isActive={voice.isActive}
-                            onStart={voice.start}
-                            onStop={voice.stop}
-                            className={`home-hero__voice-btn${voice.isActive ? " is-recording" : ""}`}
-                        />
-                        {hasDraft && (
+                    <GooeyActions
+                        primary={
+                            <VoiceButton
+                                mode={voice.mode}
+                                state={voice.state}
+                                isActive={voice.isActive}
+                                onStart={voice.start}
+                                onStop={voice.stop}
+                                className={`home-hero__voice-btn${voice.isActive ? " is-recording" : ""}`}
+                            />
+                        }
+                        secondary={
                             <button
                                 type="button"
                                 className="home-hero__search-submit"
                                 onClick={() => handleSubmit()}
                                 aria-label="Submit search"
+                                disabled={!hasDraft}
                             >
                                 <svg
                                     viewBox="0 0 24 24"
@@ -256,8 +263,10 @@ export function HomeHero({
                                     <path d="M5 12h14M13 6l6 6-6 6" />
                                 </svg>
                             </button>
-                        )}
-                    </div>
+                        }
+                        secondaryVisible={hasDraft}
+                        slotPx={SUBMIT_SLOT_PX}
+                    />
                 </div>
 
                 {/* Voice status */}
