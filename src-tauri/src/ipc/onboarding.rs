@@ -9,7 +9,7 @@
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -242,28 +242,45 @@ fn biometric_helper_path(app: &AppHandle) -> Result<PathBuf, String> {
     } else {
         "x86_64-apple-darwin"
     };
-    let name = format!("fndr-auth-{target}");
+    let resource_dir = app.path().resource_dir().ok();
+    let executable_dir = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_path_buf));
+    biometric_helper_candidates(
+        resource_dir.as_deref(),
+        executable_dir.as_deref(),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        target,
+    )
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+    .ok_or_else(|| {
+        "The native authentication helper is unavailable. Reinstall FNDR and try again.".to_string()
+    })
+}
+
+/// Where the Touch ID helper may be, best first. The bundled app carries it
+/// as `fndr-auth` beside the executable (Tauri drops the target suffix from an
+/// external binary); a development build has the suffixed name in `binaries/`.
+/// The source-tree path is last: a packaged app must never depend on it.
+fn biometric_helper_candidates(
+    resource_dir: Option<&Path>,
+    executable_dir: Option<&Path>,
+    manifest_dir: &Path,
+    target: &str,
+) -> Vec<PathBuf> {
+    let suffixed = format!("fndr-auth-{target}");
     let mut candidates = Vec::new();
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join(&name));
+    if let Some(dir) = executable_dir {
+        candidates.push(dir.join("fndr-auth"));
+        candidates.push(dir.join(&suffixed));
     }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            candidates.push(parent.join(&name));
-        }
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("fndr-auth"));
+        candidates.push(dir.join(&suffixed));
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(&name),
-    );
+    candidates.push(manifest_dir.join("binaries").join(&suffixed));
     candidates
-        .into_iter()
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            "The native authentication helper is unavailable. Reinstall FNDR and try again."
-                .to_string()
-        })
 }
 
 fn parse_biometric_helper_output(output: &str) -> Result<bool, String> {
@@ -1126,7 +1143,11 @@ pub async fn delete_ai_model(
 
 #[cfg(test)]
 mod tests {
-    use super::{available_disk_bytes, parse_biometric_helper_output, system_settings_url};
+    use super::{
+        available_disk_bytes, biometric_helper_candidates, parse_biometric_helper_output,
+        system_settings_url,
+    };
+    use std::path::Path;
 
     #[cfg(unix)]
     #[test]
@@ -1145,6 +1166,21 @@ mod tests {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
         );
         assert!(system_settings_url("unknown").is_err());
+    }
+
+    #[test]
+    fn the_bundled_helper_beside_the_executable_is_found_before_the_source_tree() {
+        let found = biometric_helper_candidates(
+            Some(Path::new("/App/Contents/Resources")),
+            Some(Path::new("/App/Contents/MacOS")),
+            Path::new("/src/src-tauri"),
+            "aarch64-apple-darwin",
+        );
+        assert_eq!(found[0], Path::new("/App/Contents/MacOS/fndr-auth"));
+        assert_eq!(
+            found.last().unwrap(),
+            Path::new("/src/src-tauri/binaries/fndr-auth-aarch64-apple-darwin")
+        );
     }
 
     #[test]
