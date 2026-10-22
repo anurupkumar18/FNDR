@@ -194,11 +194,12 @@ impl ChunkingConfig {
 
 /// Verbatim page text kept beside each screen memory (ADR 036). The summary
 /// and embeddings are what memory ranks on; this is the evidence a consumer
-/// reads when it needs an exact value. Off until the person turns it on.
+/// reads when it needs an exact value. On by default, bounded, and switchable
+/// in Settings, Privacy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VerbatimConfig {
     /// "Keep the full text of what FNDR sees on this Mac".
-    #[serde(default)]
+    #[serde(default = "default_verbatim_enabled")]
     pub enabled: bool,
     /// Days a memory's verbatim text is kept. The memory and its summary stay.
     #[serde(default = "default_verbatim_retention_days")]
@@ -211,8 +212,14 @@ pub struct VerbatimConfig {
     pub total_budget_mb: u32,
 }
 
+fn default_verbatim_enabled() -> bool {
+    true
+}
+
+/// A memory's text goes with the memory, which lives 7 days by default, so a
+/// longer window would never be reached; this matches it.
 fn default_verbatim_retention_days() -> u32 {
-    30
+    7
 }
 
 fn default_verbatim_max_bytes_per_memory() -> usize {
@@ -226,7 +233,7 @@ fn default_verbatim_total_budget_mb() -> u32 {
 impl Default for VerbatimConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_verbatim_enabled(),
             retention_days: default_verbatim_retention_days(),
             max_bytes_per_memory: default_verbatim_max_bytes_per_memory(),
             total_budget_mb: default_verbatim_total_budget_mb(),
@@ -1843,10 +1850,10 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_defaults_off_and_old_files_load() {
+    fn verbatim_defaults_on_and_old_files_load() {
         let config = Config::default().normalized();
-        assert!(!config.verbatim.enabled);
-        assert_eq!(config.verbatim.retention_days, 30);
+        assert!(config.verbatim.enabled);
+        assert_eq!(config.verbatim.retention_days, 7);
         assert_eq!(config.verbatim.max_bytes_per_memory, 6144);
         let old: VerbatimConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(old, VerbatimConfig::default());

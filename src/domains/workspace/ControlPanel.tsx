@@ -874,10 +874,12 @@ export function ControlPanel({
                                         />
                                     </label>
                                     <p className="section-hint" id="settings-verbatim-hint">
-                                        Lets FNDR quote exact details, such as a phone number on a page you read.
-                                        The text stays on this Mac, is kept for 30 days, and follows your blocked apps
-                                        and sites and Private Mode. Turning this off deletes it at once; memories and
-                                        their summaries stay.
+                                        On by default. Lets FNDR quote exact details, such as a phone number on a
+                                        page you read, and fill forms from them. The text stays on this Mac, is kept
+                                        for 7 days, and follows your blocked apps and sites and Private Mode. FNDR does
+                                        not look for personal numbers inside it, so turn this off if you would rather
+                                        it kept only summaries. Turning this off deletes it at once; memories and their
+                                        summaries stay.
                                     </p>
                                     {verbatimError && (
                                         <p

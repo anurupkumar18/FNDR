@@ -462,19 +462,22 @@ mod agent_notes_settings_tests {
     #[test]
     fn verbatim_switch_persists_and_a_failed_save_keeps_the_previous_value() {
         let config = RwLock::new(Config::default());
-        assert!(!config.read().verbatim.enabled);
-        let saved = std::cell::Cell::new(false);
-        update_verbatim_enabled(&config, true, |next| {
+        assert!(config.read().verbatim.enabled, "on by default");
+        let saved = std::cell::Cell::new(true);
+        update_verbatim_enabled(&config, false, |next| {
             saved.set(next.verbatim.enabled);
             Ok(())
         })
         .unwrap();
-        assert!(saved.get() && config.read().verbatim.enabled);
-        assert_eq!(config.read().verbatim.retention_days, 30);
+        assert!(!saved.get() && !config.read().verbatim.enabled);
+        assert_eq!(config.read().verbatim.retention_days, 7);
 
-        let result = update_verbatim_enabled(&config, false, |_| Err("read-only".to_string()));
+        let result = update_verbatim_enabled(&config, true, |_| Err("read-only".to_string()));
         assert_eq!(result.unwrap_err(), "read-only");
-        assert!(config.read().verbatim.enabled);
+        assert!(
+            !config.read().verbatim.enabled,
+            "a failed save keeps the previous value"
+        );
     }
 }
 

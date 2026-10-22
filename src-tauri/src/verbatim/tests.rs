@@ -90,9 +90,9 @@ async fn nothing_is_kept_when_the_switch_is_off() {
     let (_dir, store) = store();
     let rec = record("m1", PAGE);
     land(&store, &[rec.clone()]).await;
-    let kept = keep_batch(&store, &[rec], &Config::default(), false)
-        .await
-        .unwrap();
+    let mut off = Config::default();
+    off.verbatim.enabled = false;
+    let kept = keep_batch(&store, &[rec], &off, false).await.unwrap();
     assert_eq!(kept, 0);
     assert_eq!(text_of(&store, "m1").await, None);
 }
@@ -276,9 +276,9 @@ async fn turning_the_switch_off_purges_everything() {
     let rows = [record("a", PAGE), record("b", PAGE)];
     land(&store, &rows).await;
     keep_batch(&store, &rows, &on(), false).await.unwrap();
-    let report = sweep(&store, &Config::default().verbatim, NOW)
-        .await
-        .unwrap();
+    let mut off = Config::default().verbatim;
+    off.enabled = false;
+    let report = sweep(&store, &off, NOW).await.unwrap();
     assert!(report.switched_off);
     assert_eq!(store.verbatim_stats().await.unwrap().rows, 0);
     assert!(store.get_memory_by_id("a").await.unwrap().is_some());

@@ -915,7 +915,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         finished_at_ms: null, error: null,
     };
     let previewAgentNotesEnabled = false;
-    let previewVerbatimMemoryEnabled = false;
+    let previewVerbatimMemoryEnabled = true;
     const previewParam = (name: string) => new URLSearchParams(window.location.search).get(name);
     const previewApprovalCard = {
         id: "preview-approval",
