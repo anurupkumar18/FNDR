@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const ipcMocks = vi.hoisted(() => ({
+    getNotchDoAutonomy: vi.fn(),
+    setNotchDoAutonomy: vi.fn(),
     notchDoDeleteSkill: vi.fn(),
     notchDoRateRun: vi.fn(),
     notchDoRequest: vi.fn(),
@@ -36,8 +38,26 @@ const mondaySetup = {
 };
 
 describe("NotchDoSettings", () => {
+    it("asks only before destructive actions by default and can go back to asking each time", async () => {
+        ipcMocks.notchDoSkills.mockResolvedValue([]);
+        ipcMocks.notchDoRuns.mockResolvedValue([]);
+        render(<NotchDoSettings />);
+        const toggle = await screen.findByRole("switch", { name: "Ask before each action" });
+        await waitFor(() => expect(toggle).not.toBeDisabled());
+        expect(toggle).not.toBeChecked();
+        expect(screen.getByText(/could destroy data/i)).toBeInTheDocument();
+        expect(screen.getByText(/never pays, enters a password or force quits/i)).toBeInTheDocument();
+        fireEvent.click(toggle);
+        await waitFor(() => expect(ipcMocks.setNotchDoAutonomy).toHaveBeenCalledWith("ask_each"));
+        await waitFor(() => expect(toggle).toBeChecked());
+        fireEvent.click(toggle);
+        await waitFor(() => expect(ipcMocks.setNotchDoAutonomy).toHaveBeenLastCalledWith("smooth"));
+    });
+
     beforeEach(() => {
         Object.values(ipcMocks).forEach((mock) => mock.mockReset());
+        ipcMocks.getNotchDoAutonomy.mockResolvedValue("smooth");
+        ipcMocks.setNotchDoAutonomy.mockImplementation(async (value: string) => value);
         ipcMocks.notchDoSkills.mockResolvedValue([mondaySetup]);
         ipcMocks.notchDoRuns.mockResolvedValue([]);
     });

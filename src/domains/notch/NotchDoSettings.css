@@ -79,3 +79,26 @@
 .notch-do-settings-save input:focus {
     border-color: var(--accent);
 }
+
+.notch-do-settings-switch {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 4px 0 14px;
+}
+
+.notch-do-settings-switch strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.notch-do-settings-switch small {
+    display: block;
+    margin-top: 4px;
+    max-width: 56ch;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--fg-2, rgba(255, 255, 255, 0.62));
+}

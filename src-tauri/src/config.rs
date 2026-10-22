@@ -860,6 +860,11 @@ pub struct Config {
     /// once (ADR 020 amendment, 2026-10-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notch_do_muted: Option<bool>,
+    /// How much Notch Do asks before acting (ADR 037): `smooth` asks only
+    /// before an action that could destroy something, `ask_each` asks as it
+    /// did before.
+    #[serde(default)]
+    pub notch_do_autonomy: crate::operator::policy::Autonomy,
     /// Authoritative local embedding model contract.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -1413,6 +1418,7 @@ impl Default for Config {
             confirm_unnamed_apps: false,
             agent_notes_enabled: false,
             notch_do_muted: None,
+            notch_do_autonomy: crate::operator::policy::Autonomy::default(),
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
             verbatim: VerbatimConfig::default(),
@@ -1671,6 +1677,28 @@ mod tests {
         let saved = toml::to_string(&muted).expect("config serializes");
         let loaded: Config = toml::from_str(&saved).expect("config loads");
         assert_eq!(loaded.notch_do_muted, Some(true));
+    }
+
+    #[test]
+    fn notch_do_autonomy_is_smooth_for_an_older_file_and_survives_a_round_trip() {
+        use crate::operator::policy::Autonomy;
+        let current = toml::to_string(&Config::default()).expect("config serializes");
+        let older = current
+            .lines()
+            .filter(|line| !line.starts_with("notch_do_autonomy"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let loaded: Config = toml::from_str(&older).expect("an older config still loads");
+        assert_eq!(loaded.notch_do_autonomy, Autonomy::Smooth);
+
+        let strict = Config {
+            notch_do_autonomy: Autonomy::AskEach,
+            ..Config::default()
+        };
+        let saved = toml::to_string(&strict).expect("config serializes");
+        assert!(saved.contains("notch_do_autonomy = \"ask_each\""));
+        let loaded: Config = toml::from_str(&saved).expect("config loads");
+        assert_eq!(loaded.notch_do_autonomy, Autonomy::AskEach);
     }
 
     #[test]

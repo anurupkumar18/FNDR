@@ -8,12 +8,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+    getNotchDoAutonomy,
     notchDoDeleteSkill,
     notchDoRateRun,
     notchDoRequest,
     notchDoRuns,
     notchDoSaveSkill,
     notchDoSkills,
+    setNotchDoAutonomy,
+    type NotchDoAutonomy,
     type NotchDoRun,
     type NotchDoSkill,
 } from "@/shared/ipc/tauri";
@@ -45,6 +48,7 @@ export function NotchDoSettings() {
     const [skills, setSkills] = useState<NotchDoSkill[] | null>(null);
     const [runs, setRuns] = useState<NotchDoRun[] | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
+    const [autonomy, setAutonomy] = useState<NotchDoAutonomy | null>(null);
     const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
     const [names, setNames] = useState<Record<string, string>>({});
     const [savedFrom, setSavedFrom] = useState<Record<string, string>>({});
@@ -61,6 +65,21 @@ export function NotchDoSettings() {
     useEffect(() => {
         void load();
     }, [load]);
+
+    useEffect(() => {
+        let active = true;
+        getNotchDoAutonomy()
+            .then((value) => active && setAutonomy(value))
+            .catch(() => undefined);
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    const chooseAutonomy = (askEach: boolean) =>
+        act(async () => {
+            setAutonomy(await setNotchDoAutonomy(askEach ? "ask_each" : "smooth"));
+        });
 
     const act = async (work: () => Promise<unknown>) => {
         setProblem(null);
@@ -106,6 +125,27 @@ export function NotchDoSettings() {
     return (
         <section className="panel-section settings-section--notch-do" aria-labelledby="settings-notch-do-title">
             <h3 id="settings-notch-do-title">Notch Do</h3>
+            <label className="notch-do-settings-switch">
+                <span>
+                    <strong>Ask before each action</strong>
+                    <small>
+                        Off by default. Notch Do then does what you ask without a tap for each step, and stops to ask only
+                        before something that could destroy data (delete, erase, discard, close without saving). It still
+                        never pays, enters a password or force quits, and still asks before opening a link you did not
+                        name. Turn this on to approve each action as before.
+                    </small>
+                </span>
+                <input
+                    type="checkbox"
+                    role="switch"
+                    className="fndr-switch"
+                    aria-label="Ask before each action"
+                    checked={autonomy === "ask_each"}
+                    disabled={autonomy === null}
+                    onChange={(event) => void chooseAutonomy(event.target.checked)}
+                />
+            </label>
+
             <p className="section-hint">
                 A skill is a run that worked, saved under a name. Run it here, type its name in the command bar or say it to
                 the notch; its steps run again without planning, and anything that needs a yes still waits for your tap.

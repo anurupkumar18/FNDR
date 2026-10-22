@@ -31,7 +31,7 @@ use super::codex_account::{
 use crate::inference::prompts::{OPERATOR_PLANNER_SYSTEM, OPERATOR_STEP_SYSTEM};
 use crate::operator::journal::{redact, Journal, JournalEntry};
 use crate::operator::plan::{self, Plan, PlanStep, StepAction, StepCheck};
-use crate::operator::policy::{classify, Decision, Observed, Risk};
+use crate::operator::policy::{classify, classify_for, Autonomy, Decision, Observed, Risk};
 use crate::operator::{memory, native};
 use crate::workset::{ItemOutcome, Resolution, WorkItem, WorkSet};
 use crate::AppState;
@@ -431,6 +431,8 @@ struct Guards {
     halt: Arc<dyn Fn() -> Option<String> + Send + Sync>,
     /// Whether an app may not be read or operated: the person's blocklist and FNDR itself.
     off_limits: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    /// How much this run asks before acting, as set when it started (ADR 037).
+    autonomy: Autonomy,
 }
 
 const ACTIONS_OFF: &str = "Actions are turned off in Settings.";
@@ -464,6 +466,7 @@ impl Guards {
                             &limits_state.config.read().blocklist,
                         ))
             }),
+            autonomy: state.config.read().notch_do_autonomy,
         }
     }
 
@@ -472,6 +475,7 @@ impl Guards {
         Self {
             halt: Arc::new(|| None),
             off_limits: Arc::new(|_| false),
+            autonomy: Autonomy::AskEach,
         }
     }
 }
@@ -665,7 +669,8 @@ impl Session {
                                 }
                                 continue;
                             }
-                            let Decision { risk, reason } = classify(&tool, &args, ctx.observed);
+                            let Decision { risk, reason } =
+                                classify_for(ctx.guards.autonomy, &tool, &args, ctx.observed);
                             let summary = describe_tool_call(&tool, &args, ctx.observed);
                             match risk {
                                 Risk::Runs => self.answer(request_id, true).await?,
@@ -705,7 +710,7 @@ impl Session {
                                 let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
                                 let tool = item.get("tool").and_then(Value::as_str).unwrap_or_default().to_string();
                                 let args = item.get("arguments").cloned().unwrap_or(Value::Null);
-                                let risk = classify(&tool, &args, ctx.observed).risk;
+                                let risk = classify_for(ctx.guards.autonomy, &tool, &args, ctx.observed).risk;
                                 (ctx.emit)(ComputerUseEvent::Action {
                                     run_id: ctx.run_id.to_string(),
                                     index,
@@ -848,7 +853,7 @@ fn record_tool_result(
     let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
     // The risk the call was decided at, before this result changes what
     // FNDR knows about focus.
-    let risk = classify(tool, args, ctx.observed).risk;
+    let risk = classify_for(ctx.guards.autonomy, tool, args, ctx.observed).risk;
     if ok && tool == "get_app_state" && !app.is_empty() {
         ctx.observed.observe_tree(app, result_text);
     }
@@ -973,6 +978,26 @@ const MAX_AUTO_REOPENS: usize = 3;
 /// app, opening a link their words account for, playback in a media app, or
 /// a plan of at most three reopens FNDR resolved itself.
 fn plan_starts_by_itself(plan: &Plan, request: &str, guards: &Guards) -> bool {
+    if guards.autonomy == Autonomy::Smooth {
+        // The plan is a sketch; every action in it is still judged when it is
+        // taken. Nothing starts in an app FNDR may not touch.
+        return plan.steps.iter().all(|step| {
+            (step.app.is_empty() || !(guards.off_limits)(&step.app))
+                && match step.action {
+                    StepAction::OpenApp => {
+                        classify(
+                            "open_app",
+                            &json!({ "name": step.app }),
+                            &Observed::default(),
+                        )
+                        .risk
+                            != Risk::Never
+                    }
+                    StepAction::OpenUrl => plan::link_was_asked_for(&step.url, request),
+                    _ => true,
+                }
+        });
+    }
     plan.steps.iter().all(|step| match step.action {
         StepAction::OpenApp => {
             !(guards.off_limits)(&step.app)
@@ -1228,7 +1253,12 @@ async fn attempt_step(
             } else {
                 format!("Paste \u{201c}{}\u{201d} into {app}", text.trim())
             };
-            let approved = ask_person(ctx, commands, "paste", summary).await?;
+            let approved =
+                if classify_for(ctx.guards.autonomy, "paste", &args, observed).risk == Risk::Runs {
+                    true
+                } else {
+                    ask_person(ctx, commands, "paste", summary).await?
+                };
             native_entry(
                 "paste",
                 args.clone(),
@@ -2555,6 +2585,7 @@ mod tests {
         let guards = Guards {
             off_limits: Arc::new(|_| false),
             halt: Arc::new(|| None),
+            autonomy: Autonomy::AskEach,
         };
         assert!(!plan_starts_by_itself(
             &paste,
@@ -2817,6 +2848,7 @@ mod tests {
         let blocked = Guards {
             halt: Arc::new(|| None),
             off_limits: Arc::new(|app| app == "Spotify"),
+            autonomy: Autonomy::AskEach,
         };
         assert!(!plan_starts_by_itself(&safe, request, &blocked));
     }
@@ -3033,6 +3065,7 @@ mod tests {
         let guards = Guards {
             halt: Arc::new(|| None),
             off_limits: Arc::new(|app| app == "Spotify"),
+            autonomy: Autonomy::AskEach,
         };
         let operator = session.operator_thread.clone();
         let mut turn = TurnContext {
@@ -3092,6 +3125,7 @@ mod tests {
         let guards = Guards {
             halt: Arc::new(|| Some(ACTIONS_OFF.to_string())),
             off_limits: Arc::new(|_| false),
+            autonomy: Autonomy::AskEach,
         };
         let operator = session.operator_thread.clone();
         let mut turn = TurnContext {
@@ -3511,6 +3545,7 @@ mod tests {
         let blocked = Guards {
             halt: Arc::new(|| None),
             off_limits: Arc::new(|app| app == "Google Chrome"),
+            autonomy: Autonomy::AskEach,
         };
         assert!(!plan_starts_by_itself(&three, request, &blocked));
     }
@@ -3581,6 +3616,7 @@ mod tests {
                     .then(|| ACTIONS_OFF.to_string())
             }),
             off_limits: Arc::new(|_| false),
+            autonomy: Autonomy::AskEach,
         };
         let (ctx, _, receiver) = work_set_run(guards, dir.path());
         let record = opened.clone();

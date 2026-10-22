@@ -89,6 +89,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
     getRetentionDays: vi.fn().mockResolvedValue(7),
     notchDoSkills: vi.fn().mockResolvedValue([]),
+    getNotchDoAutonomy: vi.fn().mockResolvedValue("smooth"),
+    setNotchDoAutonomy: vi.fn().mockResolvedValue("smooth"),
     notchDoRuns: vi.fn().mockResolvedValue([]),
     pauseCapture: vi.fn(),
     resumeCapture: vi.fn(),

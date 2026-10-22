@@ -91,6 +91,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     resumeWork,
     getTodos: vi.fn().mockResolvedValue([]),
     notchDoSkills: vi.fn().mockResolvedValue([]),
+    getNotchDoAutonomy: vi.fn().mockResolvedValue("smooth"),
+    setNotchDoAutonomy: vi.fn().mockResolvedValue("smooth"),
     notchDoRuns: vi.fn().mockResolvedValue([]),
     listNamedSets: vi.fn().mockResolvedValue([]),
     routineOffers: vi.fn().mockResolvedValue([]),

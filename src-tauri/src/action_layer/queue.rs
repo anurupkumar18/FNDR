@@ -378,6 +378,7 @@ mod tests {
             kill_switch: false,
             agent_notes_enabled: true,
             confirm_unnamed_apps: false,
+            autonomy: crate::operator::policy::Autonomy::AskEach,
         }
     }
 
