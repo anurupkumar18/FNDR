@@ -219,6 +219,10 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         screenshot = gathered.screenshot.is_some(),
         screen_visible,
         web_field = field.web,
+        app = %gathered.app_name,
+        role = %field.role,
+        label_chars = gathered.field_label.chars().count(),
+        value_chars = field.value.chars().count(),
         "smart_fill:read the screen"
     );
     if text_chars < MIN_SCREEN_TEXT_CHARS && gathered.screenshot.is_none() {

@@ -1444,6 +1444,21 @@ mod tests {
         println!("[imessage screenshot only] {raw:?}");
         assert!(imessage.is_some(), "a conversation in a screenshot gets a reply");
 
+        let (follow_up, raw) = run(
+            "Messages",
+            "Marcus",
+            "",
+            "",
+            vec![],
+            image("imessage_last_me.png"),
+        )
+        .await;
+        println!("[imessage, the person sent the last message] {raw:?}");
+        assert!(
+            follow_up.is_some(),
+            "a conversation whose last message is the person's own still gets a follow-up"
+        );
+
         let (email, raw) = run("Dia", "Re: Q4 budget review", "Message body", "", vec![], image("email.png")).await;
         println!("[email screenshot only, no notes] {raw:?}");
         assert!(email.is_some(), "an email in a screenshot gets a reply");
