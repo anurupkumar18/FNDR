@@ -40,6 +40,7 @@ pub mod operator;
 pub mod outputs;
 pub mod privacy;
 pub mod privacy_proof;
+pub mod profile_facts;
 pub mod proactive_signals;
 pub mod resume;
 pub mod search;

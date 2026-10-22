@@ -5,6 +5,7 @@
 //! 2. Inject text directly into that field without requiring keyboard focus
 
 pub mod fill;
+pub mod form;
 mod operate;
 mod text_tree;
 
@@ -1012,12 +1013,6 @@ pub(crate) fn capture_focused_context_snapshot(
             pending_target,
         ))
     }
-}
-
-/// The text on a screenshot, read with the same OCR as Auto-fill's fallback.
-/// Takes a few seconds; callers use it only when Accessibility gave no text.
-pub(crate) fn ocr_screen_text(image: &[u8]) -> String {
-    recognize_screen_context(image)
 }
 
 pub(crate) fn finish_focused_context_ocr(

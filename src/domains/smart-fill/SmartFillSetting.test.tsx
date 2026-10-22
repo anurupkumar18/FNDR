@@ -5,6 +5,8 @@ import { SmartFillSetting } from "./SmartFillSetting";
 const ipc = vi.hoisted(() => ({
     getSmartFillEnabled: vi.fn(),
     setSmartFillEnabled: vi.fn(),
+    getSavedDetailsCount: vi.fn(),
+    forgetSavedDetails: vi.fn(),
 }));
 
 vi.mock("@/shared/ipc/tauri", () => ipc);
@@ -15,6 +17,8 @@ describe("SmartFillSetting", () => {
     beforeEach(() => {
         ipc.getSmartFillEnabled.mockReset().mockResolvedValue(false);
         ipc.setSmartFillEnabled.mockReset().mockImplementation(async (next: boolean) => next);
+        ipc.getSavedDetailsCount.mockReset().mockResolvedValue(0);
+        ipc.forgetSavedDetails.mockReset().mockResolvedValue(0);
     });
 
     it("starts off and says what leaves the Mac", async () => {
@@ -25,6 +29,16 @@ describe("SmartFillSetting", () => {
         expect(screen.getByText(/screenshot of your/i)).toBeInTheDocument();
         expect(screen.getByText(/up to four related memories/i)).toBeInTheDocument();
         expect(screen.getByText(/never writes into password fields/i)).toBeInTheDocument();
+    });
+
+    it("says it saves details, shows how many, and forgets them on request", async () => {
+        ipc.getSavedDetailsCount.mockResolvedValue(10);
+        render(<SmartFillSetting />);
+        expect(await screen.findByText(/saves labelled details it sees on screen/i)).toBeInTheDocument();
+        expect(await screen.findByText(/10 personal details saved on this Mac/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Forget saved details" }));
+        await waitFor(() => expect(ipc.forgetSavedDetails).toHaveBeenCalled());
+        await waitFor(() => expect(screen.queryByText(/personal details saved/i)).not.toBeInTheDocument());
     });
 
     it("saves only the Smart Fill switch", async () => {

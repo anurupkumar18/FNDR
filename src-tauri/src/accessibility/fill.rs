@@ -118,6 +118,23 @@ unsafe fn focused_element(pid: i32) -> Result<AXUIElementRef, String> {
     }
 }
 
+/// The app in front, when there is one.
+pub fn frontmost() -> Option<i32> {
+    unsafe { frontmost_pid() }.or_else(super::workspace_frontmost_pid)
+}
+
+/// Runs `work`, then puts back the plain text the clipboard held before it
+/// (pasting into several fields leaves the last value there).
+pub fn with_clipboard_restored<T>(work: impl FnOnce() -> T) -> T {
+    let previous = read_clipboard_text().filter(|text| !text.is_empty());
+    let result = work();
+    if let Some(previous) = previous {
+        std::thread::sleep(Duration::from_millis(250));
+        write_clipboard_text(&previous);
+    }
+    result
+}
+
 /// The focused field of the app in front, or the reason Smart Fill must not
 /// touch it. Password fields and anything that is not a text box are refused.
 pub fn focused_field() -> Result<FocusedField, Refusal> {

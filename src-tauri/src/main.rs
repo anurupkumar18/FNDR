@@ -1043,6 +1043,8 @@ fn main() {
             ipc::commands::get_focus_status,
             // Auto-fill
             fndr_lib::smart_fill::get_smart_fill_enabled,
+            fndr_lib::smart_fill::saved_details_count,
+            fndr_lib::smart_fill::forget_saved_details,
             fndr_lib::smart_fill::set_smart_fill_enabled,
             ipc::commands::get_autofill_settings,
             ipc::commands::set_autofill_settings,

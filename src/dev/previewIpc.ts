@@ -1263,6 +1263,10 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "notch_do_request":
                 throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+            case "saved_details_count":
+                return 0;
+            case "forget_saved_details":
+                return 0;
             case "get_smart_fill_enabled":
                 return previewSmartFillEnabled;
             case "set_smart_fill_enabled": {

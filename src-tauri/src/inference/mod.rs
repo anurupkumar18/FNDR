@@ -31,6 +31,7 @@ pub(crate) mod prompts;
 pub mod vlm_router;
 
 pub(crate) use prompts::SCREEN_GUIDE_SYSTEM_PROMPT;
+pub(crate) use prompts::SMART_FILL_FORM_SYSTEM;
 pub(crate) use prompts::SMART_FILL_SYSTEM;
 
 /// Global shared LlamaBackend singleton.

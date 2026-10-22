@@ -3145,6 +3145,18 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             continue;
         }
 
+        // While Smart Fill is on, labelled personal details on this page
+        // ("Phone: ...") are kept as facts: the stored memory keeps only a
+        // summary, and a form can't be filled from a summary.
+        if config.autofill.smart_fill {
+            crate::profile_facts::observe(
+                state.app_data_dir.as_path(),
+                &text,
+                &app_name,
+                &window_title,
+            );
+        }
+
         // If the text source is too weak/noisy to drive the OCR-narrative
         // pipeline, attempt the visual-narrative path. The visual-admission
         // gate now rejects only tiny frames and near-duplicates; low-RAM or

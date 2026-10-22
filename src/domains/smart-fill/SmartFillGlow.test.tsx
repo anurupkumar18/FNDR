@@ -51,6 +51,15 @@ describe("SmartFillGlow", () => {
         expect(container.querySelector(".sf-caret")).toBeNull();
     });
 
+    it("shows form progress and a summary when the backend sends one", async () => {
+        render(<SmartFillGlow />);
+        await act(async () => undefined);
+        await send({ phase: "writing", message: "Filling 3 of 20" });
+        expect(screen.getByRole("status")).toHaveTextContent("Filling 3 of 20");
+        await send({ phase: "done", message: "Filled 18 of 34 fields" });
+        expect(screen.getByRole("status")).toHaveTextContent("Filled 18 of 34 fields");
+    });
+
     it("labels a notice without text with a safe default", () => {
         expect(smartFillLabel("notice", null)).toBe("Smart Fill could not write here.");
     });

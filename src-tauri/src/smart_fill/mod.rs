@@ -11,6 +11,7 @@
 //! ChatGPT only for this request.
 
 pub mod double_tap;
+pub mod form;
 pub mod monitor;
 pub mod overlay;
 pub mod prompt;
@@ -23,6 +24,7 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Manager};
 
 use crate::accessibility::fill::{self, FocusedField};
+use crate::accessibility::form as accessibility_form;
 use crate::privacy::Blocklist;
 use crate::AppState;
 use monitor::Signal;
@@ -34,17 +36,18 @@ const CODEX_TIMEOUT: Duration = Duration::from_secs(45);
 const SCREEN_TEXT_CHARS: usize = 6_000;
 /// Less on-screen text than this counts as "Accessibility read nothing".
 const MIN_SCREEN_TEXT_CHARS: usize = 40;
-/// Below this much, Accessibility has most likely read only toolbars and
-/// buttons, so the screenshot is read as well.
-const ENOUGH_SCREEN_TEXT_CHARS: usize = 400;
-/// How long Smart Fill waits for OCR before going on without it.
-const OCR_BUDGET: Duration = Duration::from_secs(12);
 /// Accessibility walk budget: time and elements. A mail page in a browser is
 /// thousands of elements, far more than the default allows.
 const AX_WALK_TIME: Duration = Duration::from_millis(400);
 const AX_WALK_NODES: usize = 20_000;
 /// Shown when FNDR can neither read the window's text nor see the screen.
 const SCREEN_RECORDING_HINT: &str = "FNDR can't see the screen. Turn FNDR on under Screen & System Audio Recording in System Settings (remove it and add it again after an update), then reopen FNDR.";
+/// How long Smart Fill spends finding a form's fields, and how many elements
+/// it looks at: a long page is thousands.
+const FORM_WALK_TIME: Duration = Duration::from_millis(900);
+const FORM_WALK_NODES: usize = 40_000;
+/// ChatGPT's turn for a whole form is longer than for one box.
+const FORM_CODEX_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the word-by-word reveal takes in total, however long the text.
 const REVEAL_TOTAL: Duration = Duration::from_millis(1_800);
 
@@ -78,6 +81,22 @@ pub async fn set_smart_fill_enabled(
     }
     apply_setting(&app, enabled);
     Ok(enabled)
+}
+
+/// How many personal details Smart Fill has saved, for Settings.
+#[tauri::command]
+pub async fn saved_details_count(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
+    Ok(crate::profile_facts::usable_count(
+        state.app_data_dir.as_path(),
+    ))
+}
+
+/// Forgets every saved personal detail.
+#[tauri::command]
+pub async fn forget_saved_details(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
+    crate::profile_facts::forget_all(state.app_data_dir.as_path())
+        .map_err(|err| err.to_string())?;
+    Ok(0)
 }
 
 /// Starts or stops the Command watch to match the setting.
@@ -116,6 +135,8 @@ fn cancel_running() {
 /// What a finished request tells the glow.
 enum Outcome {
     Written,
+    /// A form was filled; the sentence says how much.
+    Filled(String),
     /// Nothing to say: a stray double tap, or the setting is off.
     Silent,
     Stopped,
@@ -135,7 +156,11 @@ async fn run(app: AppHandle) {
     *CANCEL.lock() = None;
     RUNNING.store(false, Ordering::SeqCst);
     match outcome {
-        Outcome::Written => overlay::finish(&app, "done", None),
+        Outcome::Written => {
+            tracing::info!("smart_fill:wrote the reply");
+            overlay::finish(&app, "done", None)
+        }
+        Outcome::Filled(message) => overlay::finish(&app, "done", Some(message)),
         Outcome::Silent => {}
         Outcome::Stopped => overlay::finish(&app, "stopped", None),
         Outcome::Nothing(message) => overlay::finish(&app, "notice", Some(message.to_string())),
@@ -162,17 +187,16 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         return Outcome::Nothing("Smart Fill is paused while Private Mode is on.");
     }
 
-    let field = match tokio::task::spawn_blocking(fill::focused_field).await {
-        Ok(Ok(field)) => field,
-        Ok(Err(refusal)) if refusal.show => return Outcome::Nothing(refusal.message),
-        Ok(Err(_)) => return Outcome::Silent,
-        Err(_) => return Outcome::Failed("The text box could not be read.".to_string()),
-    };
-    if field.pid == std::process::id() as i32 {
+    let Some(front_pid) = tokio::task::spawn_blocking(fill::frontmost)
+        .await
+        .ok()
+        .flatten()
+        .filter(|pid| *pid != std::process::id() as i32)
+    else {
         return Outcome::Silent;
-    }
+    };
 
-    // Who owns the box is read first; nothing else is read or sent from an
+    // Who owns the window is read first; nothing else is read or sent from an
     // app on the blocklist.
     let whose = tokio::task::spawn_blocking(whose_box).await;
     let Ok(whose) = whose else {
@@ -183,6 +207,32 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
     {
         return Outcome::Nothing("This app is on FNDR's blocklist.");
     }
+
+    // A form in the window: fill all of it from memory.
+    let fields = tokio::task::spawn_blocking(move || {
+        accessibility_form::discover(front_pid, FORM_WALK_TIME, FORM_WALK_NODES)
+    })
+    .await
+    .unwrap_or_default();
+    let blank = fields
+        .iter()
+        .filter(|field| accessibility_form::is_blank(&field.value))
+        .count();
+    let focused_is_text_area = tokio::task::spawn_blocking(fill::focused_field)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|field| field.role == "AXTextArea");
+    if form::looks_like_form(blank, focused_is_text_area) {
+        return fill_the_form(app, &state, cancel, fields).await;
+    }
+
+    let field = match tokio::task::spawn_blocking(fill::focused_field).await {
+        Ok(Ok(field)) => field,
+        Ok(Err(refusal)) if refusal.show => return Outcome::Nothing(refusal.message),
+        Ok(Err(_)) => return Outcome::Silent,
+        Err(_) => return Outcome::Failed("The text box could not be read.".to_string()),
+    };
 
     let gathered = {
         let pid = field.pid;
@@ -196,26 +246,9 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         // Without the permission the capture shows only the wallpaper.
         gathered.screenshot = None;
     }
-    let mut ocr_chars = 0;
-    if gathered.screen_text.trim().chars().count() < ENOUGH_SCREEN_TEXT_CHARS {
-        if let Some(image) = gathered.screenshot.clone() {
-            let read = tokio::time::timeout(
-                OCR_BUDGET,
-                tokio::task::spawn_blocking(move || crate::accessibility::ocr_screen_text(&image)),
-            )
-            .await;
-            if let Ok(Ok(read)) = read {
-                ocr_chars = read.trim().chars().count();
-                if !read.trim().is_empty() {
-                    gathered.screen_text = format!("{}\n{}", gathered.screen_text.trim(), read);
-                }
-            }
-        }
-    }
     let text_chars = gathered.screen_text.trim().chars().count();
     tracing::info!(
         text_chars,
-        ocr_chars,
         screenshot = gathered.screenshot.is_some(),
         screen_visible,
         web_field = field.web,
@@ -266,6 +299,11 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         return Outcome::Nothing("ChatGPT could not tell what to write in this box.");
     };
 
+    tracing::info!(
+        reply_chars = reply.chars().count(),
+        web_field = field.web,
+        "smart_fill:writing the reply"
+    );
     let handle = app.clone();
     let revealed =
         tokio::task::spawn_blocking(move || reveal(&handle, &field, &reply, &cancel)).await;
@@ -273,6 +311,165 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         Ok(outcome) => outcome,
         Err(_) => Outcome::Failed("Writing stopped unexpectedly.".to_string()),
     }
+}
+
+/// Fills a whole form from what memory states: the fields and the notes go to
+/// ChatGPT (no screenshot), the answer is checked, and each value is written
+/// into its field in order.
+async fn fill_the_form(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    cancel: Arc<AtomicBool>,
+    fields: Vec<accessibility_form::FormField>,
+) -> Outcome {
+    let infos: Vec<form::FieldInfo> = fields
+        .iter()
+        .filter(|field| accessibility_form::is_blank(&field.value))
+        .map(|field| form::FieldInfo {
+            index: field.index,
+            kind: field.kind,
+            label: field.label.clone(),
+            dom_id: field.dom_id.clone(),
+            current: field.value.clone(),
+        })
+        .collect();
+    overlay::begin(app, None);
+    overlay::progress(app, None, "Looking through your memory");
+
+    let notes = form_notes(state, &infos).await;
+    tracing::info!(
+        fields = infos.len(),
+        notes = notes.len(),
+        note_apps = %notes
+            .iter()
+            .map(|note| format!("{}:{}", note.app_name, note.text.chars().count()))
+            .collect::<Vec<_>>()
+            .join(","),
+        "smart_fill:form read the fields and memory"
+    );
+    let answer = crate::ipc::commands::codex_account::answer_smart_fill_form_with_codex(
+        form::user_text(&infos, &notes),
+        cancel.clone(),
+        FORM_CODEX_TIMEOUT,
+    )
+    .await;
+    if cancel.load(Ordering::SeqCst) {
+        return Outcome::Stopped;
+    }
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(message) => return Outcome::Failed(message),
+    };
+    let values = form::parse_values(&answer, &infos);
+    tracing::info!(
+        values = values.len(),
+        fields = infos.len(),
+        "smart_fill:form values from memory"
+    );
+    if values.is_empty() {
+        return Outcome::Nothing("FNDR's memory doesn't state what this form asks for.");
+    }
+
+    let handle = app.clone();
+    let total = values.len();
+    let written = tokio::task::spawn_blocking(move || {
+        fill::with_clipboard_restored(|| write_form(&handle, &fields, &values, &cancel))
+    })
+    .await;
+    match written {
+        Ok((count, stopped)) if stopped => {
+            tracing::info!(count, "smart_fill:form stopped");
+            Outcome::Stopped
+        }
+        Ok((count, _)) => Outcome::Filled(format!("Filled {count} of {} fields", infos.len())),
+        Err(_) => Outcome::Failed(format!(
+            "Filling stopped unexpectedly after {total} values."
+        )),
+    }
+}
+
+/// Writes each value into its field, announcing progress. Returns how many
+/// went in and whether Esc stopped it. A field that refuses is skipped.
+fn write_form(
+    app: &AppHandle,
+    fields: &[accessibility_form::FormField],
+    values: &[(usize, String)],
+    cancel: &AtomicBool,
+) -> (usize, bool) {
+    let total = values.len();
+    let mut done = 0;
+    for (position, (index, text)) in values.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            return (done, true);
+        }
+        let Some(field) = fields.iter().find(|field| field.index == *index) else {
+            continue;
+        };
+        let text = match field.kind {
+            accessibility_form::FieldKind::Date => match form::date_keystrokes(text) {
+                Some(digits) => digits,
+                None => continue,
+            },
+            _ => text.clone(),
+        };
+        overlay::progress(app, None, &format!("Filling {} of {total}", position + 1));
+        match accessibility_form::write(field, &text) {
+            Ok(()) => done += 1,
+            Err(message) => tracing::debug!("Smart Fill skipped a field: {message}"),
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    (done, false)
+}
+
+/// The notes that may state what a form asks for: a few searches built from
+/// the field labels and the usual personal details, through the one retrieval
+/// function so the blocklist and quality rules apply.
+async fn form_notes(state: &AppState, fields: &[form::FieldInfo]) -> Vec<MemoryNote> {
+    let mut queries: Vec<String> = vec![
+        "my full name email phone number".to_string(),
+        "my date of birth".to_string(),
+        "my home address city state zip country".to_string(),
+        "my university degree major graduation".to_string(),
+        "my passport number nationality".to_string(),
+    ];
+    let labels: Vec<&str> = fields.iter().map(|field| field.label.as_str()).collect();
+    for chunk in labels.chunks(6).take(4) {
+        queries.push(format!("my {}", chunk.join(" ")));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut notes = Vec::new();
+    for query in queries {
+        let Ok(results) = crate::ipc::commands::search::search_ranked_results(
+            state,
+            &query,
+            Some("365d"),
+            None,
+            5,
+        )
+        .await
+        else {
+            continue;
+        };
+        for result in results {
+            if !seen.insert(result.id.clone()) {
+                continue;
+            }
+            notes.push(note_for(state, result).await);
+        }
+    }
+    // The person's own saved details come first: they are what a form asks for.
+    if let Some(text) = crate::profile_facts::saved_details_text(state.app_data_dir.as_path()) {
+        notes.insert(
+            0,
+            MemoryNote {
+                app_name: "Saved details".to_string(),
+                window_title: "the person's own".to_string(),
+                text,
+            },
+        );
+    }
+    notes
 }
 
 /// The app, window and field label of the box, and the screenshot the
@@ -359,22 +556,57 @@ async fn memory_notes(state: &AppState, gathered: &Gathered) -> Vec<MemoryNote> 
     )
     .await
     {
-        Ok(results) => results
-            .into_iter()
-            .map(|result| MemoryNote {
-                app_name: result.app_name,
-                window_title: result.window_title,
-                text: if result.snippet.trim().is_empty() {
-                    result.clean_text
-                } else {
-                    result.snippet
-                },
-            })
-            .collect(),
+        Ok(results) => {
+            let mut notes = Vec::new();
+            for result in results {
+                notes.push(note_for(state, result).await);
+            }
+            notes
+        }
         Err(err) => {
             tracing::debug!("Smart Fill went without memories: {err}");
             Vec::new()
         }
+    }
+}
+
+/// What a memory said, as the model should read it. Search results carry only
+/// a short summary of a capture ("reviewed some details" states none of them);
+/// the page's own text is kept as chunks beside the memory. The chunks win when
+/// they hold more than the summary.
+async fn note_for(state: &AppState, result: crate::storage::SearchResult) -> MemoryNote {
+    let chunks = state
+        .store
+        .list_chunks_for_memory(&result.id)
+        .await
+        .unwrap_or_default();
+    let from_chunks = chunks
+        .iter()
+        .map(|chunk| chunk.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = [&result.clean_text, &result.text, &result.snippet]
+        .into_iter()
+        .max_by_key(|text| text.trim().chars().count())
+        .cloned()
+        .unwrap_or_default();
+    tracing::info!(
+        app = %result.app_name,
+        chunks = chunks.len(),
+        chunk_chars = from_chunks.chars().count(),
+        summary_chars = summary.chars().count(),
+        "smart_fill:note text"
+    );
+    let text = if from_chunks.chars().count() > summary.chars().count() {
+        from_chunks
+    } else {
+        summary
+    };
+    MemoryNote {
+        app_name: result.app_name,
+        window_title: result.window_title,
+        text,
     }
 }
 
@@ -495,32 +727,5 @@ mod tests {
         assert!(step_delay(steps) * steps as u32 <= Duration::from_millis(300 * 70));
         assert_eq!(step_delay(1), Duration::from_millis(70));
         assert_eq!(step_delay(1_000), Duration::from_millis(15));
-    }
-
-    #[test]
-    #[ignore = "Needs the OCR engine and synthetic screenshots in $FNDR_SMART_FILL_FIXTURES; run: cargo test --lib ocr_reads_a_conversation -- --ignored --nocapture"]
-    fn ocr_reads_a_conversation_and_an_email_from_a_screenshot() {
-        let dir = std::env::var("FNDR_SMART_FILL_FIXTURES").unwrap_or_else(|_| {
-            format!(
-                "{}/smartfill-fixtures",
-                std::env::var("HOME").unwrap_or_default()
-            )
-        });
-        for (name, needles) in [
-            ("imessage.png", ["saturday", "speaker", "thai"]),
-            ("email.png", ["budget", "thursday", "finance"]),
-        ] {
-            let image = std::fs::read(format!("{dir}/{name}")).expect("fixture");
-            let started = std::time::Instant::now();
-            let text = crate::accessibility::ocr_screen_text(&image).to_lowercase();
-            println!(
-                "{name}: {} chars in {:?}",
-                text.chars().count(),
-                started.elapsed()
-            );
-            for needle in needles {
-                assert!(text.contains(needle), "{name}: OCR missed {needle:?}");
-            }
-        }
     }
 }

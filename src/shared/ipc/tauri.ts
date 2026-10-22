@@ -2787,6 +2787,16 @@ export async function setSmartFillEnabled(enabled: boolean): Promise<boolean> {
     return invoke<boolean>("set_smart_fill_enabled", { enabled });
 }
 
+/** How many personal details Smart Fill has saved from labelled lines on screen. */
+export async function getSavedDetailsCount(): Promise<number> {
+    return invoke<number>("saved_details_count");
+}
+
+/** Forgets every saved personal detail; resolves to the new count (0). */
+export async function forgetSavedDetails(): Promise<number> {
+    return invoke<number>("forget_saved_details");
+}
+
 /** How FNDR speaks: `config.toml` [voice_output]. */
 export interface VoiceOutputSettings {
     /** "auto" or a speech provider id (`src/shared/voice/speechProvider.ts`). */
