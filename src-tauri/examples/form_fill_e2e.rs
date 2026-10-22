@@ -63,7 +63,14 @@ fn main() {
             FieldKind::Text => "text",
             FieldKind::Date => "date",
             FieldKind::Select => "select",
+            FieldKind::Option => "option",
+            FieldKind::Upload => "file",
         };
-        println!("{:<16} {:<6} => {:?}", field.dom_id, kind, current_value(field));
+        println!(
+            "{:<16} {:<6} => {:?}",
+            field.dom_id,
+            kind,
+            current_value(field)
+        );
     }
 }

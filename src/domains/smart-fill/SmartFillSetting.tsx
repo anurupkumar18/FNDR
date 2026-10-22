@@ -62,7 +62,7 @@ export function SmartFillSetting() {
                         message on screen or the answer a form asks for. On a form it fills every field your memory states, sending the field names and up to 24 related memories (no screenshot). In any other text box each use sends a downscaled screenshot of your
                         main display, the text on it and up to four related memories to ChatGPT, on your plan. Esc
                         stops it. It never writes into password fields, apps on your blocklist or anything while
-                        Private Mode is on. While it is on, FNDR also saves labelled details it sees on screen, such as "Phone: ...", in a private file on this Mac, so it can fill a whole form; only the ones a form asks for are sent to ChatGPT. If macOS Dictation is set to start on Command twice, change one of them.
+                        Private Mode is on. While it is on, FNDR also saves labelled details it sees on screen, such as "Phone: ...", in a private file on this Mac, so it can fill a whole form; ChatGPT then sees those details and your related memories. If a form has a file box, the names of your recent files (names only, nothing opened) are sent too, so it can suggest which one to attach. If macOS Dictation is set to start on Command twice, change one of them.
                     </small>
                 </span>
                 <input

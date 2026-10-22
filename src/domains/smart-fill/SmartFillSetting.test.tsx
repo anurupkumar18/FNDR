@@ -35,6 +35,7 @@ describe("SmartFillSetting", () => {
         ipc.getSavedDetailsCount.mockResolvedValue(10);
         render(<SmartFillSetting />);
         expect(await screen.findByText(/saves labelled details it sees on screen/i)).toBeInTheDocument();
+        expect(screen.getByText(/names of your recent files \(names only, nothing opened\)/i)).toBeInTheDocument();
         expect(await screen.findByText(/10 personal details saved on this Mac/i)).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Forget saved details" }));
         await waitFor(() => expect(ipc.forgetSavedDetails).toHaveBeenCalled());

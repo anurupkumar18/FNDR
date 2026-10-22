@@ -11,6 +11,7 @@
 //! ChatGPT only for this request.
 
 pub mod double_tap;
+pub mod files;
 pub mod form;
 pub mod monitor;
 pub mod overlay;
@@ -214,10 +215,7 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
     })
     .await
     .unwrap_or_default();
-    let blank = fields
-        .iter()
-        .filter(|field| accessibility_form::is_blank(&field.value))
-        .count();
+    let blank = form::blank_form_fields(&fields);
     let focused_is_text_area = tokio::task::spawn_blocking(fill::focused_field)
         .await
         .ok()
@@ -322,23 +320,33 @@ async fn fill_the_form(
     cancel: Arc<AtomicBool>,
     fields: Vec<accessibility_form::FormField>,
 ) -> Outcome {
-    let infos: Vec<form::FieldInfo> = fields
-        .iter()
-        .filter(|field| accessibility_form::is_blank(&field.value))
-        .map(|field| form::FieldInfo {
-            index: field.index,
-            kind: field.kind,
-            label: field.label.clone(),
-            dom_id: field.dom_id.clone(),
-            current: field.value.clone(),
-        })
-        .collect();
+    let infos = form::model_fields(&fields);
+    let uploads = form::upload_fields(&fields);
     overlay::begin(app, None);
     overlay::progress(app, None, "Looking through your memory");
+
+    // For a form with file boxes, the names of the person's recent files go to
+    // the model too (names only), so it can say which one a box is asking for.
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let files = match (&home, uploads.is_empty()) {
+        (Some(home), false) => {
+            let home = home.clone();
+            tokio::task::spawn_blocking(move || files::candidates(&home, files::MAX_CANDIDATES))
+                .await
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    let file_labels: Vec<String> = match &home {
+        Some(home) => files.iter().map(|file| files::label(home, file)).collect(),
+        None => Vec::new(),
+    };
 
     let notes = form_notes(state, &infos).await;
     tracing::info!(
         fields = infos.len(),
+        uploads = uploads.len(),
+        files = file_labels.len(),
         notes = notes.len(),
         note_apps = %notes
             .iter()
@@ -348,7 +356,7 @@ async fn fill_the_form(
         "smart_fill:form read the fields and memory"
     );
     let answer = crate::ipc::commands::codex_account::answer_smart_fill_form_with_codex(
-        form::user_text(&infos, &notes),
+        form::user_text(&infos, &notes, &uploads, &file_labels),
         cancel.clone(),
         FORM_CODEX_TIMEOUT,
     )
@@ -361,13 +369,27 @@ async fn fill_the_form(
         Err(message) => return Outcome::Failed(message),
     };
     let values = form::parse_values(&answer, &infos);
+    let suggestions: Vec<String> = form::parse_files(&answer, &uploads, file_labels.len())
+        .into_iter()
+        .filter_map(|(field, file)| {
+            let label = uploads.iter().find(|(index, _)| *index == field)?.1.clone();
+            let name = file_labels.get(file)?;
+            Some(format!("{}: {}", label.trim_end_matches(['*', ' ']), name))
+        })
+        .take(2)
+        .collect();
     tracing::info!(
         values = values.len(),
         fields = infos.len(),
+        suggested_files = suggestions.len(),
         "smart_fill:form values from memory"
     );
     if values.is_empty() {
-        return Outcome::Nothing("FNDR's memory doesn't state what this form asks for.");
+        return if suggestions.is_empty() {
+            Outcome::Nothing("FNDR's memory doesn't state what this form asks for.")
+        } else {
+            Outcome::Filled(format!("Attach: {}", suggestions.join(" | ")))
+        };
     }
 
     let handle = app.clone();
@@ -381,7 +403,13 @@ async fn fill_the_form(
             tracing::info!(count, "smart_fill:form stopped");
             Outcome::Stopped
         }
-        Ok((count, _)) => Outcome::Filled(format!("Filled {count} of {} fields", infos.len())),
+        Ok((count, _)) => {
+            let mut message = format!("Filled {count} of {} fields", infos.len());
+            if !suggestions.is_empty() {
+                message.push_str(&format!(". Attach: {}", suggestions.join(" | ")));
+            }
+            Outcome::Filled(message)
+        }
         Err(_) => Outcome::Failed(format!(
             "Filling stopped unexpectedly after {total} values."
         )),

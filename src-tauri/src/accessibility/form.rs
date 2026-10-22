@@ -18,6 +18,15 @@ use super::{
     K_AX_ERROR_SUCCESS,
 };
 
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFNumberGetTypeID() -> usize;
+    fn CFNumberGetValue(number: super::CFTypeRef, kind: i32, out: *mut i64) -> bool;
+}
+
+/// `kCFNumberSInt64Type`.
+const CF_NUMBER_SINT64: i32 = 4;
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementIsAttributeSettable(
@@ -25,6 +34,36 @@ extern "C" {
         attribute: super::CFStringRef,
         settable: *mut bool,
     ) -> super::AXError;
+}
+
+/// The element's value as text, including a number (a web checkbox or radio
+/// reports 0 or 1, not a string).
+unsafe fn value_text(element: &AxElement) -> String {
+    if let Some(text) = ax_string_attr(element.0, "AXValue") {
+        return text;
+    }
+    let Ok(raw) = ax_copy_attr_value(element.0, "AXValue") else {
+        return String::new();
+    };
+    if raw.is_null() {
+        return String::new();
+    }
+    let mut text = String::new();
+    if super::CFGetTypeID(raw) == super::CFBooleanGetTypeID() {
+        text = if super::CFBooleanGetValue(raw) {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string();
+    } else if super::CFGetTypeID(raw) == CFNumberGetTypeID() {
+        let mut number = 0_i64;
+        if CFNumberGetValue(raw, CF_NUMBER_SINT64, &mut number) {
+            text = number.to_string();
+        }
+    }
+    CFRelease(raw);
+    text
 }
 
 /// Whether the person could type into the element: its value can be set.
@@ -42,6 +81,10 @@ pub enum FieldKind {
     Text,
     Select,
     Date,
+    /// A radio button or checkbox: one choice of a question, or a single box.
+    Option,
+    /// A file chooser. Never written; Smart Fill suggests files for it.
+    Upload,
 }
 
 #[derive(Clone)]
@@ -56,6 +99,14 @@ pub struct FormField {
     pub value: String,
     /// Menu choices of a pop-up, in order.
     pub options: Vec<String>,
+    /// For an option: the question it answers (its group's title), if any.
+    pub group: String,
+    /// For an option: it is already picked.
+    pub checked: bool,
+    /// A checkbox, which Space flips: ticking an unreadable one could untick it.
+    pub toggle: bool,
+    /// The page reports whether the option is picked.
+    pub state_known: bool,
     pub(crate) element: AxElement,
 }
 
@@ -85,6 +136,9 @@ pub(crate) fn field_kind(role: &str, subrole: &str) -> Option<FieldKind> {
     if subrole == "AXSecureTextField" {
         return None;
     }
+    if role == "AXRadioButton" || role == "AXCheckBox" {
+        return Some(FieldKind::Option);
+    }
     if role == "AXPopUpButton" {
         return Some(FieldKind::Select);
     }
@@ -100,14 +154,63 @@ pub(crate) fn looks_like_date_placeholder(value: &str) -> bool {
     value.contains("mm") && value.contains("dd") && value.contains("yyyy")
 }
 
+/// A file chooser shows as a button named "<label>: No file chosen" (or
+/// "<label>: <file name>" once something is chosen). Returns the label.
+pub(crate) fn upload_label(role: &str, title: &str) -> Option<String> {
+    if role != "AXButton" {
+        return None;
+    }
+    let lower = title.to_ascii_lowercase();
+    if let Some((label, rest)) = title.split_once(": ") {
+        if rest.to_ascii_lowercase().contains("no file chosen") && !label.trim().is_empty() {
+            return Some(label.trim().to_string());
+        }
+    }
+    (lower == "choose file" || lower == "no file chosen").then(|| String::new())
+}
+
+/// Whether an option may be offered for filling. A radio button is safe to
+/// press (it only ever selects). A checkbox is offered only when the page
+/// says whether it is ticked; pressing an unreadable one could untick it.
+pub fn safe_to_press(toggle: bool, state_known: bool) -> bool {
+    !toggle || state_known
+}
+
 /// A date box's calendar button is a pop-up in the tree but not a field.
 pub(crate) fn is_picker_button(label: &str, dom_id: &str) -> bool {
     dom_id == "picker" || label.to_ascii_lowercase().starts_with("show date picker")
 }
 
+/// A pop-up's "nothing chosen" text: "Select...", "Choose one", "-- Please
+/// select --", "Pick a country…".
+pub(crate) fn is_placeholder_choice(value: &str) -> bool {
+    let value = value
+        .trim()
+        .trim_matches(|c: char| matches!(c, '-' | '–' | '—' | ' '));
+    let lower = value.to_ascii_lowercase();
+    lower.is_empty()
+        || lower.starts_with("select")
+        || lower.starts_with("choose")
+        || lower.starts_with("please")
+        || lower.starts_with("pick")
+        || lower == "none"
+        || lower.ends_with("...")
+        || lower.ends_with('\u{2026}')
+}
+
+/// Whether a field of `kind` holding `value` is still empty. A pop-up showing
+/// its placeholder is empty; a radio or checkbox is empty until picked.
+pub fn is_blank_for(kind: FieldKind, value: &str) -> bool {
+    match kind {
+        FieldKind::Select => is_placeholder_choice(value),
+        _ => is_blank(value),
+    }
+}
+
 /// `value` is empty, or only a date box's format hint.
 pub(crate) fn is_blank(value: &str) -> bool {
-    value.trim().is_empty() || looks_like_date_placeholder(value)
+    let value = value.trim();
+    value.is_empty() || matches!(value, "0" | "false") || looks_like_date_placeholder(value)
 }
 
 unsafe fn label_text(element: &AxElement) -> String {
@@ -184,8 +287,9 @@ pub fn discover(pid: i32, max_time: Duration, max_nodes: usize) -> Vec<FormField
 
         let mut last_text = String::new();
         let mut visited = 0_usize;
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
+        // Each node travels with the question of the group it sits in.
+        let mut stack: Vec<(AxElement, String)> = vec![(root, String::new())];
+        while let Some((node, group)) = stack.pop() {
             visited += 1;
             if visited > max_nodes || started.elapsed() > max_time {
                 break;
@@ -197,13 +301,35 @@ pub fn discover(pid: i32, max_time: Duration, max_nodes: usize) -> Vec<FormField
                     last_text = text.trim().to_string();
                 }
             }
-            if let Some(kind) = field_kind(&role, &subrole) {
+            // A fieldset or radio group names the question its options answer.
+            let mut child_group = group.clone();
+            if role == "AXGroup" || role == "AXRadioGroup" {
+                let named = ax_string_attr(node.0, "AXTitle")
+                    .or_else(|| ax_string_attr(node.0, "AXDescription"))
+                    .unwrap_or_default();
+                if !named.trim().is_empty()
+                    && (subrole == "AXApplicationGroup" || role == "AXRadioGroup")
+                {
+                    child_group = named.trim().to_string();
+                }
+            }
+            let title = ax_string_attr(node.0, "AXTitle").unwrap_or_default();
+            let upload = upload_label(&role, &title);
+            let kind = if upload.is_some() {
+                Some(FieldKind::Upload)
+            } else {
+                field_kind(&role, &subrole)
+            };
+            if let Some(kind) = kind {
                 let enabled = ax_string_attr(node.0, "AXEnabled")
                     .map(|v| v != "0" && v != "false")
                     .unwrap_or(true);
                 let editable = kind != FieldKind::Text || value_is_settable(&node);
                 if enabled && editable {
-                    let mut label = label_text(&node);
+                    let mut label = match &upload {
+                        Some(label) if !label.is_empty() => label.clone(),
+                        _ => label_text(&node),
+                    };
                     if label.is_empty() {
                         label = last_text.clone();
                     }
@@ -213,11 +339,16 @@ pub fn discover(pid: i32, max_time: Duration, max_nodes: usize) -> Vec<FormField
                     }
                     let placeholder =
                         ax_string_attr(node.0, "AXPlaceholderValue").unwrap_or_default();
-                    let value = ax_string_attr(node.0, "AXValue").unwrap_or_default();
+                    let value = value_text(&node);
                     let options = if kind == FieldKind::Select {
                         menu_options(&tree, &node)
                     } else {
                         Vec::new()
+                    };
+                    let group_name = if kind == FieldKind::Option {
+                        group.clone()
+                    } else {
+                        String::new()
                     };
                     fields.push(FormField {
                         index: fields.len(),
@@ -225,15 +356,19 @@ pub fn discover(pid: i32, max_time: Duration, max_nodes: usize) -> Vec<FormField
                         label,
                         placeholder,
                         dom_id,
+                        checked: kind == FieldKind::Option && !is_blank(&value),
+                        toggle: role == "AXCheckBox",
+                        state_known: !value.trim().is_empty(),
                         value,
                         options,
+                        group: group_name,
                         element: node.clone(),
                     });
                 }
             }
             if role != "AXPopUpButton" {
                 for child in tree.children(&node).into_iter().rev() {
-                    stack.push(child);
+                    stack.push((child, child_group.clone()));
                 }
             }
         }
@@ -253,7 +388,7 @@ pub fn focus(field: &FormField) -> bool {
 
 /// What the field holds now.
 pub fn current_value(field: &FormField) -> String {
-    unsafe { ax_string_attr(field.element.0, "AXValue") }.unwrap_or_default()
+    unsafe { value_text(&field.element) }
 }
 
 /// Escapes text for an AppleScript string literal.
@@ -283,6 +418,9 @@ pub(crate) fn type_keystrokes(text: &str) -> Result<(), String> {
 /// Puts `text` in the field: pasted into a text box (so the page sees a real
 /// paste), typed into a date box or a pop-up. The focus is set first.
 pub fn write(field: &FormField, text: &str) -> Result<(), String> {
+    if field.kind == FieldKind::Option {
+        return press(field);
+    }
     if !focus(field) {
         return Err("The field would not take focus.".to_string());
     }
@@ -290,7 +428,27 @@ pub fn write(field: &FormField, text: &str) -> Result<(), String> {
     match field.kind {
         FieldKind::Text => paste_into_frontmost_app(text, false),
         FieldKind::Date | FieldKind::Select => type_keystrokes(text),
+        FieldKind::Option => press(field),
+        FieldKind::Upload => Err("A file chooser is never filled.".to_string()),
     }
+}
+
+/// Picks a radio button or ticks a checkbox the way a keyboard user does: focus
+/// it, then press Space. A browser ignores `AXPress` on these.
+pub fn press(field: &FormField) -> Result<(), String> {
+    if !focus(field) {
+        return Err("The option would not take focus.".to_string());
+    }
+    std::thread::sleep(Duration::from_millis(80));
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to key code 49")
+        .status()
+        .map_err(|error| format!("Could not pick the option: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| "Picking the option was refused.".to_string())
 }
 
 #[cfg(test)]
@@ -323,11 +481,60 @@ mod tests {
     }
 
     #[test]
-    fn passwords_buttons_and_checkboxes_are_not() {
+    fn passwords_buttons_and_plain_text_are_not_fields() {
         assert_eq!(field_kind("AXTextField", "AXSecureTextField"), None);
         assert_eq!(field_kind("AXButton", ""), None);
-        assert_eq!(field_kind("AXCheckBox", ""), None);
         assert_eq!(field_kind("AXStaticText", ""), None);
+    }
+
+    #[test]
+    fn radios_and_checkboxes_are_options_and_a_file_chooser_is_an_upload() {
+        assert_eq!(field_kind("AXRadioButton", ""), Some(FieldKind::Option));
+        assert_eq!(field_kind("AXCheckBox", ""), Some(FieldKind::Option));
+        assert_eq!(
+            upload_label("AXButton", "Resume / CV *: No file chosen").as_deref(),
+            Some("Resume / CV *")
+        );
+        assert_eq!(upload_label("AXButton", "Submit application"), None);
+        assert_eq!(upload_label("AXTextField", "Resume: No file chosen"), None);
+    }
+
+    #[test]
+    fn a_dropdown_showing_its_placeholder_is_empty() {
+        for placeholder in [
+            "Select...",
+            "Select\u{2026}",
+            "Choose one",
+            "-- Please select --",
+            "Pick a country...",
+            "",
+        ] {
+            assert!(
+                is_blank_for(FieldKind::Select, placeholder),
+                "{placeholder:?}"
+            );
+        }
+        for chosen in ["United States", "Referral", "B.S."] {
+            assert!(!is_blank_for(FieldKind::Select, chosen), "{chosen}");
+        }
+        assert!(
+            !is_blank_for(FieldKind::Text, "Select..."),
+            "a text box keeps its text"
+        );
+    }
+
+    #[test]
+    fn a_checkbox_with_unreadable_state_is_never_pressed_but_a_radio_always_may_be() {
+        assert!(safe_to_press(false, false), "radio");
+        assert!(safe_to_press(true, true), "readable checkbox");
+        assert!(!safe_to_press(true, false), "unreadable checkbox");
+    }
+
+    #[test]
+    fn an_unchecked_box_counts_as_blank() {
+        assert!(is_blank("0"));
+        assert!(is_blank("false"));
+        assert!(!is_blank("1"));
     }
 
     #[test]
