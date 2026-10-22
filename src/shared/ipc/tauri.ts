@@ -1537,6 +1537,14 @@ export async function setAgentNotesEnabled(enabled: boolean): Promise<void> {
     return invoke("set_agent_notes_enabled", { enabled });
 }
 
+export async function getVerbatimMemoryEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_verbatim_memory_enabled");
+}
+
+export async function setVerbatimMemoryEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_verbatim_memory_enabled", { enabled });
+}
+
 export async function getBlocklist(): Promise<string[]> {
     return invoke<string[]>("get_blocklist");
 }
@@ -2785,6 +2793,16 @@ export async function getSmartFillEnabled(): Promise<boolean> {
 
 export async function setSmartFillEnabled(enabled: boolean): Promise<boolean> {
     return invoke<boolean>("set_smart_fill_enabled", { enabled });
+}
+
+/** How many personal details Smart Fill has saved from labelled lines on screen. */
+export async function getSavedDetailsCount(): Promise<number> {
+    return invoke<number>("saved_details_count");
+}
+
+/** Forgets every saved personal detail; resolves to the new count (0). */
+export async function forgetSavedDetails(): Promise<number> {
+    return invoke<number>("forget_saved_details");
 }
 
 /** How FNDR speaks: `config.toml` [voice_output]. */

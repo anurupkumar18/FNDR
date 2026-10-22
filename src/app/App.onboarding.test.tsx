@@ -67,6 +67,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getAppNames: vi.fn().mockResolvedValue([]),
     getBlocklist: vi.fn().mockResolvedValue([]),
     getAgentNotesEnabled: vi.fn().mockResolvedValue(false),
+    getVerbatimMemoryEnabled: vi.fn().mockResolvedValue(false),
+    setVerbatimMemoryEnabled: vi.fn().mockResolvedValue(undefined),
     getMeetingStatus: vi.fn().mockResolvedValue(null),
     getPrivacyAlerts: vi.fn().mockResolvedValue([]),
     onMeetingStatus: vi.fn().mockResolvedValue(() => {}),

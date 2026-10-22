@@ -52,6 +52,15 @@ describe("development UI preview IPC", () => {
         window.history.replaceState(null, "", "/");
     });
 
+    it("keeps the full text on by default and lets it be switched off", async () => {
+        const invoke = createPreviewIpcHandler();
+        await expect(invoke("get_verbatim_memory_enabled")).resolves.toBe(true);
+        await expect(invoke("set_verbatim_memory_enabled", { enabled: false })).resolves.toBeUndefined();
+        await expect(invoke("get_verbatim_memory_enabled")).resolves.toBe(false);
+        await expect(invoke("set_verbatim_memory_enabled", { enabled: "false" })).rejects.toThrow(/boolean/);
+        await expect(invoke("set_verbatim_memory_enabled", { enabled: true })).resolves.toBeUndefined();
+    });
+
     it("keeps assistant note consent off until explicitly enabled", async () => {
         const invoke = createPreviewIpcHandler();
         await expect(invoke("get_agent_notes_enabled")).resolves.toBe(false);

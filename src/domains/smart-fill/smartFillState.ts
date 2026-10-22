@@ -14,9 +14,9 @@ export function smartFillLabel(phase: SmartFillPhase, message: string | null): s
         case "thinking":
             return "Reading the screen";
         case "writing":
-            return "Writing";
+            return message ?? "Writing";
         case "done":
-            return "Done";
+            return message ?? "Done";
         case "stopped":
             return "Stopped";
         case "notice":

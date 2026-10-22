@@ -58,6 +58,7 @@ use std::sync::Arc;
 pub const MEMORIES_TABLE: &str = crate::inference::model_config::MEMORIES_V4_TABLE;
 pub const MEMORIES_V5_PARENT_TABLE: &str = MEMORIES_V5_TABLE;
 pub const MEMORY_CHUNKS_TABLE: &str = "memory_chunks_v1_bge_1024";
+pub use verbatim::{VerbatimEntry, VerbatimStats, MEMORY_VERBATIM_TABLE};
 /// The chunk column `chunk_keyword_search` indexes (VS-18).
 const CHUNK_FTS_COLUMN: &str = "text";
 pub const TASKS_TABLE: &str = "tasks";
@@ -177,6 +178,7 @@ pub struct Store {
     rows_since_fts_optimize: AtomicUsize,
     memories_v5_table: Table,
     memory_chunks_table: Table,
+    verbatim_table: Table,
     tasks_table: Table,
     meetings_table: Table,
     segments_table: Table,
@@ -197,6 +199,7 @@ mod arrow_and_filters;
 mod normalize_embed_migrate;
 mod schemas;
 mod text_kw;
+mod verbatim;
 
 use arrow_and_filters::*;
 use normalize_embed_migrate::*;
@@ -252,6 +255,8 @@ impl Store {
             graph_edges_table,
         ) = rt.block_on(open_all_tables(&db_path))?;
 
+        let verbatim_table = rt.block_on(verbatim::open_verbatim_table(&db_path))?;
+
         // Migrate legacy storages if present.
         let memories_json = data_dir.join("memories.json");
         if memories_json.exists() {
@@ -288,6 +293,7 @@ impl Store {
             rows_since_fts_optimize: AtomicUsize::new(0),
             memories_v5_table,
             memory_chunks_table,
+            verbatim_table,
             tasks_table,
             meetings_table,
             segments_table,
@@ -1122,7 +1128,11 @@ impl Store {
             return Err("Refusing to replace a memory with empty id".into());
         }
         // Note: deliberately not touching memory chunks: children outlive a
-        // parent review pass.
+        // parent review pass. A soft delete is a forget, so the text goes.
+        if record.is_soft_deleted {
+            self.delete_verbatim_for_memories(std::slice::from_ref(&record.id))
+                .await?;
+        }
         let normalized = normalize_record_for_index(record);
         let batch = records_to_batch(&[normalized])?;
         let schema = Arc::new(memory_schema());
@@ -1330,6 +1340,7 @@ impl Store {
                 error_if_tagged_old_versions: Some(false),
             })
             .await?;
+        self.prune_verbatim_versions(older_than_days).await?;
         Ok(stats)
     }
 
@@ -1823,6 +1834,7 @@ impl Store {
         for id in &ids {
             self.delete_chunks_for_memory(id).await?;
         }
+        self.delete_verbatim_for_memories(&ids).await?;
         Ok(ids)
     }
 
@@ -1892,6 +1904,7 @@ impl Store {
         }
         self.table.delete(filter).await?;
         let chunks = self.delete_chunks_for_memories(&ids).await?;
+        self.delete_verbatim_for_memories(&ids).await?;
         for id_batch in ids.chunks(128) {
             if let Some(v5_filter) = build_string_match_filter("id", id_batch) {
                 self.memories_v5_table.delete(&v5_filter).await?;
@@ -2530,6 +2543,7 @@ impl Store {
         self.memory_chunks_table
             .delete("memory_id IS NOT NULL")
             .await?;
+        self.delete_all_verbatim().await?;
         Ok(())
     }
 
@@ -2579,6 +2593,7 @@ impl Store {
         // Count before deletion.
         let before = self.table.count_rows(None).await?;
         self.delete_chunks_for_memories(&ids).await?;
+        self.delete_verbatim_for_memories(&ids).await?;
         let graph_ids: Vec<String> = ids.iter().map(|id| format!("memory:{id}")).collect();
         for batch in graph_ids.chunks(128) {
             self.delete_graph_nodes(batch).await?;
@@ -2602,6 +2617,8 @@ impl Store {
             .delete(&format!("id = '{id}'"))
             .await?;
         self.delete_chunks_for_memory(memory_id).await?;
+        self.delete_verbatim_for_memories(&[memory_id.to_string()])
+            .await?;
         let after = self.table.count_rows(None).await?;
         Ok(before.saturating_sub(after))
     }

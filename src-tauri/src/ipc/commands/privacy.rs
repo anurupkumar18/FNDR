@@ -36,6 +36,48 @@ fn update_agent_notes_enabled(
     Ok(())
 }
 
+/// "Keep the full text of what FNDR sees on this Mac" (ADR 036).
+#[tauri::command]
+pub async fn get_verbatim_memory_enabled(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    Ok(state.config.read().verbatim.enabled)
+}
+
+/// Turning it off deletes every stored text at once; memories and their
+/// summaries stay.
+#[tauri::command]
+pub async fn set_verbatim_memory_enabled(
+    state: State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    update_verbatim_enabled(&state.config, enabled, |config| {
+        config.save().map_err(|error| error.to_string())
+    })?;
+    if !enabled {
+        let verbatim = state.config.read().verbatim.clone();
+        crate::verbatim::sweep(
+            &state.store,
+            &verbatim,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn update_verbatim_enabled(
+    config: &parking_lot::RwLock<crate::config::Config>,
+    enabled: bool,
+    save: impl FnOnce(&crate::config::Config) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut current = config.write();
+    let mut next = current.clone();
+    next.verbatim.enabled = enabled;
+    // A failed save must not widen what memory keeps for this session.
+    save(&next)?;
+    *current = next;
+    Ok(())
+}
+
 /// Get blocklist
 #[tauri::command]
 pub async fn get_blocklist(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
@@ -415,6 +457,27 @@ mod agent_notes_settings_tests {
             assert_eq!(result.unwrap_err(), "config is read-only");
             assert_eq!(config.read().agent_notes_enabled, previous);
         }
+    }
+
+    #[test]
+    fn verbatim_switch_persists_and_a_failed_save_keeps_the_previous_value() {
+        let config = RwLock::new(Config::default());
+        assert!(config.read().verbatim.enabled, "on by default");
+        let saved = std::cell::Cell::new(true);
+        update_verbatim_enabled(&config, false, |next| {
+            saved.set(next.verbatim.enabled);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!saved.get() && !config.read().verbatim.enabled);
+        assert_eq!(config.read().verbatim.retention_days, 7);
+
+        let result = update_verbatim_enabled(&config, true, |_| Err("read-only".to_string()));
+        assert_eq!(result.unwrap_err(), "read-only");
+        assert!(
+            !config.read().verbatim.enabled,
+            "a failed save keeps the previous value"
+        );
     }
 }
 

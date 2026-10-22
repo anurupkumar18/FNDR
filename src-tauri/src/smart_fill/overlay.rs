@@ -126,6 +126,14 @@ pub fn begin(app: &AppHandle, caret: Option<ScreenRect>) {
     emit(app, "thinking", None);
 }
 
+/// A sentence of progress, for work that takes a while ("Filling 3 of 12").
+pub fn progress(app: &AppHandle, caret: Option<ScreenRect>, text: &str) {
+    if caret.is_some() {
+        place(app, caret);
+    }
+    emit(app, "writing", Some(text.to_string()));
+}
+
 /// Text is going in: keep the glow on the caret.
 pub fn follow(app: &AppHandle, caret: Option<ScreenRect>) {
     if caret.is_some() {

@@ -45,6 +45,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     }),
     getBlocklist: vi.fn().mockResolvedValue([]),
     getAgentNotesEnabled: vi.fn().mockResolvedValue(false),
+    getVerbatimMemoryEnabled: vi.fn().mockResolvedValue(false),
+    setVerbatimMemoryEnabled: vi.fn().mockResolvedValue(undefined),
     getAutofillSettings: vi.fn().mockResolvedValue({
         enabled: true,
         shortcut: "Alt+F",

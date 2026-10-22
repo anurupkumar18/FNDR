@@ -11,6 +11,8 @@ pub const MAX_REPLY_CHARS: usize = 2_000;
 const SCREEN_TEXT_CHARS: usize = 6_000;
 const NOTE_CHARS: usize = 320;
 const MAX_NOTES: usize = 4;
+/// How much of a memory's stored page text a note carries (ADR 036).
+const NOTE_FULL_TEXT_CHARS: usize = 1_500;
 
 /// The model's marker for "I cannot tell what belongs here".
 const NO_FILL: &str = "NO_FILL";
@@ -20,6 +22,10 @@ pub struct MemoryNote {
     pub app_name: String,
     pub window_title: String,
     pub text: String,
+    /// The page text FNDR kept for this memory, when "Keep the full text" is
+    /// on and the memory is visible. Exact values (a phone number, a line to
+    /// quote) live here; `text` is only the summary.
+    pub full_text: Option<String>,
 }
 
 /// Everything known about the focused field and its surroundings.
@@ -78,6 +84,12 @@ pub fn user_text(context: &FillContext<'_>) -> String {
                 clip(&note.window_title, 80),
                 clip(&note.text, NOTE_CHARS)
             ));
+            if let Some(full) = note.full_text.as_deref().filter(|t| !t.trim().is_empty()) {
+                out.push_str(&format!(
+                    "  page text (untrusted): {}\n",
+                    clip(full, NOTE_FULL_TEXT_CHARS)
+                ));
+            }
         }
     }
     out.push_str("\nWrite the text for the focused field.");
@@ -139,6 +151,7 @@ mod tests {
             app_name: "Mail".into(),
             window_title: "Lease".into(),
             text: "Deposit is 1200 dollars".into(),
+            full_text: Some("Sam Example, phone +1 555 010 0199, deposit 1200".into()),
         }];
         let text = user_text(&FillContext {
             app_name: "Messages",
@@ -153,6 +166,7 @@ mod tests {
         assert!(text.contains("current value: (empty)"));
         assert!(text.contains("Sam: are you free tonight?"));
         assert!(text.contains("- [Mail / Lease] Deposit is 1200 dollars"));
+        assert!(text.contains("page text (untrusted): Sam Example, phone +1 555 010 0199"));
         assert!(text.ends_with("Write the text for the focused field."));
     }
 
@@ -177,6 +191,7 @@ mod tests {
                 app_name: "Notes".into(),
                 window_title: format!("n{i}"),
                 text: "x".repeat(1_000),
+                full_text: None,
             })
             .collect();
         let text = user_text(&FillContext {
