@@ -9,7 +9,7 @@
 
 use super::registry::{spec_for, ActionSpec, Effect, Surface};
 use crate::operator::plan;
-use crate::operator::policy::{classify, Observed, Risk};
+use crate::operator::policy::{classify_for, Observed, Risk};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +85,8 @@ pub struct Settings {
     pub agent_notes_enabled: bool,
     /// Optional confirmation for an app the person did not name.
     pub confirm_unnamed_apps: bool,
+    /// How much Notch Do asks before acting (ADR 037).
+    pub autonomy: crate::operator::policy::Autonomy,
 }
 
 impl From<&crate::config::Config> for Settings {
@@ -93,6 +95,7 @@ impl From<&crate::config::Config> for Settings {
             kill_switch: config.actions_kill_switch,
             agent_notes_enabled: config.agent_notes_enabled,
             confirm_unnamed_apps: config.confirm_unnamed_apps,
+            autonomy: config.notch_do_autonomy,
         }
     }
 }
@@ -174,14 +177,21 @@ fn asks_to_open(request: &str) -> bool {
 }
 
 /// What the operator policy says of the call, for the surfaces it decides.
-fn operator_risk(spec: &ActionSpec, call: &Call) -> Option<Risk> {
+fn operator_risk(spec: &ActionSpec, call: &Call, settings: &Settings) -> Option<Risk> {
     let fallback = Observed::default();
     match (spec.surface, spec.tool) {
-        (Surface::ComputerUse, tool) => {
-            Some(classify(tool, call.args, call.observed.unwrap_or(&fallback)).risk)
-        }
+        (Surface::ComputerUse, tool) => Some(
+            classify_for(
+                settings.autonomy,
+                tool,
+                call.args,
+                call.observed.unwrap_or(&fallback),
+            )
+            .risk,
+        ),
         (Surface::NotchPlan, "open_app") => Some(
-            classify(
+            classify_for(
+                settings.autonomy,
                 "open_app",
                 &serde_json::json!({ "name": text(call.args, "app") }),
                 &fallback,
@@ -203,7 +213,7 @@ pub fn decide(call: &Call, settings: &Settings) -> Gate {
     if settings.kill_switch && !reads_only {
         return Gate::Refuse(KILL_SWITCH_MESSAGE.to_string());
     }
-    match operator_risk(spec, call) {
+    match operator_risk(spec, call, settings) {
         Some(Risk::Never) => return Gate::Refuse(format!("{} is off limits.", spec.title)),
         Some(Risk::Confirm) => {
             return Gate::Confirm(format!("{} waits for a tap.", spec.title));
@@ -267,6 +277,7 @@ mod tests {
             kill_switch: false,
             agent_notes_enabled: true,
             confirm_unnamed_apps: false,
+            autonomy: crate::operator::policy::Autonomy::AskEach,
         }
     }
 
@@ -375,6 +386,7 @@ mod tests {
             kill_switch: true,
             agent_notes_enabled: true,
             confirm_unnamed_apps: false,
+            autonomy: crate::operator::policy::Autonomy::AskEach,
         };
         let args = json!({"app": "Notes", "url": "https://github.com"});
         for spec in crate::action_layer::registry::all() {
@@ -402,6 +414,7 @@ mod tests {
             kill_switch: false,
             agent_notes_enabled: false,
             confirm_unnamed_apps: false,
+            autonomy: crate::operator::policy::Autonomy::AskEach,
         };
         assert!(matches!(decide(&call, &off), Gate::Refuse(_)));
     }

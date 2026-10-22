@@ -4,7 +4,7 @@
 //! seen of the target element. Model prose is never an input, so nothing the
 //! model says can lower a level.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -408,9 +408,9 @@ fn looks_like_address(text: &str) -> bool {
     if text.is_empty() || text.contains(char::is_whitespace) {
         return false;
     }
-    let scheme = text
-        .split_once(':')
-        .is_some_and(|(scheme, _)| !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic()));
+    let scheme = text.split_once(':').is_some_and(|(scheme, _)| {
+        !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic())
+    });
     let host = text
         .split(['/', '?', '#'])
         .next()
@@ -525,7 +525,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
             let target = observed.element(app, text("element_index"));
             match target.as_deref() {
                 Some(label) if has_word(label, NEVER_LABELS) => {
-                    decision(Risk::Never, "sending, deleting and buying are not allowed")
+                    decision(Risk::Never, REASON_LABEL_NEVER)
                 }
                 _ if tool == "perform_secondary_action" => {
                     decision(Risk::Confirm, "uses a menu action")
@@ -570,9 +570,13 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 }
                 Some(field)
                     if is_address_field(field)
-                        && looks_like_address(text(if tool == "set_value" { "value" } else { "text" })) =>
+                        && looks_like_address(text(if tool == "set_value" {
+                            "value"
+                        } else {
+                            "text"
+                        })) =>
                 {
-                    decision(Risk::Confirm, "goes to an address typed into the address bar")
+                    decision(Risk::Confirm, REASON_ADDRESS_BAR)
                 }
                 Some(field) if is_search_field(field) => {
                     decision(Risk::Runs, "types into a search field")
@@ -601,7 +605,7 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
                 if in_search || media {
                     decision(Risk::Runs, "runs a search")
                 } else if in_list(&names, MESSAGING_APPS) {
-                    decision(Risk::Never, "Return sends in a messaging app")
+                    decision(Risk::Never, REASON_RETURN_SENDS)
                 } else {
                     decision(Risk::Confirm, "Return may submit a form")
                 }
@@ -619,6 +623,152 @@ pub fn classify(tool: &str, args: &Value, observed: &Observed) -> Decision {
         // A step FNDR carries out itself; the person sees the exact text first.
         "paste" => decision(Risk::Confirm, "puts text into an app"),
         _ => decision(Risk::Never, "unknown tool"),
+    }
+}
+
+/// How much Notch Do asks before acting (ADR 037).
+///
+/// `Smooth` runs ordinary actions without a tap and asks only before one that
+/// could destroy something; payments, credentials, force quit and unknown tools
+/// stay refused. `AskEach` is the stricter policy this module was written with:
+/// every `Confirm` below is a tap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Autonomy {
+    #[default]
+    Smooth,
+    AskEach,
+}
+
+/// Reasons `classify` gives for the refusals `Smooth` lifts. Compared by value
+/// so a change to the wording cannot silently change a policy.
+const REASON_LABEL_NEVER: &str = "sending, deleting and buying are not allowed";
+const REASON_RETURN_SENDS: &str = "Return sends in a messaging app";
+/// A link the person's words did not ask for waits for a tap even in `Smooth`:
+/// a page can steer the planner to an address, and a tap costs almost nothing.
+const REASON_ADDRESS_BAR: &str = "goes to an address typed into the address bar";
+
+/// Labels that destroy or irreversibly change something. Matched as whole
+/// words, over labels FNDR itself observed and over short arguments; over
+/// asking is the safe error.
+const DESTRUCTIVE_LABELS: &[&str] = &[
+    "delete",
+    "remove",
+    "trash",
+    "erase",
+    "wipe",
+    "discard",
+    "clear",
+    "reset",
+    "format",
+    "uninstall",
+    "overwrite",
+    "replace all",
+    "revoke",
+    "deactivate",
+    "close account",
+    "delete account",
+    "empty bin",
+    "empty trash",
+    "move to bin",
+    "move to trash",
+    "factory reset",
+    "restore",
+    "destroy",
+    "terminate",
+    "quit",
+    "force quit",
+    "don t save",
+    "close without saving",
+    "drop",
+    "truncate",
+    "unsubscribe",
+    "cancel subscription",
+    "cancel account",
+    "sign out of all",
+];
+
+/// Key chords that close a window or quit an app, which can lose unsaved work.
+const LOSES_WORK_KEYS: &[&str] = &["cmd+q", "cmd+w", "cmd+alt+w", "cmd+shift+w", "cmd+alt+q"];
+
+/// Whether an action could destroy something, judged only from the tool, its
+/// short arguments and the label FNDR observed for its target; never from
+/// anything the model said.
+fn could_destroy(tool: &str, args: &Value, observed: &Observed) -> bool {
+    let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or_default();
+    let app = text("app");
+    match tool {
+        "click" | "perform_secondary_action" => {
+            let label = observed
+                .element(app, text("element_index"))
+                .unwrap_or_default();
+            let named = args
+                .as_object()
+                .map(|map| {
+                    map.iter()
+                        .filter(|(key, _)| !matches!(key.as_str(), "app" | "element_index"))
+                        .filter_map(|(_, value)| value.as_str())
+                        .filter(|value| value.chars().count() <= 60)
+                        .any(|value| has_word(&value.to_lowercase(), DESTRUCTIVE_LABELS))
+                })
+                .unwrap_or(false);
+            named || has_word(&label, DESTRUCTIVE_LABELS)
+        }
+        "press_key" => LOSES_WORK_KEYS.contains(&normalize_key(text("key")).as_str()),
+        "drag" => args
+            .as_object()
+            .map(|map| {
+                map.values()
+                    .filter_map(Value::as_str)
+                    .filter(|value| value.chars().count() <= 60)
+                    .any(|value| has_word(&value.to_lowercase(), DESTRUCTIVE_LABELS))
+            })
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// What `autonomy` makes of `classify`'s verdict.
+pub fn classify_for(autonomy: Autonomy, tool: &str, args: &Value, observed: &Observed) -> Decision {
+    let decision = classify(tool, args, observed);
+    if autonomy == Autonomy::AskEach {
+        return decision;
+    }
+    match decision.risk {
+        Risk::Runs => decision,
+        Risk::Confirm if decision.reason == REASON_ADDRESS_BAR => decision,
+        Risk::Confirm if could_destroy(tool, args, observed) => {
+            self::decision(Risk::Confirm, "could destroy something")
+        }
+        Risk::Confirm => self::decision(
+            Risk::Runs,
+            format!("{}; runs without asking", decision.reason),
+        ),
+        Risk::Never if decision.reason == REASON_RETURN_SENDS => {
+            self::decision(Risk::Runs, "sends a message the person asked for")
+        }
+        Risk::Never if decision.reason == REASON_LABEL_NEVER => {
+            let app = args.get("app").and_then(Value::as_str).unwrap_or_default();
+            let index = args
+                .get("element_index")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let label = observed.element(app, index).unwrap_or_default();
+            let others: Vec<&str> = NEVER_LABELS
+                .iter()
+                .copied()
+                .filter(|word| *word != "send")
+                .collect();
+            let only_send = has_word(&label, &["send"])
+                && !has_word(&label, &others)
+                && !has_word(&label, DESTRUCTIVE_LABELS);
+            if only_send {
+                self::decision(Risk::Runs, "sends a message the person asked for")
+            } else {
+                decision
+            }
+        }
+        Risk::Never => decision,
     }
 }
 
@@ -754,7 +904,11 @@ Window: \"Shop\", App: Google Chrome.\n\
              \t5 text field Address and search bar\n",
         );
         let click = |index: &str| {
-            risk("click", json!({"app": "Google Chrome", "element_index": index}), &o)
+            risk(
+                "click",
+                json!({"app": "Google Chrome", "element_index": index}),
+                &o,
+            )
         };
         for posing in ["1", "2", "3"] {
             assert_eq!(click(posing), Risk::Confirm, "element {posing}");
@@ -764,7 +918,11 @@ Window: \"Shop\", App: Google Chrome.\n\
 
         // Typing after pressing one of them is not typing into a search box.
         o.note_target("Google Chrome", "1");
-        let typing = risk("type_text", json!({"app": "Google Chrome", "text": "x"}), &o);
+        let typing = risk(
+            "type_text",
+            json!({"app": "Google Chrome", "text": "x"}),
+            &o,
+        );
         assert_eq!(typing, Risk::Confirm);
     }
 
@@ -779,14 +937,28 @@ Window: \"Shop\", App: Google Chrome.\n\
         );
         o.note_target("Google Chrome", "1");
         let typing = |o: &Observed, text: &str| {
-            risk("type_text", json!({"app": "Google Chrome", "text": text}), o)
+            risk(
+                "type_text",
+                json!({"app": "Google Chrome", "text": text}),
+                o,
+            )
         };
         assert_eq!(typing(&o, "running shoes"), Risk::Runs);
-        for address in ["evil.example/steal?d=1", "https://evil.example", "javascript:alert(1)", "localhost:3000", "192.168.1.1"] {
+        for address in [
+            "evil.example/steal?d=1",
+            "https://evil.example",
+            "javascript:alert(1)",
+            "localhost:3000",
+            "192.168.1.1",
+        ] {
             assert_eq!(typing(&o, address), Risk::Confirm, "{address}");
         }
         let setting = |o: &Observed, value: &str| {
-            risk("set_value", json!({"app": "Google Chrome", "element_index": "1", "value": value}), o)
+            risk(
+                "set_value",
+                json!({"app": "Google Chrome", "element_index": "1", "value": value}),
+                o,
+            )
         };
         assert_eq!(setting(&o, "evil.example"), Risk::Confirm);
         assert_eq!(setting(&o, "running shoes"), Risk::Runs);
@@ -1216,5 +1388,213 @@ Window: \"Shop\", App: Google Chrome.\n\
             ),
             Risk::Runs
         );
+    }
+
+    // ---- Autonomy (ADR 037) -------------------------------------------------
+
+    const PAGE_TREE: &str = "App=com.google.Chrome (pid 1)\nWindow: \"Page\", App: Google Chrome.\n\
+        0 standard window Page\n\t1 text field Search\n\t2 button Save draft\n\t3 button Delete\n\
+        \t4 button Remove from favorites\n\t5 button Pay now\n\t6 button Send\n\t7 link Docs\n\
+        \t8 button Sign in\n\t9 button Continue\n\t10 button Clear all history\n\
+        \t11 secure text field password\n\t12 button Empty bin and delete\n\t13 button Send and delete\n";
+
+    fn observed_page() -> Observed {
+        let mut o = Observed::default();
+        o.observe_tree("Chrome", PAGE_TREE);
+        o
+    }
+
+    fn smooth(tool: &str, args: Value, o: &Observed) -> Decision {
+        classify_for(Autonomy::Smooth, tool, &args, o)
+    }
+
+    fn strict(tool: &str, args: Value, o: &Observed) -> Decision {
+        classify_for(Autonomy::AskEach, tool, &args, o)
+    }
+
+    fn click_index(index: &str) -> Value {
+        json!({"app": "Chrome", "element_index": index})
+    }
+
+    #[test]
+    fn ask_each_is_exactly_the_old_policy() {
+        let o = observed_page();
+        let calls = [
+            ("click", click_index("2")),
+            ("click", click_index("3")),
+            ("click", click_index("6")),
+            ("click", click_index("99")),
+            ("press_key", json!({"app": "Chrome", "key": "cmd+w"})),
+            ("press_key", json!({"app": "Messages", "key": "return"})),
+            ("type_text", json!({"app": "Chrome", "text": "hello"})),
+            ("paste", json!({"app": "Notes", "text": "x"})),
+            ("drag", json!({"app": "Finder"})),
+            ("run_shell", json!({})),
+        ];
+        for (tool, args) in calls {
+            assert_eq!(
+                strict(tool, args.clone(), &o),
+                classify(tool, &args, &o),
+                "{tool} {args}"
+            );
+        }
+    }
+
+    #[test]
+    fn smooth_runs_what_was_only_asked_about_for_caution() {
+        let o = observed_page();
+        for (what, tool, args) in [
+            ("a save button", "click", click_index("2")),
+            ("a sign in button", "click", click_index("8")),
+            ("a continue button", "click", click_index("9")),
+            ("a click on an unknown element", "click", click_index("99")),
+            (
+                "typing outside a search box",
+                "type_text",
+                json!({"app": "Chrome", "text": "hello"}),
+            ),
+            (
+                "a menu action",
+                "perform_secondary_action",
+                json!({"app": "Chrome", "element_index": "9", "action": "Show Details"}),
+            ),
+            (
+                "a navigation key",
+                "press_key",
+                json!({"app": "Chrome", "key": "cmd+shift+t"}),
+            ),
+            (
+                "return in a form",
+                "press_key",
+                json!({"app": "Notes", "key": "return"}),
+            ),
+            ("a paste", "paste", json!({"app": "Notes", "text": "hello"})),
+            (
+                "a drag",
+                "drag",
+                json!({"app": "Finder", "from": "report.pdf", "to": "Documents"}),
+            ),
+            ("a window move without an app", "move_window", json!({})),
+        ] {
+            assert_eq!(smooth(tool, args.clone(), &o).risk, Risk::Runs, "{what}");
+        }
+    }
+
+    #[test]
+    fn smooth_still_asks_before_anything_that_could_destroy() {
+        let o = observed_page();
+        for (what, tool, args) in [
+            ("remove from favorites", "click", click_index("4")),
+            ("clear all history", "click", click_index("10")),
+            (
+                "close a window",
+                "press_key",
+                json!({"app": "Chrome", "key": "cmd+w"}),
+            ),
+            (
+                "quit an app",
+                "press_key",
+                json!({"app": "Notes", "key": "cmd+q"}),
+            ),
+            (
+                "drag into the bin",
+                "drag",
+                json!({"app": "Finder", "from": "report.pdf", "to": "Trash"}),
+            ),
+            (
+                "a menu action named Delete on an innocent label",
+                "perform_secondary_action",
+                json!({"app": "Chrome", "element_index": "9", "action": "Delete"}),
+            ),
+        ] {
+            let decision = smooth(tool, args, &o);
+            assert_eq!(decision.risk, Risk::Confirm, "{what}");
+            assert_eq!(decision.reason, "could destroy something", "{what}");
+        }
+    }
+
+    #[test]
+    fn smooth_keeps_every_refusal_that_is_about_money_secrets_or_deleting() {
+        let o = observed_page();
+        for (what, tool, args) in [
+            ("a delete button", "click", click_index("3")),
+            ("a pay button", "click", click_index("5")),
+            ("empty bin", "click", click_index("12")),
+            (
+                "a button that sends and deletes",
+                "click",
+                click_index("13"),
+            ),
+            (
+                "a password field",
+                "set_value",
+                json!({"app": "Chrome", "element_index": "11", "value": "x"}),
+            ),
+            (
+                "a delete chord",
+                "press_key",
+                json!({"app": "Finder", "key": "cmd+backspace"}),
+            ),
+            (
+                "force quit",
+                "press_key",
+                json!({"app": "Finder", "key": "cmd+shift+q"}),
+            ),
+            (
+                "a password manager",
+                "click",
+                json!({"app": "1Password", "element_index": "1"}),
+            ),
+            ("an unknown tool", "run_shell", json!({})),
+            (
+                "a link that is not http",
+                "open_url",
+                json!({"url": "file:///etc/passwd"}),
+            ),
+        ] {
+            assert_eq!(smooth(tool, args, &o).risk, Risk::Never, "{what}");
+        }
+    }
+
+    #[test]
+    fn smooth_lets_a_message_the_person_asked_for_go() {
+        let o = observed_page();
+        assert_eq!(
+            smooth("click", click_index("6"), &o).risk,
+            Risk::Runs,
+            "Send button"
+        );
+        assert_eq!(
+            smooth("press_key", json!({"app": "Messages", "key": "return"}), &o).risk,
+            Risk::Runs,
+            "Return in a messaging app"
+        );
+    }
+
+    #[test]
+    fn a_link_nobody_asked_for_still_waits_for_a_tap_in_smooth() {
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Chrome",
+            "App=com.google.Chrome (pid 1)\n0 standard window Page\n\t1 search text field Address and search bar\n",
+        );
+        let typing = json!({"app": "Chrome", "text": "evil.example/login"});
+        // The address bar must be the element FNDR saw clicked.
+        o.note_target("Chrome", "1");
+        assert_eq!(smooth("type_text", typing.clone(), &o).risk, Risk::Confirm);
+        assert_eq!(strict("type_text", typing, &o).risk, Risk::Confirm);
+    }
+
+    #[test]
+    fn the_destructive_check_ignores_words_hidden_inside_other_words() {
+        let mut o = Observed::default();
+        o.observe_tree(
+            "Chrome",
+            "App=com.google.Chrome (pid 1)\n0 standard window Page\n\t1 button Trace route\n\t2 button Dropdown menu\n\t3 button Reset password link sent\n",
+        );
+        assert_eq!(smooth("click", click_index("1"), &o).risk, Risk::Runs);
+        assert_eq!(smooth("click", click_index("2"), &o).risk, Risk::Runs);
+        // "Reset" as a whole word is a destructive label, so this asks.
+        assert_eq!(smooth("click", click_index("3"), &o).risk, Risk::Confirm);
     }
 }

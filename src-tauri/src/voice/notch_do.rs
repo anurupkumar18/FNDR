@@ -38,6 +38,30 @@ pub async fn set_notch_do_muted(
     Ok(muted)
 }
 
+/// How much Notch Do asks before acting (ADR 037).
+#[tauri::command]
+pub async fn get_notch_do_autonomy(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::operator::policy::Autonomy, String> {
+    Ok(state.inner().config.read().notch_do_autonomy)
+}
+
+/// Sets how much Notch Do asks before acting. A run already under way keeps the
+/// setting it started with; the next one uses the new value.
+#[tauri::command]
+pub async fn set_notch_do_autonomy(
+    state: State<'_, Arc<AppState>>,
+    autonomy: crate::operator::policy::Autonomy,
+) -> Result<crate::operator::policy::Autonomy, String> {
+    let mut config = state.inner().config.write();
+    let previous = std::mem::replace(&mut config.notch_do_autonomy, autonomy);
+    if let Err(err) = config.save() {
+        config.notch_do_autonomy = previous;
+        return Err(err.to_string());
+    }
+    Ok(autonomy)
+}
+
 /// Turns the Esc monitor on while a run works or waits on an approval, and off
 /// when it ends. Needs the Accessibility grant Notch Do already holds.
 #[tauri::command]

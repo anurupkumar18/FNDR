@@ -2311,6 +2311,17 @@ export async function setNotchDoMuted(muted: boolean): Promise<boolean> {
     return invoke<boolean>("set_notch_do_muted", { muted });
 }
 
+/** `smooth` asks only before an action that could destroy something; `ask_each` asks before each action. */
+export type NotchDoAutonomy = "smooth" | "ask_each";
+
+export async function getNotchDoAutonomy(): Promise<NotchDoAutonomy> {
+    return invoke<NotchDoAutonomy>("get_notch_do_autonomy");
+}
+
+export async function setNotchDoAutonomy(autonomy: NotchDoAutonomy): Promise<NotchDoAutonomy> {
+    return invoke<NotchDoAutonomy>("set_notch_do_autonomy", { autonomy });
+}
+
 /** Watches for Esc outside the notch while a run works; FNDR's own key presses are ignored. */
 export async function setNotchEscapeMonitor(active: boolean): Promise<void> {
     return invoke<void>("set_notch_escape_monitor", { active });

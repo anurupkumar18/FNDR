@@ -29,6 +29,7 @@ fn settings() -> Settings {
         kill_switch: false,
         agent_notes_enabled: false,
         confirm_unnamed_apps: false,
+        autonomy: fndr_lib::operator::policy::Autonomy::AskEach,
     }
 }
 

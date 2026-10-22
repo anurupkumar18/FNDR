@@ -966,6 +966,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let previewActionSettings = { actions_kill_switch: false, confirm_unnamed_apps: false };
     let previewNotchDoMuted: boolean | null = null;
     let previewSmartFillEnabled = false;
+    let previewNotchDoAutonomy: "smooth" | "ask_each" = "smooth";
     const previewSkills: NotchDoSkill[] = [{
         id: "preview-skill-1",
         name: "Monday setup",
@@ -1279,6 +1280,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 }
                 previewSmartFillEnabled = enabled;
                 return enabled;
+            }
+            case "get_notch_do_autonomy":
+                return previewNotchDoAutonomy;
+            case "set_notch_do_autonomy": {
+                const { autonomy } = payload as { autonomy?: unknown };
+                if (autonomy !== "smooth" && autonomy !== "ask_each") {
+                    throw new Error("Preview set_notch_do_autonomy requires smooth or ask_each.");
+                }
+                previewNotchDoAutonomy = autonomy;
+                return autonomy;
             }
             case "get_notch_do_muted":
                 return previewNotchDoMuted;
