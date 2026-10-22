@@ -222,6 +222,7 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
                 <button type="button" className={hasImported ? "rcpt-quiet" : "rcpt-primary"} disabled={busy || loading || !RECOMMENDED.some((kind) => sources.some((source) => source.kind === kind))} onClick={recommended}>Import everything recommended</button>
                 <button type="button" className={hasImported ? "rcpt-primary" : "rcpt-quiet"} onClick={() => onContinue?.(!hasImported)}>{hasImported ? "Continue to FNDR" : "Skip imports"}</button>
               </div>
+              {!hasImported && <p className="import-onboarding-note">Skipping imports opens FNDR without bringing in past browser, file, or calendar history. You can import later in Settings.</p>}
             </>}
             {mode === "settings" && answerMs !== null && <p>First imported answer: {(answerMs / 1000).toFixed(1)} seconds. Stored locally.</p>}
             {forgetKind && <div ref={forgetDialog} role="alertdialog" aria-label="Forget source" aria-modal="true">
