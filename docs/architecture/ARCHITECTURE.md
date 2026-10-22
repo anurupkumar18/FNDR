@@ -63,7 +63,7 @@ Pipeline knobs live in `src-tauri/src/config.rs` rather than scattered literals:
 
 The current pipeline embeds each `MemoryRecord` as a single vector. The planned upgrade introduces a **parent-child RAG** model governed by ADR 008:
 
-- **Parent**: `MemoryRecord`, the capture unit with metadata, insight fields, compacted text, and bounded source statements when available. Raw OCR text is cleared by normal storage compaction. Current durable write path targets `memories_v4_minilm_384` (384-d MiniLM).
+- **Parent**: `MemoryRecord`, the capture unit with metadata, insight fields, compacted text, and bounded source statements when available. Raw OCR text is cleared by normal storage compaction; when the "Keep the full text" setting is on, the cleaned text is kept separately in `memory_verbatim_v1` (ADR 036), outside search and ranking. Current durable write path targets `memories_v4_minilm_384` (384-d MiniLM).
 - **Child chunk**: `MemoryChunkRecord` (Subagent 7) — an overlapping text window derived from the parent's `clean_text`, carrying its own BGE 1024-d embedding and a `parent_id` foreign key. Target table: `memory_chunks_v1_bge_1024`.
 
 At query time the chunk index is searched first for precision; matched chunks' parent records are fetched for card synthesis. The parent rollup vector is the embedding of the highest-salience child chunk, aligned with the existing `rank_salient_spans` strategy.

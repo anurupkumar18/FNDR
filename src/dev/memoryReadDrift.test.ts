@@ -20,7 +20,7 @@ const SRC = "src-tauri/src";
 
 /** Store methods that return many memories at once. */
 const BULK_READS =
-    /\.(list_all_memories|list_recent_results|get_memories_in_range|get_search_results_in_range|get_recent_memories|list_recent_by_session_or_project|vector_search|snippet_vector_search|image_vector_search|chunk_vector_search|chunk_keyword_search|keyword_search)\(/;
+    /\.(list_all_memories|list_recent_results|get_memories_in_range|get_search_results_in_range|get_recent_memories|list_recent_by_session_or_project|vector_search|snippet_vector_search|image_vector_search|chunk_vector_search|chunk_keyword_search|keyword_search|verbatim_text_unchecked)\(/;
 
 /** Why each reader is safe. "shown" readers name the check they apply. */
 const READERS: Record<string, string> = {
@@ -46,6 +46,7 @@ const READERS: Record<string, string> = {
     // Never shown as read: linking, repair, review and indexing.
     "capture/clipboard.rs": "internal: links a clipboard copy to the newest capture",
     "capture/mod.rs": "internal: duplicate and merge detection at capture",
+    "verbatim.rs": "shown: text_for_memory applies memory_is_visible and the retention window before returning stored page text",
     "downloads.rs": "internal: links a download to its source capture",
     "graph/legacy.rs": "internal: graph edges between captures",
     "ipc/commands/graph.rs": "internal: graph backfill",

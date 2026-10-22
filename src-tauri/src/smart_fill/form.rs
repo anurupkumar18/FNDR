@@ -262,6 +262,12 @@ pub fn user_text(
                 }
             )
         ));
+        if let Some(full) = note.full_text.as_deref().filter(|t| !t.trim().is_empty()) {
+            out.push_str(&format!(
+                "  page text (untrusted): {}\n",
+                clip(full, NOTE_CHARS)
+            ));
+        }
     }
     out.push_str("\nReturn the JSON with the values the notes state.");
     out
@@ -424,6 +430,7 @@ mod tests {
                 app_name: "Preview".into(),
                 window_title: "resume.pdf".into(),
                 text: "Sam Example, born January 2 2000".into(),
+                full_text: None,
             }],
             &[],
             &[],
@@ -445,11 +452,13 @@ mod tests {
                     app_name: "TextEdit".into(),
                     window_title: "details".into(),
                     text: details.clone(),
+                    full_text: None,
                 },
                 MemoryNote {
                     app_name: "Web".into(),
                     window_title: "page".into(),
                     text: long,
+                    full_text: None,
                 },
             ],
             &[],
@@ -464,6 +473,7 @@ mod tests {
                 app_name: SAVED_DETAILS_APP.into(),
                 window_title: "the person's own".into(),
                 text: "Label: value\n".repeat(200),
+                full_text: None,
             }],
             &[],
             &[],

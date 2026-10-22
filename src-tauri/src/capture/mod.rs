@@ -2176,6 +2176,7 @@ pub async fn run_capture_loop(state: Arc<AppState>) -> Result<(), Box<dyn std::e
             match state.store.add_batch_and_get_count(&batch).await {
                 Ok(inserted_count) => {
                     if inserted_count > 0 {
+                        crate::verbatim::keep_flushed_batch(state.as_ref(), &batch).await;
                         for outcome in batch_outcomes.iter() {
                             state.capture_stats.record_store(*outcome);
                         }
@@ -4956,6 +4957,7 @@ async fn merge_or_append_memory_record(
                     merged.id,
                     anchor
                 );
+                let carried_text = crate::verbatim::text_before_merge(state, &existing.id).await;
                 state
                     .store
                     .delete_memory_by_id(&existing.id)
@@ -4967,6 +4969,13 @@ async fn merge_or_append_memory_record(
                     .add_batch(&[merged.clone()])
                     .await
                     .map_err(|e| e.to_string())?;
+                crate::verbatim::keep_after_persisted_merge(
+                    state,
+                    carried_text,
+                    &merged,
+                    &incoming,
+                )
+                .await;
                 if let Err(err) =
                     context_runtime::sync_memory_record(state, &merged, Some("screen")).await
                 {
@@ -5027,6 +5036,7 @@ async fn merge_or_append_memory_record(
                 incoming.id,
                 merged.id
             );
+            let carried_text = crate::verbatim::text_before_merge(state, &existing.id).await;
             state
                 .store
                 .delete_memory_by_id(&existing.id)
@@ -5038,6 +5048,8 @@ async fn merge_or_append_memory_record(
                 .add_batch(&[merged.clone()])
                 .await
                 .map_err(|e| e.to_string())?;
+            crate::verbatim::keep_after_persisted_merge(state, carried_text, &merged, &incoming)
+                .await;
             if let Err(err) =
                 context_runtime::sync_memory_record(state, &merged, Some("screen")).await
             {
@@ -5097,6 +5109,7 @@ async fn merge_or_append_memory_record(
                 incoming.id,
                 merged.id
             );
+            let carried_text = crate::verbatim::text_before_merge(state, &existing.id).await;
             state
                 .store
                 .delete_memory_by_id(&existing.id)
@@ -5107,6 +5120,8 @@ async fn merge_or_append_memory_record(
                 .add_batch(&[merged.clone()])
                 .await
                 .map_err(|e| e.to_string())?;
+            crate::verbatim::keep_after_persisted_merge(state, carried_text, &merged, &incoming)
+                .await;
             if let Err(err) =
                 context_runtime::sync_memory_record(state, &merged, Some("screen")).await
             {

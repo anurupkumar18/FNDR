@@ -170,6 +170,12 @@ fn main() {
                 }
             }
 
+            // Verbatim page text follows its own switch, window and budget.
+            tauri::async_runtime::block_on(fndr_lib::verbatim::sweep_now(
+                &store_arc,
+                &config.verbatim,
+            ));
+
             // Create app state with no engines yet — we kick off the eager
             // load below as a background task so the Tauri setup callback
             // is not blocked on Metal initialization. The capture loop
@@ -293,6 +299,8 @@ fn main() {
                                 }
                             }
                         }
+                        fndr_lib::verbatim::sweep_now(&retention_state.store, &config.verbatim)
+                            .await;
                         match retention_state.store.compact_and_prune(7).await {
                             Ok(_) => tracing::info!("Periodic Lance compaction finished"),
                             Err(err) => {
@@ -894,6 +902,8 @@ fn main() {
             // Privacy & data
             ipc::commands::get_agent_notes_enabled,
             ipc::commands::set_agent_notes_enabled,
+            ipc::commands::get_verbatim_memory_enabled,
+            ipc::commands::set_verbatim_memory_enabled,
             ipc::commands::get_blocklist,
             ipc::commands::set_blocklist,
             ipc::commands::delete_all_data,

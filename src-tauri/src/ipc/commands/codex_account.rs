@@ -1461,6 +1461,7 @@ mod tests {
                    Employer: Example Corp\nRole: Software Engineer\nWork authorization: Authorized to work in the US\n\
                    Needs visa sponsorship: No\nFavorite editor: Helix"
                 .to_string(),
+            full_text: None,
         }];
         let raw = answer_smart_fill_form_with_codex(
             user_text(&fields, &notes, &uploads, &files),
@@ -1570,6 +1571,7 @@ mod tests {
             app_name: app.to_string(),
             window_title: title.to_string(),
             text: text.to_string(),
+            full_text: None,
         };
         let notes = vec![
             note("Preview", "resume.pdf", "Jordan Avery Lee. jordan.lee@example.com, (385) 555-0117. Example University, B.S. Computer Science, expected May 2026, GPA 3.82. Springfield, UT."),
@@ -1668,6 +1670,7 @@ mod tests {
             app_name: "Notes".to_string(),
             window_title: "Budget".to_string(),
             text: text.to_string(),
+            full_text: None,
         };
         let run = |app: &'static str,
                    title: &'static str,

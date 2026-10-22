@@ -915,6 +915,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
         finished_at_ms: null, error: null,
     };
     let previewAgentNotesEnabled = false;
+    let previewVerbatimMemoryEnabled = false;
     const previewParam = (name: string) => new URLSearchParams(window.location.search).get(name);
     const previewApprovalCard = {
         id: "preview-approval",
@@ -1162,6 +1163,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 return [...previewBlocklist];
             case "get_agent_notes_enabled":
                 return previewAgentNotesEnabled;
+            case "get_verbatim_memory_enabled":
+                return previewVerbatimMemoryEnabled;
             case "list_action_approvals":
                 return previewParam("approval") === "pending" ? [previewApprovalCard] : [];
             case "get_encryption_statement":
@@ -1299,6 +1302,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Preview set_agent_notes_enabled requires a boolean.");
                 }
                 previewAgentNotesEnabled = enabled;
+                return undefined;
+            }
+            case "set_verbatim_memory_enabled": {
+                const enabled = typeof payload === "object" && payload !== null && "enabled" in payload
+                    ? (payload as { enabled?: unknown }).enabled
+                    : null;
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_verbatim_memory_enabled requires a boolean.");
+                }
+                previewVerbatimMemoryEnabled = enabled;
                 return undefined;
             }
             case "set_blocklist": {

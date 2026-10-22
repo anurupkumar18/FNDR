@@ -11,6 +11,8 @@ import {
     type PrivacyAlert,
     fndrQualityStatus,
     getAgentNotesEnabled,
+    getVerbatimMemoryEnabled,
+    setVerbatimMemoryEnabled,
     getBlocklist,
     getPrivacyAlerts,
     pauseCapture,
@@ -221,6 +223,9 @@ export function ControlPanel({
     const [agentNotesEnabled, setAgentNotesEnabledState] = useState<boolean | null>(null);
     const [agentNotesBusy, setAgentNotesBusy] = useState(false);
     const [agentNotesError, setAgentNotesError] = useState<string | null>(null);
+    const [verbatimEnabled, setVerbatimEnabledState] = useState<boolean | null>(null);
+    const [verbatimBusy, setVerbatimBusy] = useState(false);
+    const [verbatimError, setVerbatimError] = useState<string | null>(null);
     const settingsLoadVersion = useRef(0);
     const [capturePaused, setCapturePaused] = useState(status?.is_paused ?? false);
     const [captureBusy, setCaptureBusy] = useState(false);
@@ -237,6 +242,8 @@ export function ControlPanel({
         setSettingsError(null);
         setAgentNotesEnabledState(null);
         setAgentNotesError(null);
+        setVerbatimEnabledState(null);
+        setVerbatimError(null);
         setAppleModel(null);
         setAppleModelError(null);
         const results = await Promise.allSettled([
@@ -246,9 +253,10 @@ export function ControlPanel({
             fndrQualityStatus(),
             getAgentNotesEnabled(),
             getAppleModelStatus(),
+            getVerbatimMemoryEnabled(),
         ] as const);
         if (version !== settingsLoadVersion.current) return;
-        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult, appleResult] = results;
+        const [blocklistResult, onboardingResult, modelsResult, qualityResult, agentNotesResult, appleResult, verbatimResult] = results;
         const unavailable: string[] = [];
 
         if (blocklistResult.status === "fulfilled") {
@@ -282,6 +290,11 @@ export function ControlPanel({
             setAppleModel(appleResult.value);
         } else {
             unavailable.push("Apple model");
+        }
+        if (verbatimResult.status === "fulfilled") {
+            setVerbatimEnabledState(verbatimResult.value);
+        } else {
+            unavailable.push("full text setting");
         }
 
         if (unavailable.length > 0) {
@@ -439,6 +452,22 @@ export function ControlPanel({
             setAgentNotesError(`Assistant notes update failed: ${String(error)}`);
         } finally {
             setAgentNotesBusy(false);
+        }
+    };
+
+    const handleToggleVerbatim = async () => {
+        if (verbatimEnabled === null || verbatimBusy) return;
+        const enabled = !verbatimEnabled;
+        setVerbatimBusy(true);
+        setVerbatimError(null);
+        try {
+            await setVerbatimMemoryEnabled(enabled);
+            settingsLoadVersion.current += 1;
+            setVerbatimEnabledState(enabled);
+        } catch (error) {
+            setVerbatimError(`Full text setting update failed: ${String(error)}`);
+        } finally {
+            setVerbatimBusy(false);
         }
     };
 
@@ -829,6 +858,36 @@ export function ControlPanel({
                                         onBlocklistChange={setBlocklistState}
                                         embedded={true}
                                     />
+                                </section>
+                                <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-verbatim-title">
+                                    <h4 id="settings-verbatim-title">Full text</h4>
+                                    <label className="settings-switch-row">
+                                        <span>Keep the full text of what FNDR sees on this Mac</span>
+                                        <input
+                                            type="checkbox"
+                                            role="switch"
+                                            className="settings-switch"
+                                            aria-describedby="settings-verbatim-hint"
+                                            checked={verbatimEnabled === true}
+                                            disabled={verbatimEnabled === null || verbatimBusy}
+                                            onChange={() => void handleToggleVerbatim()}
+                                        />
+                                    </label>
+                                    <p className="section-hint" id="settings-verbatim-hint">
+                                        Lets FNDR quote exact details, such as a phone number on a page you read.
+                                        The text stays on this Mac, is kept for 30 days, and follows your blocked apps
+                                        and sites and Private Mode. Turning this off deletes it at once; memories and
+                                        their summaries stay.
+                                    </p>
+                                    {verbatimError && (
+                                        <p
+                                            className="settings-message settings-message--error"
+                                            role="alert"
+                                            aria-label="Full text setting update failed"
+                                        >
+                                            {verbatimError}
+                                        </p>
+                                    )}
                                 </section>
                                 <section className="panel-section settings-subsection settings-section--privacy" aria-labelledby="settings-blocklist-title">
                                     <h4 id="settings-blocklist-title">Blocked apps &amp; sites</h4>

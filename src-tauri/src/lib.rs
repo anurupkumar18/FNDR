@@ -55,6 +55,7 @@ pub mod tasks;
 pub mod telemetry;
 pub mod timeline;
 pub mod tts;
+pub mod verbatim;
 pub mod voice;
 pub mod wiki;
 pub mod workset;

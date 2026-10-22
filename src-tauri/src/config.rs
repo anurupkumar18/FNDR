@@ -192,6 +192,57 @@ impl ChunkingConfig {
     }
 }
 
+/// Verbatim page text kept beside each screen memory (ADR 036). The summary
+/// and embeddings are what memory ranks on; this is the evidence a consumer
+/// reads when it needs an exact value. Off until the person turns it on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerbatimConfig {
+    /// "Keep the full text of what FNDR sees on this Mac".
+    #[serde(default)]
+    pub enabled: bool,
+    /// Days a memory's verbatim text is kept. The memory and its summary stay.
+    #[serde(default = "default_verbatim_retention_days")]
+    pub retention_days: u32,
+    /// Most bytes of text kept per memory.
+    #[serde(default = "default_verbatim_max_bytes_per_memory")]
+    pub max_bytes_per_memory: usize,
+    /// Most megabytes of verbatim text kept in all; oldest goes first.
+    #[serde(default = "default_verbatim_total_budget_mb")]
+    pub total_budget_mb: u32,
+}
+
+fn default_verbatim_retention_days() -> u32 {
+    30
+}
+
+fn default_verbatim_max_bytes_per_memory() -> usize {
+    6 * 1024
+}
+
+fn default_verbatim_total_budget_mb() -> u32 {
+    128
+}
+
+impl Default for VerbatimConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: default_verbatim_retention_days(),
+            max_bytes_per_memory: default_verbatim_max_bytes_per_memory(),
+            total_budget_mb: default_verbatim_total_budget_mb(),
+        }
+    }
+}
+
+impl VerbatimConfig {
+    pub fn normalized(mut self) -> Self {
+        self.retention_days = self.retention_days.clamp(1, 365);
+        self.max_bytes_per_memory = self.max_bytes_per_memory.clamp(512, 32 * 1024);
+        self.total_budget_mb = self.total_budget_mb.clamp(4, 4096);
+        self
+    }
+}
+
 /// Search and reranking knobs. Stored as primitive values so the TOML remains readable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchConfig {
@@ -808,6 +859,9 @@ pub struct Config {
     /// OCR-aware chunking knobs.
     #[serde(default)]
     pub chunking: ChunkingConfig,
+    /// Verbatim page text kept beside each memory (ADR 036).
+    #[serde(default)]
+    pub verbatim: VerbatimConfig,
     /// Hybrid search weights, limits, and timeouts.
     #[serde(default)]
     pub search: SearchConfig,
@@ -933,13 +987,12 @@ impl VoiceOutputConfig {
             String::new()
         };
         let neural = self.neural_voice.trim();
-        self.neural_voice = if neural.len() <= 32
-            && neural.chars().all(|c| c.is_ascii_lowercase() || c == '_')
-        {
-            neural.to_string()
-        } else {
-            String::new()
-        };
+        self.neural_voice =
+            if neural.len() <= 32 && neural.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                neural.to_string()
+            } else {
+                String::new()
+            };
         self.rate = if self.rate.is_finite() {
             self.rate.clamp(0.5, 2.0)
         } else {
@@ -1355,6 +1408,7 @@ impl Default for Config {
             notch_do_muted: None,
             embedding: EmbeddingConfig::default(),
             chunking: ChunkingConfig::default(),
+            verbatim: VerbatimConfig::default(),
             search: SearchConfig::default(),
             capture_pipeline: CapturePipelineConfig::default(),
             memory_cards: MemoryCardConfig::default(),
@@ -1382,6 +1436,7 @@ impl Config {
         }
         self.embedding = self.embedding.normalized();
         self.chunking = self.chunking.normalized();
+        self.verbatim = self.verbatim.normalized();
         self.search = self.search.normalized();
         self.capture_pipeline = self.capture_pipeline.normalized();
         self.memory_cards = self.memory_cards.normalized();
@@ -1785,6 +1840,26 @@ mod tests {
     fn memory_card_defaults_enable_llm_group_synthesis() {
         let config = Config::default().normalized();
         assert!(config.memory_cards.max_llm_groups > 0);
+    }
+
+    #[test]
+    fn verbatim_defaults_off_and_old_files_load() {
+        let config = Config::default().normalized();
+        assert!(!config.verbatim.enabled);
+        assert_eq!(config.verbatim.retention_days, 30);
+        assert_eq!(config.verbatim.max_bytes_per_memory, 6144);
+        let old: VerbatimConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old, VerbatimConfig::default());
+        let wild = VerbatimConfig {
+            enabled: true,
+            retention_days: 0,
+            max_bytes_per_memory: 10_000_000,
+            total_budget_mb: 0,
+        }
+        .normalized();
+        assert_eq!(wild.retention_days, 1);
+        assert_eq!(wild.max_bytes_per_memory, 32 * 1024);
+        assert_eq!(wild.total_budget_mb, 4);
     }
 
     #[test]

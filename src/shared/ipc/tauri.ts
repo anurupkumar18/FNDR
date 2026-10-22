@@ -1537,6 +1537,14 @@ export async function setAgentNotesEnabled(enabled: boolean): Promise<void> {
     return invoke("set_agent_notes_enabled", { enabled });
 }
 
+export async function getVerbatimMemoryEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_verbatim_memory_enabled");
+}
+
+export async function setVerbatimMemoryEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_verbatim_memory_enabled", { enabled });
+}
+
 export async function getBlocklist(): Promise<string[]> {
     return invoke<string[]>("get_blocklist");
 }

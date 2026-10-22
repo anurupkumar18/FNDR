@@ -33,6 +33,8 @@ use prompt::{FillContext, MemoryNote};
 
 /// How long ChatGPT gets to write the text.
 const CODEX_TIMEOUT: Duration = Duration::from_secs(45);
+/// Most bytes of a memory's stored page text read for one note.
+const VERBATIM_NOTE_BYTES: usize = 3_000;
 /// How much of the screen's text goes to the model.
 const SCREEN_TEXT_CHARS: usize = 6_000;
 /// Less on-screen text than this counts as "Accessibility read nothing".
@@ -494,6 +496,7 @@ async fn form_notes(state: &AppState, fields: &[form::FieldInfo]) -> Vec<MemoryN
                 app_name: "Saved details".to_string(),
                 window_title: "the person's own".to_string(),
                 text,
+                full_text: None,
             },
         );
     }
@@ -631,10 +634,16 @@ async fn note_for(state: &AppState, result: crate::storage::SearchResult) -> Mem
     } else {
         summary
     };
+    // The page text FNDR kept for this memory (ADR 036), when the switch is on
+    // and the memory is visible: the exact values the summary leaves out.
+    let full_text = crate::verbatim::text_for_memory(state, &result.id, VERBATIM_NOTE_BYTES)
+        .await
+        .unwrap_or(None);
     MemoryNote {
         app_name: result.app_name,
         window_title: result.window_title,
         text,
+        full_text,
     }
 }
 
