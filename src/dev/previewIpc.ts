@@ -964,6 +964,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     });
     let previewActionSettings = { actions_kill_switch: false, confirm_unnamed_apps: false };
     let previewNotchDoMuted: boolean | null = null;
+    let previewSmartFillEnabled = false;
     const previewSkills: NotchDoSkill[] = [{
         id: "preview-skill-1",
         name: "Monday setup",
@@ -1262,6 +1263,16 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "notch_do_request":
                 throw new Error('Turn on "Operate my Mac" in Settings for FNDR to do this.');
+            case "get_smart_fill_enabled":
+                return previewSmartFillEnabled;
+            case "set_smart_fill_enabled": {
+                const { enabled } = payload as { enabled?: unknown };
+                if (typeof enabled !== "boolean") {
+                    throw new Error("Preview set_smart_fill_enabled requires a boolean.");
+                }
+                previewSmartFillEnabled = enabled;
+                return enabled;
+            }
             case "get_notch_do_muted":
                 return previewNotchDoMuted;
             case "set_notch_do_muted": {
