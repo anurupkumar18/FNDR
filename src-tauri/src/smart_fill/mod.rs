@@ -34,6 +34,15 @@ const CODEX_TIMEOUT: Duration = Duration::from_secs(45);
 const SCREEN_TEXT_CHARS: usize = 6_000;
 /// Less on-screen text than this counts as "Accessibility read nothing".
 const MIN_SCREEN_TEXT_CHARS: usize = 40;
+/// Below this much, Accessibility has most likely read only toolbars and
+/// buttons, so the screenshot is read as well.
+const ENOUGH_SCREEN_TEXT_CHARS: usize = 400;
+/// How long Smart Fill waits for OCR before going on without it.
+const OCR_BUDGET: Duration = Duration::from_secs(12);
+/// Accessibility walk budget: time and elements. A mail page in a browser is
+/// thousands of elements, far more than the default allows.
+const AX_WALK_TIME: Duration = Duration::from_millis(400);
+const AX_WALK_NODES: usize = 20_000;
 /// Shown when FNDR can neither read the window's text nor see the screen.
 const SCREEN_RECORDING_HINT: &str = "FNDR can't see the screen. Turn FNDR on under Screen & System Audio Recording in System Settings (remove it and add it again after an update), then reopen FNDR.";
 /// How long the word-by-word reveal takes in total, however long the text.
@@ -187,19 +196,26 @@ async fn fill_the_field(app: &AppHandle, cancel: Arc<AtomicBool>) -> Outcome {
         // Without the permission the capture shows only the wallpaper.
         gathered.screenshot = None;
     }
-    if gathered.screen_text.trim().chars().count() < MIN_SCREEN_TEXT_CHARS {
+    let mut ocr_chars = 0;
+    if gathered.screen_text.trim().chars().count() < ENOUGH_SCREEN_TEXT_CHARS {
         if let Some(image) = gathered.screenshot.clone() {
-            if let Ok(read) =
-                tokio::task::spawn_blocking(move || crate::accessibility::ocr_screen_text(&image))
-                    .await
-            {
-                gathered.screen_text = read;
+            let read = tokio::time::timeout(
+                OCR_BUDGET,
+                tokio::task::spawn_blocking(move || crate::accessibility::ocr_screen_text(&image)),
+            )
+            .await;
+            if let Ok(Ok(read)) = read {
+                ocr_chars = read.trim().chars().count();
+                if !read.trim().is_empty() {
+                    gathered.screen_text = format!("{}\n{}", gathered.screen_text.trim(), read);
+                }
             }
         }
     }
     let text_chars = gathered.screen_text.trim().chars().count();
     tracing::info!(
         text_chars,
+        ocr_chars,
         screenshot = gathered.screenshot.is_some(),
         screen_visible,
         web_field = field.web,
@@ -291,9 +307,14 @@ struct Gathered {
 
 /// The on-screen text and a screenshot, read before the glow appears.
 fn gather(pid: i32, whose: Whose) -> Gathered {
-    let screen_text = crate::accessibility::focused_text(pid, SCREEN_TEXT_CHARS)
-        .map(|read| read.text)
-        .unwrap_or_default();
+    let screen_text = crate::accessibility::focused_text_budgeted(
+        pid,
+        SCREEN_TEXT_CHARS,
+        AX_WALK_TIME,
+        AX_WALK_NODES,
+    )
+    .map(|read| read.text)
+    .unwrap_or_default();
     let screenshot = whose
         .screenshot
         .or_else(|| crate::capture::macos::capture_screen().ok());
@@ -470,5 +491,32 @@ mod tests {
         assert!(step_delay(steps) * steps as u32 <= Duration::from_millis(300 * 70));
         assert_eq!(step_delay(1), Duration::from_millis(70));
         assert_eq!(step_delay(1_000), Duration::from_millis(15));
+    }
+
+    #[test]
+    #[ignore = "Needs the OCR engine and synthetic screenshots in $FNDR_SMART_FILL_FIXTURES; run: cargo test --lib ocr_reads_a_conversation -- --ignored --nocapture"]
+    fn ocr_reads_a_conversation_and_an_email_from_a_screenshot() {
+        let dir = std::env::var("FNDR_SMART_FILL_FIXTURES").unwrap_or_else(|_| {
+            format!(
+                "{}/smartfill-fixtures",
+                std::env::var("HOME").unwrap_or_default()
+            )
+        });
+        for (name, needles) in [
+            ("imessage.png", ["saturday", "speaker", "thai"]),
+            ("email.png", ["budget", "thursday", "finance"]),
+        ] {
+            let image = std::fs::read(format!("{dir}/{name}")).expect("fixture");
+            let started = std::time::Instant::now();
+            let text = crate::accessibility::ocr_screen_text(&image).to_lowercase();
+            println!(
+                "{name}: {} chars in {:?}",
+                text.chars().count(),
+                started.elapsed()
+            );
+            for needle in needles {
+                assert!(text.contains(needle), "{name}: OCR missed {needle:?}");
+            }
+        }
     }
 }

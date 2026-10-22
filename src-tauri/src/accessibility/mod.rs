@@ -822,6 +822,23 @@ pub fn frontmost_focused_text(max_chars: usize) -> Option<FocusedText> {
 /// read, or when the window exposes no text. Secure text fields are never read.
 /// Callers run the capture privacy gates before calling this.
 pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
+    focused_text_budgeted(
+        pid,
+        max_chars,
+        text_tree::DEFAULT_MAX_TIME,
+        text_tree::DEFAULT_MAX_NODES,
+    )
+}
+
+/// `focused_text` with a larger walk budget, for a caller that can wait: a
+/// mail page in a browser has thousands of elements, and the default 50 ms
+/// stops after its toolbar, before the message.
+pub fn focused_text_budgeted(
+    pid: i32,
+    max_chars: usize,
+    max_time: std::time::Duration,
+    max_nodes: usize,
+) -> Option<FocusedText> {
     if !accessibility_text_target_allowed(pid, std::process::id() as PidT)
         || !has_accessibility_permission()
         || workspace_frontmost_pid() != Some(pid)
@@ -834,14 +851,23 @@ pub fn focused_text(pid: i32, max_chars: usize) -> Option<FocusedText> {
         if application.0.is_null() {
             return None;
         }
-        AXUIElementSetMessagingTimeout(application.0, 0.05);
+        let messaging_timeout = (max_time.as_secs_f32() / 4.0).max(0.05);
+        AXUIElementSetMessagingTimeout(application.0, messaging_timeout);
         enable_manual_accessibility(application.0);
         let window = AxElement(ax_copy_attr_value(application.0, "AXFocusedWindow").ok()?);
         if window.0.is_null() {
             return None;
         }
-        AXUIElementSetMessagingTimeout(window.0, 0.05);
-        text_tree::collect_text(&AxTextTree, &window, text_tree::Budget::new(max_chars))
+        AXUIElementSetMessagingTimeout(window.0, messaging_timeout);
+        text_tree::collect_text(
+            &AxTextTree,
+            &window,
+            text_tree::Budget {
+                max_chars,
+                max_nodes,
+                max_time,
+            },
+        )
     };
     if !expected_pid_remained_frontmost(pid, Some(pid), workspace_frontmost_pid()) {
         return None;
