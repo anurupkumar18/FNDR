@@ -216,7 +216,7 @@
     border-radius: 12px;
     border: 0;
     background: transparent;
-    color: var(--cp-accent, var(--accent));
+    color: var(--text-primary);
     cursor: pointer;
     flex-shrink: 0;
     transition:
@@ -232,15 +232,6 @@
 
 .home-hero__search-submit:not(:disabled):hover {
     background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
-}
-
-/* ─── Speak and Submit actions ────────────────────────────────────────────── */
-
-.home-hero__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    flex-shrink: 0;
 }
 
 /* ─── Voice status line ───────────────────────────────────────────────────── */

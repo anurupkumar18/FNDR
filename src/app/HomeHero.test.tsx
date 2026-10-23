@@ -19,6 +19,7 @@ const voiceMocks = vi.hoisted(() => ({
         | { kind: "unavailable"; reason: "private_context"; message: string },
     level: 0,
     isActive: false,
+    reduced: true,
 }));
 
 vi.mock("@/shared/voice/useVoice", () => ({
@@ -40,7 +41,7 @@ vi.mock("@/shared/voice/useVoice", () => ({
 }));
 
 vi.mock("@/shared/motion/useReducedMotionSafe", () => ({
-    useReducedMotionSafe: () => ({ reduced: true }),
+    useReducedMotionSafe: () => ({ reduced: voiceMocks.reduced }),
 }));
 
 class MockIntersectionObserver {
@@ -73,6 +74,7 @@ describe("HomeHero", () => {
         voiceMocks.state = { kind: "idle" };
         voiceMocks.level = 0;
         voiceMocks.isActive = false;
+        voiceMocks.reduced = true;
     });
 
     afterEach(() => {
@@ -97,6 +99,24 @@ describe("HomeHero", () => {
         fireEvent.change(screen.getByRole("textbox", { name: "Search your memories" }), { target: { value: "beta notes" } });
         fireEvent.click(screen.getByRole("button", { name: "Submit search" }));
         expect(onHeroSearch).toHaveBeenCalledWith("beta notes");
+    });
+
+    it("melts Submit out of Speak on one liquid surface when motion is allowed", () => {
+        voiceMocks.reduced = false;
+        const { onHeroSearch, container } = renderHero();
+        const input = screen.getByRole("textbox", { name: "Search your memories" });
+        expect(container.querySelector('[data-gooey="on"]')).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Submit search" })).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Start voice input" })).toBeEnabled();
+
+        fireEvent.change(input, { target: { value: "beta notes" } });
+        const submit = screen.getByRole("button", { name: "Submit search" });
+        expect(submit).toBeEnabled();
+        fireEvent.click(submit);
+        expect(onHeroSearch).toHaveBeenCalledWith("beta notes");
+
+        fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
+        expect(voiceMocks.start).toHaveBeenCalledOnce();
     });
 
     it("uses the shared home-search toggle voice session", () => {
