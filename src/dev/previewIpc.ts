@@ -1620,6 +1620,8 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
             }
             case "get_stats":
                 return clonePreview(previewStats);
+            case "get_review_dates":
+                return [new Date().toLocaleDateString("en-CA"), "2026-09-21", "2026-09-22"];
             case "get_weekly_wrapped": {
                 const input = payloadRecord(payload);
                 const startDate = typeof input?.startDate === "string" && validDate(input.startDate)

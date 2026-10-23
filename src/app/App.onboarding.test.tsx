@@ -209,13 +209,13 @@ describe("App onboarding gate", () => {
         expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Search & Ask FNDR" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Memory Vault" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Daily Brief" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "FNDR Review" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Trust & Settings" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Screen Guide" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Hermes Agent" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Stats" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "To-dos" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "FNDR Wrapped" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "FNDR Wrapped" })).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Privacy Activity" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Engine diagnostics" })).toBeNull();
 

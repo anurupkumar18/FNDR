@@ -1034,6 +1034,7 @@ fn main() {
             ipc::commands::get_daily_summary_overview,
             ipc::commands::get_daily_summary_followups,
             ipc::commands::get_weekly_wrapped,
+            ipc::commands::get_review_dates,
             // Time tracking & Focus Mode
             ipc::commands::get_time_tracking,
             ipc::commands::set_focus_task,

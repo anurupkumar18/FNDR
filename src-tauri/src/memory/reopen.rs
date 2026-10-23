@@ -712,6 +712,7 @@ impl ReopenOutcome {
             Self::AppOnly { .. } => "reopen.outcome.app_only",
             Self::Blocked { .. } => "reopen.outcome.blocked",
             Self::NoTarget => "reopen.outcome.no_target",
+            Self::Unavailable => "reopen.outcome.unavailable",
         }
     }
 }

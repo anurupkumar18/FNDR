@@ -52,7 +52,7 @@ const PRIMARY_SIDEBAR_ITEMS = [
     { action: "home", text: "Home" },
     { key: "ask", text: "Search & Ask FNDR" },
     { key: "memoryCards", text: "Memory Vault" },
-    { key: "dailySummary", text: "Daily Brief" },
+    { key: "dailySummary", text: "FNDR Review" },
     { action: "settings", text: "Trust & Settings" },
 ] as const satisfies readonly SidebarItem[];
 
@@ -62,7 +62,6 @@ const LAB_SIDEBAR_ITEMS = [
     { key: "outputs", text: "Daily outputs" },
     { key: "stats", text: "Stats" },
     { key: "todo", text: "To-dos" },
-    { key: "wrapped", text: "FNDR Wrapped" },
     { key: "privacyProof", text: "Privacy Activity" },
 ] as const satisfies readonly SidebarItem[];
 

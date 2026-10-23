@@ -13,6 +13,38 @@
     overflow-y: auto;
 }
 
+.review-period-picker {
+    width: min(100% - 40px, 440px);
+    margin: 28px auto 0;
+}
+
+.review-date-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 24px auto 18px;
+    max-width: 440px;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.review-date-picker select {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-md);
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.review-date-picker select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
 .wrapped-selection-header,
 .wrapped-results-header {
     display: flex;

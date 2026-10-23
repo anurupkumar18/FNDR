@@ -71,7 +71,6 @@ export const DEMO_COMMAND_IDS = [
     "go-home",
     "ask-fndr",
     "memory-cards",
-    "daily-brief",
     "daily-outputs",
     "trust-settings",
     "screen-guide",
@@ -111,10 +110,10 @@ const COMMANDS: Command[] = [
     },
     {
         id: "wrapped",
-        label: "FNDR Wrapped",
-        description: "Review a selected week and export its recap",
+        label: "FNDR Review",
+        description: "Review captured activity by day, week, or month",
         category: "navigate",
-        keywords: ["week", "recap", "wrapped", "review"],
+        keywords: ["day", "month", "summary", "week", "recap", "wrapped", "review"],
         run: ({ onOpenPanel }) => onOpenPanel("wrapped"),
     },
     {
@@ -156,14 +155,6 @@ const COMMANDS: Command[] = [
         category: "navigate",
         keywords: ["graph", "knowledge", "hierarchy", "connections", "second brain"],
         run: ({ onOpenPanel }) => onOpenPanel("knowledgeGraph"),
-    },
-    {
-        id: "daily-brief",
-        label: "Daily Brief",
-        description: "Review today's summary, follow-ups, and reflection",
-        category: "navigate",
-        keywords: ["summary", "today", "daily", "brief", "recap"],
-        run: ({ onOpenPanel }) => onOpenPanel("dailySummary"),
     },
     {
         id: "daily-outputs",

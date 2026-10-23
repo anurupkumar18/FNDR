@@ -1091,6 +1091,103 @@ fn wrapped_display_file(path: &str) -> String {
         .to_string()
 }
 
+/// Dates only, after the same visibility rules used by the recap.
+#[tauri::command]
+pub async fn get_review_dates(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    let records = state
+        .store
+        .get_search_results_in_range(0, chrono::Local::now().timestamp_millis())
+        .await
+        .map_err(|e| e.to_string())?;
+    let blocklist = state.config.read().blocklist.clone();
+    let mut dates = strip_internal_fndr_results(records)
+        .into_iter()
+        .filter(|r| crate::context_runtime::retrieve::result_is_permitted(r, &blocklist))
+        .filter_map(|r| chrono::Local.timestamp_millis_opt(r.timestamp).single())
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .collect::<Vec<_>>();
+    dates.sort();
+    dates.dedup();
+    dates.reverse();
+    Ok(dates)
+}
+
+#[cfg(test)]
+mod review_range_tests {
+    use super::review_range;
+    use chrono::NaiveDate;
+    fn check(start: &str, end: &str, today: &str) -> bool {
+        review_range(
+            Some(start.into()),
+            Some(end.into()),
+            NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap(),
+        )
+        .is_ok()
+    }
+    #[test]
+    fn calendar_months_include_leap_day_and_current_month_so_far() {
+        assert!(check("2024-02-01", "2024-02-29", "2026-10-22"));
+        assert!(check("2026-10-01", "2026-10-22", "2026-10-22"));
+        assert!(check("2026-10-01", "2026-10-03", "2026-10-03"));
+        assert!(check("2025-12-01", "2025-12-31", "2026-10-22"));
+        assert!(!check("2026-10-01", "2026-10-31", "2026-10-22"));
+        assert!(!check("2026-11-01", "2026-11-30", "2026-10-22"));
+    }
+    #[test]
+    fn monday_on_month_start_supports_both_week_and_month() {
+        assert!(check("2026-06-01", "2026-06-07", "2026-10-22"));
+        assert!(check("2026-06-01", "2026-06-30", "2026-10-22"));
+        assert!(!check("2026-06-02", "2026-06-30", "2026-10-22"));
+        assert!(!check("2026-06-01", "2026-06-15", "2026-10-22"));
+    }
+}
+
+fn review_range(
+    start_date: Option<String>,
+    end_date: Option<String>,
+    today: chrono::NaiveDate,
+) -> Result<(chrono::NaiveDate, chrono::NaiveDate), String> {
+    let start_day = match start_date.filter(|value| !value.trim().is_empty()) {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|err| format!("Invalid week start date: {err}"))?,
+        None => today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64),
+    };
+    let week_end = (start_day + chrono::Duration::days(6)).min(today);
+    let is_calendar_month = end_date.is_some()
+        && start_day.day() == 1
+        && (start_day.weekday() != chrono::Weekday::Mon
+            || end_date.as_deref() != Some(week_end.format("%Y-%m-%d").to_string().as_str()));
+    if start_day.weekday() != chrono::Weekday::Mon && !is_calendar_month {
+        return Err("A review must start on a Monday or the first day of a month.".to_string());
+    }
+    if start_day > today {
+        return Err("A Wrapped recap cannot be created for a future week.".to_string());
+    }
+    let expected_end_day = if is_calendar_month {
+        let next_month = if start_day.month() == 12 {
+            chrono::NaiveDate::from_ymd_opt(start_day.year() + 1, 1, 1)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(start_day.year(), start_day.month() + 1, 1)
+        }
+        .ok_or("Failed to calculate review month")?;
+        (next_month - chrono::Duration::days(1)).min(today)
+    } else {
+        (start_day + chrono::Duration::days(6)).min(today)
+    };
+    let end_day = match end_date.filter(|value| !value.trim().is_empty()) {
+        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+            .map_err(|err| format!("Invalid week end date: {err}"))?,
+        None => expected_end_day,
+    };
+    if end_day != expected_end_day {
+        return Err(
+            "A review must end on Sunday for a week, or the last available day of a month."
+                .to_string(),
+        );
+    }
+    Ok((start_day, end_day))
+}
+
 #[tauri::command]
 pub async fn get_weekly_wrapped(
     state: State<'_, Arc<AppState>>,
@@ -1099,28 +1196,7 @@ pub async fn get_weekly_wrapped(
 ) -> Result<WeeklyWrapped, String> {
     let now = chrono::Local::now();
     let today = now.date_naive();
-    let start_day = match start_date.filter(|value| !value.trim().is_empty()) {
-        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
-            .map_err(|err| format!("Invalid week start date: {err}"))?,
-        None => today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64),
-    };
-    if start_day.weekday() != chrono::Weekday::Mon {
-        return Err("Wrapped weeks must start on a Monday.".to_string());
-    }
-    if start_day > today {
-        return Err("A Wrapped recap cannot be created for a future week.".to_string());
-    }
-    let expected_end_day = (start_day + chrono::Duration::days(6)).min(today);
-    let end_day = match end_date.filter(|value| !value.trim().is_empty()) {
-        Some(value) => chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
-            .map_err(|err| format!("Invalid week end date: {err}"))?,
-        None => expected_end_day,
-    };
-    if end_day != expected_end_day {
-        return Err(
-            "Wrapped weeks must end on Sunday, or today for the current week so far.".to_string(),
-        );
-    }
+    let (start_day, end_day) = review_range(start_date, end_date, today)?;
     let start = start_day
         .and_hms_opt(0, 0, 0)
         .ok_or("Failed to create weekly start time")?;

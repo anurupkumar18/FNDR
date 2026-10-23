@@ -13,6 +13,7 @@ import { useModalFocus } from "@/shared/hooks/useModalFocus";
 import "./DailySummaryPanel.css";
 import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { ReviewResultsHeader } from "./ReviewResultsHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
     beginActivityTrace,
@@ -24,6 +25,8 @@ interface DailySummaryPanelProps {
     isVisible: boolean;
     onClose: () => void;
     onOpenMemoryById: (memoryId: string) => void;
+    reviewDate?: string;
+    onBackToReview?: () => void;
 }
 
 function localDateString(date = new Date()) {
@@ -81,7 +84,7 @@ function followupContext(followup: Task) {
     return "No additional context was saved.";
 }
 
-export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: DailySummaryPanelProps) {
+export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById, reviewDate, onBackToReview }: DailySummaryPanelProps) {
     const [dateStr, setDateStr] = useState<string>("");
     const [summary, setSummary] = useState<string | null>(null);
     const [summaryDateStr, setSummaryDateStr] = useState<string | null>(null);
@@ -108,7 +111,8 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
     // Initialize to today's date in local YYYY-MM-DD
     useEffect(() => {
-        setDateStr(localDateString());
+        setDateStr(reviewDate ?? localDateString());
+        if (reviewDate) void handleGenerate(reviewDate);
     }, []);
 
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
@@ -414,18 +418,38 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
             aria-labelledby="daily-summary-title"
             tabIndex={-1}
         >
-            <PanelHeader
-                title="Daily Summary"
-                titleId="daily-summary-title"
-                subtitle="Review locally captured activity for one calendar day."
-                closeLabel="Close Daily Summary"
-                closeRef={closeButtonRef}
-                onClose={onClose}
-            />
+            {reviewDate && onBackToReview ? (
+                <ReviewResultsHeader
+                    titleId="daily-summary-title"
+                    heading={displayDate(reviewDate)}
+                    details={[`Data collected from ${displayDate(reviewDate)}`]}
+                    backLabel="← Back to review selection"
+                    onBack={onBackToReview}
+                    refreshLabel="Update summary"
+                    refreshingLabel="Updating…"
+                    showRefresh={reviewDate >= todayDateStr}
+                    refreshing={loading}
+                    onRefresh={() => void handleGenerate(reviewDate)}
+                    exporting={exporting}
+                    exportDisabled={loading || !summary || summaryDateStr !== reviewDate}
+                    onExport={() => void handleDownloadPdf()}
+                    closeRef={closeButtonRef}
+                    onClose={onClose}
+                />
+            ) : (
+                <PanelHeader
+                    title="Daily Summary"
+                    titleId="daily-summary-title"
+                    subtitle="Review locally captured activity for one calendar day."
+                    closeLabel="Close Daily Summary"
+                    closeRef={closeButtonRef}
+                    onClose={onClose}
+                />
+            )}
 
             <div className="daily-summary-body">
-                <div className="daily-summary-controls">
-                    <div className="daily-date-navigation" aria-label="Daily summary date navigation">
+                {!reviewDate && <div className="daily-summary-controls">
+                    <div className="daily-date-navigation" aria-label="Daily summary date navigation" hidden={!!reviewDate} style={reviewDate ? { display: "none" } : undefined}>
                         <button
                             type="button"
                             className="daily-date-nav-btn"
@@ -488,7 +512,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                             {exporting ? "Exporting..." : "↓ Download PDF"}
                         </button>
                     )}
-                </div>
+                </div>}
 
                 {summaryActivity && <ActivityTrace trace={summaryActivity} />}
 

@@ -10,6 +10,8 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 
 ## Engineering vocabulary
 
+- **FNDR Review**: one foreground destination for Day, Week, and Month. Day reuses the daily summary generator; Week and Month reuse the local Wrapped aggregator. Pickers offer only periods containing currently permitted captured activity. Every result returns to the same period selector. Legacy `dailySummary` and `wrapped` panel keys both route here.
+
 - **Memory record** (`MemoryRecord`): persisted unit of captured context stored and indexed for search. This is the **parent** in the parent-child RAG model — the authoritative record for card synthesis, holding full OCR, insight fields, and metadata.
 - **Work identity** (`MemoryRecord.project`): an explicit, source-supported name for a piece of work such as an assignment, course, meeting, or software project. It groups Resume threads and work sets. `session_key` names the app-specific capture context; a short-time similarity link is weaker than shared work identity. See ADR 031.
 - **Named thread** (`resume::work_names`): windows in different apps whose titles share a name, joined into one Resume thread when threads are read. Nothing is stored and no model is read; an explicit work identity outranks a name. Its key is `work:<name>` and is the same for every surface. See the ADR 031 addendum.

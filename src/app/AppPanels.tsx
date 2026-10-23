@@ -3,9 +3,8 @@ import { AskPanel } from "@/domains/ask/AskPanel";
 import { CommandPalette, type PanelKey } from "@/domains/command-palette/CommandPalette";
 import { MemoryCardsPanel } from "@/domains/memory-vault/MemoryCardsPanel";
 import { ScreenGuidePanel } from "@/domains/screen-guide/ScreenGuidePanel";
-import { DailySummaryPanel } from "@/domains/workspace/DailySummaryPanel";
+import { ReviewPanel } from "@/domains/workspace/ReviewPanel";
 import { OutputsPanel } from "@/domains/outputs/OutputsPanel";
-import { FndrWrappedPanel } from "@/domains/workspace/FndrWrappedPanel";
 import { StatsPanel } from "@/domains/workspace/StatsPanel";
 import { TodoPanel } from "@/domains/workspace/TodoPanel";
 import { EngineMetricsPanel } from "@/domains/workspace/EngineMetricsPanel";
@@ -94,10 +93,10 @@ export function AppPanels({
                     />
                 )}
             </PanelPresence>
-            <PanelPresence open={activePanel === "dailySummary"}>
+            <PanelPresence open={activePanel === "dailySummary" || activePanel === "wrapped"}>
                 {(present) => (
-                    <PanelErrorBoundary panelName="Daily Summary" onClose={onClosePanel}>
-                        <DailySummaryPanel
+                    <PanelErrorBoundary panelName="FNDR Review" onClose={onClosePanel}>
+                        <ReviewPanel
                             isVisible={present}
                             onClose={onClosePanel}
                             onOpenMemoryById={onOpenMemoryById}
@@ -123,13 +122,6 @@ export function AppPanels({
                 {(present) => (
                     <PanelErrorBoundary panelName="To-dos" onClose={onClosePanel}>
                         <TodoPanel isVisible={present} onClose={onClosePanel} />
-                    </PanelErrorBoundary>
-                )}
-            </PanelPresence>
-            <PanelPresence open={activePanel === "wrapped"}>
-                {(present) => (
-                    <PanelErrorBoundary panelName="FNDR Wrapped" onClose={onClosePanel}>
-                        <FndrWrappedPanel isVisible={present} onClose={onClosePanel} />
                     </PanelErrorBoundary>
                 )}
             </PanelPresence>

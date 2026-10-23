@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
     exportWeeklyWrappedPdf,
     getWeeklyWrapped,
@@ -10,6 +10,7 @@ import "./FndrWrappedPanel.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
 import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
+import { ReviewResultsHeader } from "./ReviewResultsHeader";
 import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import {
@@ -21,6 +22,9 @@ import {
 interface FndrWrappedPanelProps {
     isVisible: boolean;
     onClose: () => void;
+    reviewRange?: { startDate: string; endDate: string };
+    reviewPeriod?: "week" | "month";
+    onBackToReview?: () => void;
 }
 
 interface WeekOption {
@@ -150,7 +154,7 @@ function CountedList({ items, emptyLabel }: { items: WeeklyWrapped["projects_and
     );
 }
 
-export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) {
+export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod = "week", onBackToReview }: FndrWrappedPanelProps) {
     const today = localDateString();
     const initialWeek = currentWeek(today);
     const [screen, setScreen] = useState<WrappedScreen>("selection");
@@ -177,7 +181,9 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         return weeksForMonth(now.getFullYear(), now.getMonth() - 1, today);
     }, [today]);
     const visibleWeeks = monthScope === "current" ? currentMonthWeeks : previousMonthWeeks;
-    const selectedRange = formatFullDateRange(selectedWeek.startDate, selectedWeek.endDate);
+    const rangeStartDate = reviewRange?.startDate ?? selectedWeek.startDate;
+    const rangeEndDate = reviewRange?.endDate ?? selectedWeek.endDate;
+    const selectedRange = formatFullDateRange(rangeStartDate, rangeEndDate);
 
     const handleMonthScopeChange = (scope: MonthScope) => {
         setMonthScope(scope);
@@ -206,12 +212,12 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         const startedTrace = recordActivityStep(
             beginActivityTrace({
                 id: `weekly-wrapped-${startedAtMs}`,
-                title: "FNDR Wrapped activity",
+                title: "FNDR Review activity",
                 startedAtMs,
             }),
             {
                 id: "wrapped-request",
-                label: "Building weekly recap",
+                label: reviewPeriod === "month" ? "Building month review" : "Building week review",
                 actor: "Wrapped aggregator",
                 status: "running",
                 evidence: "ipc-boundary",
@@ -223,14 +229,14 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         setWrapped(null);
         setWrappedActivity(startedTrace);
         try {
-            const recap = await getWeeklyWrapped(selectedWeek.startDate, selectedWeek.endDate);
+            const recap = await getWeeklyWrapped(rangeStartDate, rangeEndDate);
             if (loadGenerationRef.current !== loadGeneration) return;
             setWrapped(recap);
             setScreen("results");
             const finishedAtMs = Date.now();
             setWrappedActivity(recordActivityStep(startedTrace, {
                 id: "wrapped-request",
-                label: "Weekly recap ready",
+                label: reviewPeriod === "month" ? "Monthly recap ready" : "Weekly recap ready",
                 actor: "Wrapped aggregator",
                 status: "completed",
                 evidence: "result-metadata",
@@ -240,11 +246,11 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
             }));
         } catch (err) {
             if (loadGenerationRef.current !== loadGeneration) return;
-            setError(err instanceof Error ? err.message : "Unable to build FNDR Wrapped.");
+            setError(err instanceof Error ? err.message : "Unable to build FNDR Review.");
             const finishedAtMs = Date.now();
             setWrappedActivity(recordActivityStep(startedTrace, {
                 id: "wrapped-request",
-                label: "Weekly recap unavailable",
+                label: "Review unavailable",
                 actor: "Wrapped aggregator",
                 status: "failed",
                 evidence: "ipc-boundary",
@@ -256,18 +262,33 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                 setLoading(false);
             }
         }
-    }, [selectedWeek]);
+    }, [rangeStartDate, rangeEndDate, reviewPeriod]);
+
+    const hasReviewRange = Boolean(reviewRange);
+    useEffect(() => {
+        if (hasReviewRange && isVisible) { setScreen("results"); void loadWrapped(); }
+    }, [hasReviewRange, isVisible, loadWrapped]);
 
     const recapText = useMemo(() => {
         if (!wrapped) return "";
         const app = wrapped.apps[0];
+        const ranked = (title: string, items: WeeklyWrapped["apps"]) => items.length === 0 ? [] : [
+            "", `${title}:`, ...items.map((item, index) => `${index + 1}. ${item.name} - ${formatMinutes(item.duration_minutes)}`),
+        ];
         return [
+            `${reviewPeriod[0].toUpperCase()}${reviewPeriod.slice(1)} overview: ${formatFullDateRange(wrapped.start_date, wrapped.end_date)}`,
             `FNDR recorded about ${formatMinutes(wrapped.total_minutes)} of activity across ${wrapped.active_days} active day${wrapped.active_days === 1 ? "" : "s"}${app ? `, mostly in ${app.name}` : ""}.`,
             `Captured memories: ${wrapped.total_captures.toLocaleString()}.`,
-            `Busiest day: ${wrapped.busiest_day?.day ?? "none recorded"}.`,
-            `Open follow-ups or to-dos: ${wrapped.open_tasks}.`,
+            `Meetings: ${wrapped.meeting_count}.`,
+            `Busiest day: ${wrapped.busiest_day ? `${wrapped.busiest_day.day} (${wrapped.busiest_day.count} captures)` : "none recorded"}.`,
+            `Most active hour: ${formatHour(wrapped.busiest_hour)}.`,
+            `Documents and files: ${wrapped.document_count.toLocaleString()}${wrapped.most_revisited_file ? `, most revisited: ${wrapped.most_revisited_file}` : ""}.`,
+            `Open follow-ups or to-dos: ${wrapped.open_tasks} (${wrapped.open_followups} follow-up${wrapped.open_followups === 1 ? "" : "s"}).`,
+            ...ranked("Apps with the most recorded activity", wrapped.apps),
+            ...(wrapped.projects_and_topics.length === 0 ? [] : ["", "Projects and topics:", ...wrapped.projects_and_topics.map((item, index) => `${index + 1}. ${item.name} - ${item.count.toLocaleString()}`)]),
+            ...ranked("Most-visited websites", wrapped.websites),
         ].join("\n");
-    }, [wrapped]);
+    }, [wrapped, reviewPeriod]);
 
     const handleExport = async () => {
         if (!wrapped || exporting) return;
@@ -275,12 +296,12 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
         setWrappedActivity((current) => recordActivityStep(
             current ?? beginActivityTrace({
                 id: `wrapped-export-${startedAtMs}`,
-                title: "FNDR Wrapped activity",
+                title: "FNDR Review activity",
                 startedAtMs,
             }),
             {
                 id: "pdf-export",
-                label: "Exporting weekly recap PDF",
+                label: "Exporting review PDF",
                 actor: "Local PDF exporter",
                 status: "running",
                 evidence: "ipc-boundary",
@@ -294,7 +315,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
             const finishedAtMs = Date.now();
             setWrappedActivity((current) => current ? recordActivityStep(current, {
                 id: "pdf-export",
-                label: "Weekly recap PDF saved locally",
+                label: "Review PDF saved locally",
                 actor: "Local PDF exporter",
                 status: "completed",
                 evidence: "result-metadata",
@@ -306,7 +327,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
             const failedAtMs = Date.now();
             setWrappedActivity((current) => current ? recordActivityStep(current, {
                 id: "pdf-export",
-                label: "Weekly recap PDF export failed",
+                label: "Review PDF export failed",
                 actor: "Local PDF exporter",
                 status: "failed",
                 evidence: "ipc-boundary",
@@ -319,6 +340,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
     };
 
     const handleChangeWeek = () => {
+        if (onBackToReview) { onBackToReview(); return; }
         setScreen("selection");
         setWrapped(null);
         setError(null);
@@ -371,7 +393,7 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
     const activityNarrative = wrapped
         ? wrapped.total_captures > 0
             ? `FNDR recorded about ${formatMinutes(wrapped.total_minutes)} of activity across ${wrapped.active_days} active day${wrapped.active_days === 1 ? "" : "s"}${topApp ? `, mostly in ${topApp.name}` : ""}.`
-            : "FNDR did not record activity for this week."
+            : `FNDR did not record activity for this ${reviewPeriod}.`
         : "";
 
     return (
@@ -386,10 +408,10 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
             {screen === "selection" ? (
                 <main className="wrapped-selection-page">
                     <PanelHeader
-                        title="FNDR Wrapped"
+                        title="FNDR Review"
                         titleId="wrapped-panel-title"
                         subtitle="Choose a week to review your recorded activity."
-                        closeLabel="Close FNDR Wrapped"
+                        closeLabel="Close FNDR Review"
                         closeRef={closeButtonRef}
                         onClose={onClose}
                     />
@@ -444,36 +466,26 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                 </main>
             ) : (
                 <>
-                    <header className="wrapped-results-header">
-                        <div className="wrapped-results-title">
-                            <h2 id="wrapped-panel-title">FNDR Wrapped</h2>
-                            <strong>{wrapped ? formatFullDateRange(wrapped.start_date, wrapped.end_date) : selectedRange}</strong>
-                            {wrapped && (
-                                <div>
-                                    <span>Data collected from {formatFullDateRange(wrapped.start_date, wrapped.end_date)}</span>
-                                    <span>Last updated {formatLastUpdated(wrapped.generated_at_ms)}</span>
-                                </div>
-                            )}
-                        </div>
-                        <div className="wrapped-results-actions">
-                            <button type="button" className="ui-action-btn wrapped-change-week-btn" onClick={handleChangeWeek}>Change week</button>
-                            <button type="button" className="ui-action-btn wrapped-refresh-btn" onClick={() => void loadWrapped()} disabled={loading}>
-                                {loading ? "Updating…" : "Update recap"}
-                            </button>
-                            <button type="button" className="ui-action-btn wrapped-export-btn" onClick={() => void handleExport()} disabled={!wrapped || exporting}>
-                                {exporting ? "Exporting…" : "Export"}
-                            </button>
-                            <button
-                                ref={closeButtonRef}
-                                type="button"
-                                className="ui-action-btn wrapped-close-btn"
-                                onClick={onClose}
-                                aria-label="Close FNDR Wrapped"
-                            >
-                                <span aria-hidden="true">×</span>
-                            </button>
-                        </div>
-                    </header>
+                    <ReviewResultsHeader
+                        titleId="wrapped-panel-title"
+                        heading={wrapped ? formatFullDateRange(wrapped.start_date, wrapped.end_date) : selectedRange}
+                        details={wrapped ? [
+                            `Data collected from ${formatFullDateRange(wrapped.start_date, wrapped.end_date)}`,
+                            `Last updated ${formatLastUpdated(wrapped.generated_at_ms)}`,
+                        ] : []}
+                        backLabel={`← Back to ${onBackToReview ? "review" : "week"} selection`}
+                        onBack={handleChangeWeek}
+                        refreshLabel="Update recap"
+                        refreshingLabel="Updating…"
+                        showRefresh={rangeEndDate >= today}
+                        refreshing={loading}
+                        onRefresh={() => void loadWrapped()}
+                        exporting={exporting}
+                        exportDisabled={!wrapped}
+                        onExport={() => void handleExport()}
+                        closeRef={closeButtonRef}
+                        onClose={onClose}
+                    />
 
                     <main className="wrapped-results-body">
                         {wrappedActivity && (
@@ -493,20 +505,20 @@ export function FndrWrappedPanel({ isVisible, onClose }: FndrWrappedPanelProps) 
                         {wrapped && (
                             <div className="wrapped-results-content">
                                 <section className="wrapped-hero">
-                                    <span className="wrapped-eyebrow">WEEK OVERVIEW</span>
+                                    <span className="wrapped-eyebrow">{reviewPeriod.toUpperCase()} OVERVIEW</span>
                                     <h3>{activityNarrative}</h3>
                                 </section>
 
                                 {wrapped.total_captures === 0 ? (
                                     <section className="wrapped-week-empty">
-                                        <h3>No captured memories for this week yet.</h3>
-                                        <p>Try another week, or keep FNDR running while you work to build a future recap.</p>
-                                        <button type="button" onClick={handleChangeWeek}>Choose another week</button>
+                                        <h3>No captured memories for this {reviewPeriod}.</h3>
+                                        <p>Choose another period to review captured activity.</p>
+                                        <button type="button" onClick={handleChangeWeek}>Choose another period</button>
                                     </section>
                                 ) : (
                                     <div className="wrapped-results-grid">
                                         <section className="wrapped-card wrapped-overview-card">
-                                            <span className="wrapped-card-label">WEEK OVERVIEW</span>
+                                            <span className="wrapped-card-label">{reviewPeriod.toUpperCase()} OVERVIEW</span>
                                             <div className="wrapped-overview-stats">
                                                 <div><strong>{wrapped.total_captures.toLocaleString()}</strong><span>Captured memories</span></div>
                                                 <div><strong>{wrapped.active_days}</strong><span>Active days</span></div>
