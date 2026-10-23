@@ -225,8 +225,15 @@ describe("development UI preview IPC", () => {
             invoke("generate_daily_summary_for_date", { dateStr: "2026-09-22" }),
         ).resolves.toContain("September 22");
         await expect(
-            invoke("get_daily_summary_overview", { dateStr: "2026-09-22" }),
-        ).resolves.toContain("follow-up");
+            invoke("generate_daily_summary_narrative", { dateStr: "2026-09-22" }),
+        ).resolves.toMatchObject({
+            mode: "narrative",
+            paragraphs: [expect.objectContaining({ memory_ids: ["memory-design-review"] }), expect.anything(), expect.anything()],
+            action_items: [expect.objectContaining({ task_id: "task-share-audit" }), expect.anything()],
+        });
+        await expect(
+            invoke("generate_daily_summary_narrative", { dateStr: "not-a-date" }),
+        ).rejects.toThrow("YYYY-MM-DD");
 
         const followups = await invoke("get_daily_summary_followups");
         expect(followups).toEqual(

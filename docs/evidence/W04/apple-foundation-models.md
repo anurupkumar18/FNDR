@@ -46,6 +46,7 @@ The direct binary invocations used the already built example to avoid repeated C
 | Task IDs | With Qwen installed | No Qwen, Apple ready and enabled | No usable Apple model |
 | --- | --- | --- | --- |
 | `memory_extraction`, `memory_snippet`, `answer` | Qwen | Apple | Existing deterministic fallback |
+| `daily_summary_narrative` | Apple first, Qwen when Apple fails the checks | Apple | Basic per-theme summary composed in code |
 | `memory_extraction_repair`, `memory_review`, `memory_review_repair`, `card_synthesis`, `query_expansion`, `screen_guide`, `todo_extraction`, `task_suggestion`, `meeting_breakdown`, `eval_judge`, `query_plan` | Qwen | Existing fallback | Existing fallback |
 | `vision_description` and the pixel runtime | Qwen | Existing fallback | Existing fallback |
 

@@ -787,133 +787,7 @@ fn daily_summary_day_label(target_day: chrono::NaiveDate) -> String {
     }
 }
 
-fn format_overview_list(values: &HashSet<String>) -> String {
-    let mut values = values.iter().cloned().collect::<Vec<_>>();
-    values.sort_by_key(|value| value.to_lowercase());
-
-    const MAX_NAMES: usize = 4;
-    if values.len() > MAX_NAMES {
-        let remaining = values.len() - MAX_NAMES;
-        values.truncate(MAX_NAMES);
-        values.push(format!("{remaining} more"));
-    }
-
-    match values.len() {
-        0 => String::new(),
-        1 => values[0].clone(),
-        2 => format!("{} and {}", values[0], values[1]),
-        _ => {
-            let last = values.pop().unwrap_or_default();
-            format!("{}, and {last}", values.join(", "))
-        }
-    }
-}
-
-fn format_overview_duration(duration_ms: i64) -> String {
-    let minutes = ((duration_ms.max(0) + 59_999) / 60_000).max(1);
-    if minutes < 60 {
-        format!(
-            "about {minutes} minute{}",
-            if minutes == 1 { "" } else { "s" }
-        )
-    } else {
-        let hours = minutes / 60;
-        let rest = minutes % 60;
-        if rest == 0 {
-            format!("about {hours} hour{}", if hours == 1 { "" } else { "s" })
-        } else {
-            format!(
-                "about {hours} hour{} {rest} minute{}",
-                if hours == 1 { "" } else { "s" },
-                if rest == 1 { "" } else { "s" }
-            )
-        }
-    }
-}
-
-fn build_daily_summary_overview(records: &[SearchResult], open_tasks: usize) -> String {
-    if records.is_empty() {
-        return String::new();
-    }
-
-    let mut apps = HashSet::new();
-    let mut websites = HashSet::new();
-    let mut activity_timestamps: HashMap<String, Vec<i64>> = HashMap::new();
-
-    for record in records {
-        let website = record
-            .url
-            .as_deref()
-            .and_then(card_domain)
-            .filter(|domain| !domain.trim().is_empty());
-        let activity = if let Some(domain) = website {
-            let domain = domain.to_string();
-            websites.insert(domain.clone());
-            domain
-        } else {
-            let app = record.app_name.trim();
-            if app.is_empty() {
-                continue;
-            }
-            apps.insert(app.to_string());
-            app.to_string()
-        };
-        activity_timestamps
-            .entry(activity)
-            .or_default()
-            .push(record.timestamp);
-    }
-
-    let mut durations = activity_timestamps
-        .into_iter()
-        .map(|(activity, mut timestamps)| {
-            timestamps.sort_unstable();
-            let duration_ms = timestamps
-                .windows(2)
-                .map(|window| (window[1] - window[0]).clamp(30_000, 5 * 60_000))
-                .sum::<i64>()
-                .max(30_000);
-            (activity, duration_ms)
-        })
-        .collect::<Vec<_>>();
-    durations.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-    let activity_sentence = match (apps.is_empty(), websites.is_empty()) {
-        (false, false) => format!(
-            "You used {} and visited {}.",
-            format_overview_list(&apps),
-            format_overview_list(&websites)
-        ),
-        (false, true) => format!("You used {}.", format_overview_list(&apps)),
-        (true, false) => format!("You visited {}.", format_overview_list(&websites)),
-        (true, true) => String::new(),
-    };
-
-    let most_time_sentence = durations
-        .first()
-        .map(|(activity, duration_ms)| {
-            format!(
-                "You spent the most time in “{activity}” ({}).",
-                format_overview_duration(*duration_ms)
-            )
-        })
-        .unwrap_or_default();
-
-    // Nothing open is not news, so it gets no sentence.
-    let followup_sentence = match open_tasks {
-        0 => String::new(),
-        1 => "You have 1 open task to carry into tomorrow.".to_string(),
-        count => format!("You have {count} open tasks to carry into tomorrow."),
-    };
-
-    [activity_sentence, most_time_sentence, followup_sentence]
-        .into_iter()
-        .filter(|sentence| !sentence.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Return the exact open follow-ups counted in the daily summary overview.
+/// Return the open follow-ups the person is carrying, for the Daily Summary.
 /// The task-panel query applies additional quality filters, which can hide an
 /// otherwise valid follow-up from this actionable daily-summary surface.
 #[tauri::command]
@@ -974,48 +848,78 @@ pub async fn generate_daily_summary_for_date(
     ))
 }
 
+/// The Daily Summary narrative for one day (ADR 038): paragraphs, action
+/// items and reminders written by the local model and kept only where the
+/// captures back them, or the basic summary composed in code.
 #[tauri::command]
-pub async fn get_daily_summary_overview(
+pub async fn generate_daily_summary_narrative(
     state: State<'_, Arc<AppState>>,
     date_str: String,
-) -> Result<String, String> {
+) -> Result<crate::daily_narrative::DailyNarrative, String> {
+    use crate::daily_narrative as narrative;
     let target_day = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
         .map_err(|e| format!("Invalid date format: {}", e))?;
-    let start = target_day
-        .and_hms_opt(0, 0, 0)
-        .ok_or("Failed to create start time")?;
-    let end = (target_day + chrono::Duration::days(1))
-        .and_hms_opt(0, 0, 0)
-        .ok_or("Failed to create end time")?;
-
-    let start_ms = chrono::Local
-        .from_local_datetime(&start)
-        .earliest()
-        .unwrap_or_else(|| chrono::Local.from_local_datetime(&start).latest().unwrap())
-        .timestamp_millis();
-    let end_ms = chrono::Local
-        .from_local_datetime(&end)
-        .earliest()
-        .unwrap_or_else(|| chrono::Local.from_local_datetime(&end).latest().unwrap())
-        .timestamp_millis()
-        - 1;
+    let local_ms = |day: chrono::NaiveDate| {
+        day.and_hms_opt(0, 0, 0).and_then(|at| {
+            chrono::Local
+                .from_local_datetime(&at)
+                .earliest()
+                .or_else(|| chrono::Local.from_local_datetime(&at).latest())
+                .map(|at| at.timestamp_millis())
+        })
+    };
+    let start_ms = local_ms(target_day).ok_or("Failed to create start time")?;
+    let end_ms = local_ms(target_day + chrono::Duration::days(1)).ok_or("Failed to create end time")? - 1;
 
     let records = state
         .store
-        .get_search_results_in_range(start_ms, end_ms)
+        .get_memories_in_range(start_ms, end_ms)
         .await
         .map_err(|e| e.to_string())?;
     let blocklist = state.config.read().blocklist.clone();
-    let records = surfaceable_daily_records(records, &blocklist);
-    if records.is_empty() {
-        return Ok(String::new());
-    }
+    let visible: Vec<_> = records
+        .into_iter()
+        .filter(|record| context_runtime::retrieve::memory_is_visible(record, &blocklist))
+        .filter(|record| crate::outputs::gather::is_own_work(&record.source_type))
+        .filter(|record| !crate::tasks::suggest::is_system_surface(&record.app_name))
+        .collect();
 
-    let open_tasks =
-        crate::tasks::suggest::open_commitments(state.store.list_tasks().await.unwrap_or_default())
-            .len();
+    let all_tasks = state.store.list_tasks().await.unwrap_or_default();
+    let completed: Vec<Task> = all_tasks
+        .iter()
+        .filter(|task| {
+            task.is_completed
+                && !task.is_dismissed
+                && !crate::tasks::suggest::is_suggestion(task)
+        })
+        .cloned()
+        .collect();
+    let open = crate::tasks::suggest::open_commitments(all_tasks);
+    let index = narrative::TaskIndex {
+        open: &open,
+        completed: &completed,
+    };
+    let captures: Vec<_> = visible
+        .iter()
+        .map(|record| narrative::Capture::from_record(record, &index))
+        .collect();
+    let day_label = target_day.format("%A, %Y-%m-%d").to_string();
+    let package = narrative::build_package(&captures, &day_label);
 
-    Ok(build_daily_summary_overview(&records, open_tasks))
+    let engine = state.inference_engine();
+    let can_retry_local = engine.as_ref().is_some_and(|engine| engine.has_local_model());
+    let package_json = package.to_prompt_json();
+    Ok(narrative::compose(&package, &date_str, can_retry_local, |force_local| {
+        let engine = engine.clone();
+        let package_json = package_json.clone();
+        async move {
+            match engine {
+                Some(engine) => engine.write_daily_narrative(&package_json, force_local).await,
+                None => (String::new(), "none"),
+            }
+        }
+    })
+    .await)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1529,22 +1433,6 @@ mod daily_summary_wording_tests {
             timestamp: 1_790_000_000_000 + minute * 60_000,
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn the_overview_counts_open_tasks_and_says_nothing_when_there_are_none() {
-        let records = vec![capture(
-            "Mail",
-            "Inbox",
-            "Replied to the lab report thread.",
-            0,
-        )];
-        let none = build_daily_summary_overview(&records, 0);
-        assert!(!none.to_lowercase().contains("open"), "{none}");
-        assert!(build_daily_summary_overview(&records, 1).contains("You have 1 open task to carry"));
-        assert!(
-            build_daily_summary_overview(&records, 3).contains("You have 3 open tasks to carry")
-        );
     }
 
     #[test]
