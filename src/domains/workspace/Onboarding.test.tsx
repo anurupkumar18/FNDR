@@ -461,6 +461,54 @@ describe("Onboarding permissions", () => {
 });
 
 describe("Onboarding privacy disclosures", () => {
+    it("introduces FNDR as the local work memory and explains that naming is optional", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: /work memory, on your Mac/i })).toBeInTheDocument();
+        expect(screen.getByText("Continue without adding a name.")).toBeInTheDocument();
+    });
+
+    it("explains what skipping Touch ID or screen permission changes", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "biometrics",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        const view = render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText("Skipping keeps FNDR unlocked with your Mac login."))
+            .toBeInTheDocument();
+
+        view.unmount();
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText("Skipping leaves screen capture off until you grant it in Settings."))
+            .toBeInTheDocument();
+    });
+
     it("shows Privacy Proof before any import or biometric choice", async () => {
         getOnboardingState.mockResolvedValue({
             step: "welcome", biometric_enabled: false, screen_permission: false,

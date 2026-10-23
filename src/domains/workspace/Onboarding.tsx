@@ -94,10 +94,10 @@ function StepWelcome({
     return (
         <>
             <span className="ob-icon">⌘</span>
-            <h1 className="ob-title">Your memory, on your Mac.</h1>
+            <h1 className="ob-title">Your work memory, on your Mac.</h1>
             <p className="ob-subtitle">
-                FNDR remembers what you&apos;ve worked on so you don&apos;t have to.
-                Synthesize meetings and track tasks — all instantly.
+                Find what you saw by what it meant, get back to it, and give your AI assistant the context.
+                Your captures stay on this Mac.
                 <br /><br />
                 FNDR stores your captured memory on this Mac and processes it locally by default.
                 Model downloads connect to Hugging Face; optional integrations can connect to services you configure.
@@ -124,6 +124,7 @@ function StepWelcome({
             <button className="ob-btn-ghost" onClick={() => handleNext(true)}>
                 Skip for now
             </button>
+            <p className="ob-choice-note">Continue without adding a name.</p>
         </>
     );
 }
@@ -170,6 +171,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
             <button className="ob-btn-ghost" onClick={handleSkip}>
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping keeps FNDR unlocked with your Mac login.</p>
         </>
     );
 }
@@ -229,6 +231,7 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
             >
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping the details does not change FNDR's local-first defaults.</p>
         </>
     );
 }
@@ -444,6 +447,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             >
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping leaves screen capture off until you grant it in Settings.</p>
         </>
     );
 }

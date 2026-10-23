@@ -108,6 +108,8 @@
 
 .import-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 
+.import-onboarding-note { margin: 10px 0 0; color: var(--rc-text-secondary); font-size: 13px; line-height: 1.45; }
+
 /* The payoff: one field, three suggestions, a result that opens. */
 .import-guided-search {
     display: grid;
