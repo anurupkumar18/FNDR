@@ -2,11 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import {
     addTodo,
     generateDailySummaryForDate,
+    generateDailySummaryNarrative,
     getDailySummaryFollowups,
-    getDailySummaryOverview,
     exportDailySummaryPdf,
     openExportedPdf,
     setTodoCompleted,
+    type DailyNarrative,
+    type DailyNarrativeItem,
     type Task,
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
@@ -51,6 +53,32 @@ function displayDate(dateStr: string) {
     }).format(new Date(year, month - 1, day));
 }
 
+const DONE_STORAGE_KEY = "fndr.dailySummary.done";
+
+function readDoneIds(dateStr: string): Set<string> {
+    try {
+        const raw = window.localStorage.getItem(`${DONE_STORAGE_KEY}.${dateStr}`);
+        const parsed: unknown = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+    } catch {
+        return new Set();
+    }
+}
+
+function writeDoneIds(dateStr: string, ids: Set<string>) {
+    try {
+        window.localStorage.setItem(`${DONE_STORAGE_KEY}.${dateStr}`, JSON.stringify([...ids]));
+    } catch {
+        // Checking an item still works for this session without storage.
+    }
+}
+
+function backendLabel(backend: DailyNarrative["backend"]) {
+    if (backend === "apple") return "Apple's on-device model";
+    if (backend === "local") return "FNDR's local model";
+    return null;
+}
+
 function followupSourceLabel(followup: Task) {
     const source = followup.source_app.trim();
     if (source.toLowerCase().startsWith("memory:")) {
@@ -81,11 +109,53 @@ function followupContext(followup: Task) {
     return "No additional context was saved.";
 }
 
+function NarrativeItemRow({
+    item,
+    done,
+    onToggle,
+    onOpen,
+}: {
+    item: DailyNarrativeItem;
+    done: boolean;
+    onToggle: () => void;
+    onOpen: (memoryId: string) => void;
+}) {
+    return (
+        <li className={`daily-item ${done ? "completed" : ""}`}>
+            <label className="daily-item-check">
+                <input
+                    type="checkbox"
+                    checked={done}
+                    onChange={onToggle}
+                    aria-label={`${done ? "Undo" : "Mark done"}: ${item.text}`}
+                />
+                <span className="daily-item-text">{item.text}</span>
+            </label>
+            {item.due_label && <span className="daily-item-due">{item.due_label}</span>}
+            {item.memory_ids[0] && (
+                <button
+                    type="button"
+                    className="daily-source-link"
+                    onClick={() => onOpen(item.memory_ids[0])}
+                    aria-label={`Open the memory behind: ${item.text}`}
+                >
+                    Source
+                </button>
+            )}
+        </li>
+    );
+}
+
 export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: DailySummaryPanelProps) {
     const [dateStr, setDateStr] = useState<string>("");
     const [summary, setSummary] = useState<string | null>(null);
     const [summaryDateStr, setSummaryDateStr] = useState<string | null>(null);
-    const [overview, setOverview] = useState<string | null>(null);
+    const [narrative, setNarrative] = useState<DailyNarrative | null>(null);
+    const [narrativeLoading, setNarrativeLoading] = useState(false);
+    const [narrativeError, setNarrativeError] = useState<string | null>(null);
+    const [narrativeCache, setNarrativeCache] = useState<Map<string, DailyNarrative>>(new Map());
+    const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+    const [itemError, setItemError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [exporting, setExporting] = useState(false);
@@ -117,7 +187,10 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         generationRequestRef.current += 1;
         setDateStr(nextDate);
         setError(null);
-        setOverview(null);
+        setNarrative(null);
+        setNarrativeLoading(false);
+        setNarrativeError(null);
+        setItemError(null);
         setFollowups([]);
         setFollowupError(null);
         setFollowupsLoading(false);
@@ -152,7 +225,6 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         );
         setSummaryActivity(startedTrace);
 
-        setOverview(null);
         setFollowupError(null);
         setFollowupsLoading(true);
         void getDailySummaryFollowups()
@@ -171,17 +243,38 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                     setFollowupsLoading(false);
                 }
             });
-        void getDailySummaryOverview(targetDate)
-            .then((rawOverview) => {
-                if (generationRequestRef.current === requestId) {
-                    setOverview(rawOverview.trim() || null);
-                }
-            })
-            .catch(() => {
-                if (generationRequestRef.current === requestId) {
-                    setOverview(null);
-                }
-            });
+        setItemError(null);
+        const cachedNarrative = narrativeCache.get(targetDate);
+        if (cachedNarrative) {
+            setNarrative(cachedNarrative);
+            setDoneIds(readDoneIds(targetDate));
+            setNarrativeError(null);
+            setNarrativeLoading(false);
+        } else {
+            setNarrative(null);
+            setNarrativeError(null);
+            setNarrativeLoading(true);
+            void generateDailySummaryNarrative(targetDate)
+                .then((result) => {
+                    if (generationRequestRef.current !== requestId) return;
+                    setNarrative(result);
+                    setDoneIds(readDoneIds(targetDate));
+                    // A basic summary is not kept, so asking again retries the model.
+                    if (result.mode !== "basic") {
+                        setNarrativeCache((previous) => new Map(previous).set(targetDate, result));
+                    }
+                })
+                .catch((err: unknown) => {
+                    if (generationRequestRef.current === requestId) {
+                        setNarrativeError(err instanceof Error ? err.message : String(err));
+                    }
+                })
+                .finally(() => {
+                    if (generationRequestRef.current === requestId) {
+                        setNarrativeLoading(false);
+                    }
+                });
+        }
 
         if (cache.has(targetDate)) {
             setSummary(cache.get(targetDate) ?? null);
@@ -257,6 +350,31 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         void handleGenerate(todayDateStr);
     };
 
+    const handleToggleItem = async (item: DailyNarrativeItem) => {
+        const nowDone = !doneIds.has(item.id);
+        const apply = (done: boolean) => {
+            setDoneIds((previous) => {
+                const next = new Set(previous);
+                if (done) next.add(item.id);
+                else next.delete(item.id);
+                writeDoneIds(dateStr, next);
+                return next;
+            });
+        };
+        setItemError(null);
+        apply(nowDone);
+        if (!item.task_id) return;
+        try {
+            const updated = await setTodoCompleted(item.task_id, nowDone);
+            if (!updated) {
+                setItemError("That task no longer exists in your task list.");
+            }
+        } catch (err) {
+            apply(!nowDone);
+            setItemError(err instanceof Error ? err.message : "Unable to update the task.");
+        }
+    };
+
     const handleToggleFollowup = async (followup: Task) => {
         const isCompleted = !followup.is_completed;
         setUpdatingFollowupId(followup.id);
@@ -324,7 +442,18 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
         setExporting(true);
         setError(null);
         try {
-            const path = await exportDailySummaryPdf(summaryDateStr, summary);
+            const path = await exportDailySummaryPdf(
+                summaryDateStr,
+                summary,
+                narrative && narrative.mode !== "empty"
+                    ? {
+                        basic: narrative.mode === "basic",
+                        paragraphs: narrative.paragraphs.map((paragraph) => paragraph.text),
+                        action_items: narrative.action_items.map((item) => item.text),
+                        reminders: narrative.reminders.map((item) => item.text),
+                    }
+                    : undefined,
+            );
             setExportedPdfPath(path);
             const finishedAtMs = Date.now();
             setSummaryActivity((current) => current ? recordActivityStep(current, {
@@ -483,7 +612,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                         <button
                             className={`ui-action-btn generate-btn download-pdf-btn ${exporting ? "loading" : ""}`}
                             onClick={() => void handleDownloadPdf()}
-                            disabled={exporting || loading}
+                            disabled={exporting || loading || narrativeLoading}
                         >
                             {exporting ? "Exporting..." : "↓ Download PDF"}
                         </button>
@@ -503,7 +632,99 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
 
                     {!loading && !error && summary && summaryDateStr === dateStr && (
                         <>
-                            {overview && <p className="daily-summary-overview">{overview}</p>}
+                            <section className="daily-narrative-card" aria-labelledby="daily-narrative-heading">
+                                <div className="daily-section-header">
+                                    <h3 id="daily-narrative-heading">Your day</h3>
+                                    {narrative?.mode === "basic" && (
+                                        <span className="daily-basic-badge">Basic summary</span>
+                                    )}
+                                </div>
+                                {narrativeLoading && (
+                                    <PanelState
+                                        kind="loading"
+                                        title="Writing your day"
+                                        description="The on-device model is reading this day's memories. Nothing leaves this Mac."
+                                    />
+                                )}
+                                {!narrativeLoading && narrativeError && (
+                                    <PanelState
+                                        kind="error"
+                                        title="Your day could not be written"
+                                        description={narrativeError}
+                                        action={{ label: "Try again", onAction: () => void handleGenerate() }}
+                                    />
+                                )}
+                                {!narrativeLoading && !narrativeError && narrative?.mode === "empty" && (
+                                    <p className="daily-section-empty">No memories were recorded for this date.</p>
+                                )}
+                                {!narrativeLoading && !narrativeError && narrative && narrative.mode !== "empty" && (
+                                    <>
+                                        {narrative.paragraphs.map((paragraph, index) => (
+                                            <p className="daily-narrative-paragraph" key={`${index}-${paragraph.text}`}>
+                                                {paragraph.text}
+                                                {paragraph.memory_ids[0] && (
+                                                    <button
+                                                        type="button"
+                                                        className="daily-source-link"
+                                                        onClick={() => onOpenMemoryById(paragraph.memory_ids[0])}
+                                                        aria-label={`Open the memory behind: ${paragraph.text}`}
+                                                    >
+                                                        Source
+                                                    </button>
+                                                )}
+                                            </p>
+                                        ))}
+                                        {narrative.mode === "basic" ? (
+                                            <p className="daily-narrative-note">
+                                                Composed from your captures without a model: {narrative.basic_reason ?? "the model was not used"}.
+                                            </p>
+                                        ) : (
+                                            <p className="daily-narrative-note">
+                                                Written on this Mac by {backendLabel(narrative.backend) ?? "a local model"} and checked against your captures.
+                                            </p>
+                                        )}
+                                    </>
+                                )}
+                            </section>
+                            {!narrativeLoading && !narrativeError && narrative && narrative.action_items.length > 0 && (
+                                <section className="daily-narrative-card" aria-labelledby="daily-actions-heading">
+                                    <div className="daily-section-header">
+                                        <h3 id="daily-actions-heading">Action items</h3>
+                                    </div>
+                                    <ul className="daily-item-list">
+                                        {narrative.action_items.map((item) => (
+                                            <NarrativeItemRow
+                                                key={item.id}
+                                                item={item}
+                                                done={doneIds.has(item.id)}
+                                                onToggle={() => void handleToggleItem(item)}
+                                                onOpen={onOpenMemoryById}
+                                            />
+                                        ))}
+                                    </ul>
+                                    {itemError && <p className="daily-followups-error" role="alert">{itemError}</p>}
+                                </section>
+                            )}
+                            {!narrativeLoading && !narrativeError && narrative && narrative.reminders.length > 0 && (
+                                <section className="daily-narrative-card" aria-labelledby="daily-reminders-heading">
+                                    <div className="daily-section-header">
+                                        <h3 id="daily-reminders-heading">Reminders</h3>
+                                    </div>
+                                    <ul className="daily-item-list">
+                                        {narrative.reminders.map((item) => (
+                                            <NarrativeItemRow
+                                                key={item.id}
+                                                item={item}
+                                                done={doneIds.has(item.id)}
+                                                onToggle={() => void handleToggleItem(item)}
+                                                onOpen={onOpenMemoryById}
+                                            />
+                                        ))}
+                                    </ul>
+                                </section>
+                            )}
+                            <details className="daily-all-activity">
+                                <summary>All activity</summary>
                             <section className="daily-followups-card" aria-labelledby="daily-followups-heading">
                                 <div className="daily-followups-header">
                                     <div>
@@ -602,6 +823,7 @@ export function DailySummaryPanel({ isVisible, onClose, onOpenMemoryById }: Dail
                                 })}
                                 </ul>
                             </section>
+                            </details>
                         </>
                     )}
 

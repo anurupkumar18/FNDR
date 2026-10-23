@@ -2359,8 +2359,37 @@ export async function generateDailySummaryForDate(dateStr: string): Promise<stri
     return invoke<string>("generate_daily_summary_for_date", { dateStr });
 }
 
-export async function getDailySummaryOverview(dateStr: string): Promise<string> {
-    return invoke<string>("get_daily_summary_overview", { dateStr });
+export interface DailyNarrativeParagraph {
+    text: string;
+    /** Memories behind the paragraph, the best first. */
+    memory_ids: string[];
+}
+
+export interface DailyNarrativeItem {
+    id: string;
+    text: string;
+    memory_ids: string[];
+    /** The task row behind the item, when one exists. */
+    task_id: string | null;
+    due_label: string | null;
+}
+
+export interface DailyNarrative {
+    date: string;
+    /** "narrative": model text that passed the checks. "basic": composed in code. */
+    mode: "narrative" | "basic" | "empty";
+    backend: "apple" | "local" | "none";
+    basic_reason: string | null;
+    paragraphs: DailyNarrativeParagraph[];
+    action_items: DailyNarrativeItem[];
+    reminders: DailyNarrativeItem[];
+    groups_used: number;
+    items_dropped: number;
+    model_ms: number;
+}
+
+export async function generateDailySummaryNarrative(dateStr: string): Promise<DailyNarrative> {
+    return invoke<DailyNarrative>("generate_daily_summary_narrative", { dateStr });
 }
 
 export async function getDailySummaryFollowups(): Promise<Task[]> {
@@ -2417,8 +2446,20 @@ export async function exportWeeklyWrappedPdf(
     return invoke<string>("export_weekly_wrapped_pdf", { startDate, endDate, recapText });
 }
 
-export async function exportDailySummaryPdf(dateStr: string, summaryText: string): Promise<string> {
-    return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText });
+/** The sections the PDF prints above the per-capture list. */
+export interface DailySummaryPdfNarrative {
+    basic: boolean;
+    paragraphs: string[];
+    action_items: string[];
+    reminders: string[];
+}
+
+export async function exportDailySummaryPdf(
+    dateStr: string,
+    summaryText: string,
+    narrative?: DailySummaryPdfNarrative,
+): Promise<string> {
+    return invoke<string>("export_daily_summary_pdf", { dateStr, summaryText, narrative: narrative ?? null });
 }
 
 export async function openExportedPdf(path: string): Promise<void> {

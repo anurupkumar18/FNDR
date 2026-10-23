@@ -12,6 +12,7 @@ pub mod capture;
 pub mod companion;
 pub mod config;
 pub mod context_runtime;
+pub mod daily_narrative;
 pub mod decision;
 pub mod downloads;
 pub mod embed;

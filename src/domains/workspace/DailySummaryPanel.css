@@ -256,15 +256,148 @@
     list-style-position: outside;
 }
 
-.daily-summary-overview {
-    margin: 0;
+.daily-narrative-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     background: var(--surface-translucent);
     border: 1px solid var(--border);
-    padding: 24px;
+    padding: 20px 24px;
     border-radius: var(--film-radius-lg);
-    line-height: 1.6;
-    font-size: 15px;
+}
+
+.daily-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.daily-section-header h3 {
+    margin: 0;
     color: var(--text-primary);
+    font-size: 1rem;
+}
+
+.daily-basic-badge {
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-pill);
+    padding: 3px 10px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.daily-narrative-paragraph {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.65;
+}
+
+.daily-narrative-note,
+.daily-section-empty {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.daily-item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.daily-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-md);
+    background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+}
+
+.daily-item-check {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.daily-item-check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+}
+
+.daily-item-text {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.daily-item.completed .daily-item-text {
+    color: var(--text-secondary);
+    text-decoration: line-through;
+}
+
+.daily-item-due {
+    flex: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.daily-source-link {
+    flex: none;
+    margin-left: 8px;
+    min-height: 28px;
+    padding: 2px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--film-radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+}
+
+.daily-item .daily-source-link {
+    margin-left: 0;
+}
+
+.daily-source-link:hover {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.daily-all-activity > :not(summary) + :not(summary) {
+    margin-top: 16px;
+}
+
+.daily-all-activity > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 2px;
+    min-height: 32px;
+}
+
+.daily-all-activity > summary:hover {
+    color: var(--text-primary);
+}
+
+.daily-all-activity[open] > summary {
+    margin-bottom: 12px;
 }
 
 .summary-bullet {

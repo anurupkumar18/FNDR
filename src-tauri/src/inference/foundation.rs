@@ -37,6 +37,7 @@ pub const TASK_DEFAULTS: &[(&str, Backend, bool)] = &[
     ("memory_extraction", Backend::LocalGguf, true),
     ("memory_snippet", Backend::LocalGguf, true),
     ("answer", Backend::LocalGguf, true),
+    ("daily_summary_narrative", Backend::AppleFoundation, true),
     ("memory_extraction_repair", Backend::LocalGguf, false),
     ("memory_review", Backend::LocalGguf, false),
     ("memory_review_repair", Backend::LocalGguf, false),
@@ -258,6 +259,12 @@ impl Client {
                 {"name": "activity_type", "description": prompts::FOUNDATION_EXTRACTION_ACTIVITY_DESCRIPTION, "type": "string"},
                 {"name": "confidence", "description": prompts::FOUNDATION_EXTRACTION_CONFIDENCE_DESCRIPTION, "type": "string"}
             ])
+        } else if task == "daily_summary_narrative" {
+            json!([
+                {"name": "paragraphs", "description": prompts::FOUNDATION_NARRATIVE_PARAGRAPHS_DESCRIPTION, "type": "strings"},
+                {"name": "action_items", "description": prompts::FOUNDATION_NARRATIVE_ACTIONS_DESCRIPTION, "type": "strings"},
+                {"name": "reminders", "description": prompts::FOUNDATION_NARRATIVE_REMINDERS_DESCRIPTION, "type": "strings"}
+            ])
         } else {
             json!([{"name": "text", "description": prompts::FOUNDATION_TEXT_FIELD_DESCRIPTION, "type": "string"}])
         };
@@ -311,12 +318,32 @@ impl Client {
             })
             .to_string());
         }
+        if task == "daily_summary_narrative" {
+            return Ok(narrative_lines(&value));
+        }
         value
             .get("text")
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| "helper returned an invalid schema".to_string())
     }
+}
+
+/// The three typed lists as the `KIND | ids | text` lines the checker reads.
+fn narrative_lines(value: &Value) -> String {
+    let mut lines = Vec::new();
+    for (kind, field) in [
+        ("P", "paragraphs"),
+        ("A", "action_items"),
+        ("R", "reminders"),
+    ] {
+        for item in value[field].as_array().into_iter().flatten() {
+            if let Some(text) = item.as_str() {
+                lines.push(format!("{kind} | {}", text.trim()));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 impl Drop for Client {
@@ -354,6 +381,14 @@ mod tests {
             Backend::AppleFoundation
         );
         assert_eq!(route("answer", true, true, false), Backend::AppleFoundation);
+        assert_eq!(
+            route("daily_summary_narrative", true, true, true),
+            Backend::AppleFoundation
+        );
+        assert_eq!(
+            route("daily_summary_narrative", false, false, true),
+            Backend::LocalGguf
+        );
         assert_eq!(route("answer", true, true, true), Backend::LocalGguf);
         assert_eq!(
             route("memory_extraction", true, true, true),
@@ -438,6 +473,19 @@ mod tests {
         assert_eq!(value["source_refs"]["actions"], json!([]));
         assert_eq!(value["memory_context"], "Reviewed a draft.");
         assert_eq!(value["confidence"], 0.7);
+    }
+
+    #[test]
+    fn narrative_lists_become_kind_ids_text_lines() {
+        let value = json!({
+            "paragraphs": ["g1 g2 | Spent the afternoon on Payments."],
+            "action_items": ["g2 | Send the draft"],
+            "reminders": [],
+        });
+        assert_eq!(
+            narrative_lines(&value),
+            "P | g1 g2 | Spent the afternoon on Payments.\nA | g2 | Send the draft"
+        );
     }
 
     #[cfg(unix)]

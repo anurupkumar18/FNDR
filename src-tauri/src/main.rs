@@ -1046,7 +1046,7 @@ fn main() {
             ipc::commands::list_output_allowed_destinations,
             ipc::commands::forget_output_allowed_destination,
             ipc::commands::generate_daily_summary_for_date,
-            ipc::commands::get_daily_summary_overview,
+            ipc::commands::generate_daily_summary_narrative,
             ipc::commands::get_daily_summary_followups,
             ipc::commands::get_weekly_wrapped,
             // Time tracking & Focus Mode

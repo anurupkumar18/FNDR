@@ -6,6 +6,7 @@ import type {
     ConfiguredPeer,
     HermesBridgeStatus,
     ComposedAnswer,
+    DailyNarrative,
     MemoryCard,
     MemoryReviewWorkerStatus,
     NeedsSignalCard,
@@ -691,6 +692,64 @@ type PreviewHomeState = "populated" | "empty" | "error" | "loading";
 function previewHomeState(): PreviewHomeState {
     const value = new URLSearchParams(globalThis.location?.search ?? "").get("home");
     return value === "empty" || value === "error" || value === "loading" ? value : "populated";
+}
+
+type PreviewDailyState = "narrative" | "basic" | "empty" | "error" | "loading";
+
+/** `?daily=basic|empty|error|loading` previews the other Daily Summary states. */
+function previewDailyState(): PreviewDailyState {
+    const value = new URLSearchParams(globalThis.location?.search ?? "").get("daily");
+    return value === "basic" || value === "empty" || value === "error" || value === "loading" ? value : "narrative";
+}
+
+/** A fictional day for Sam Example. No real capture is used. */
+function previewDailyNarrative(dateStr: string, state: PreviewDailyState): DailyNarrative {
+    const base = {
+        date: dateStr,
+        backend: "apple" as const,
+        groups_used: 4,
+        items_dropped: 2,
+        model_ms: 3400,
+    };
+    const actionItems = [
+        { id: "action_item-share-audit", text: "Share the UI audit with the capstone team", memory_ids: ["memory-roadmap"], task_id: "task-share-audit", due_label: "Tomorrow" },
+        { id: "action_item-keyboard-pass", text: "Run the keyboard-only panel pass", memory_ids: ["memory-accessibility-notes"], task_id: "task-keyboard-pass", due_label: null },
+    ];
+    const reminders = [
+        { id: "reminder-native-permissions", text: "Verify capture permissions in the native app", memory_ids: ["memory-preview-harness"], task_id: "task-native-permissions", due_label: "In 2 days" },
+    ];
+    if (state === "empty") {
+        return { ...base, mode: "empty", backend: "none", basic_reason: null, paragraphs: [], action_items: [], reminders: [], groups_used: 0, items_dropped: 0, model_ms: 0 };
+    }
+    if (state === "basic") {
+        return {
+            ...base,
+            mode: "basic",
+            backend: "none",
+            basic_reason: "the on-device model did not answer",
+            paragraphs: [
+                { text: "Used Figma at 9:42 AM. Compared the home hierarchy and wallpaper contrast.", memory_ids: ["memory-design-review"] },
+                { text: "Spent about 1 hour 20 minutes in Visual Studio Code on FNDR (1:05 PM to 2:25 PM). Mounted the real React shell behind synthetic IPC fixtures. Decision noted: keep the preview free of capture permissions.", memory_ids: ["memory-preview-harness"] },
+            ],
+            action_items: actionItems,
+            reminders,
+            groups_used: 2,
+            items_dropped: 0,
+            model_ms: 0,
+        };
+    }
+    return {
+        ...base,
+        mode: "narrative",
+        basic_reason: null,
+        paragraphs: [
+            { text: "Spent the morning in Figma on the FNDR home experience, comparing the home hierarchy and the wallpaper contrast.", memory_ids: ["memory-design-review"] },
+            { text: "Spent about 1 hour 20 minutes in Visual Studio Code building the browser preview, then collected accessibility acceptance criteria in Google Chrome.", memory_ids: ["memory-preview-harness", "memory-accessibility-notes"] },
+            { text: "Sequenced the UI overhaul into vertical slices in the audit notes.", memory_ids: ["memory-roadmap"] },
+        ],
+        action_items: actionItems,
+        reminders,
+    };
 }
 
 const previewResumeThreads: ResumeThread[] = [
@@ -1552,20 +1611,21 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                     throw new Error("Preview generate_daily_summary_for_date requires YYYY-MM-DD.");
                 }
                 return [
-                    `On ${displayPreviewDate(dateStr)}, you focused on making FNDR's browser-previewed interface consistent, readable, and permission-free.`,
-                    "You reviewed the Home hierarchy, documented accessibility acceptance criteria, and sequenced the remaining work into testable vertical slices.",
-                    "The native permission and relaunch checks remain separate operator tasks because a browser cannot prove macOS integration behavior.",
-                ].join("\n\n");
+                    `- FNDR captured 126 memories across about 8 hours on ${displayPreviewDate(dateStr)}, from 9:42 AM to 5:57 PM.`,
+                    "- Visual Studio Code: 41 captures from 1:05 PM to 2:25 PM around \"previewIpc.ts - FNDR\".",
+                    "- Figma: 12 captures from 9:42 AM to 10:30 AM around \"FNDR: Home concepts\".",
+                    "- Google Chrome: 1 capture at 3:12 PM around \"Inclusive product interface checklist\".",
+                ].join("\n");
             }
-            case "get_daily_summary_overview": {
+            case "generate_daily_summary_narrative": {
                 const dateStr = requiredString(payload, "dateStr", command);
                 if (!validDate(dateStr)) {
-                    throw new Error("Preview get_daily_summary_overview requires YYYY-MM-DD.");
+                    throw new Error("Preview generate_daily_summary_narrative requires YYYY-MM-DD.");
                 }
-                const openFollowups = tasks.filter((task) => (
-                    task.task_type === "Followup" && !task.is_completed && !task.is_dismissed
-                )).length;
-                return `FNDR previewed 126 local captures on ${displayPreviewDate(dateStr)}. Visual Studio Code was the leading app. You have ${openFollowups} open follow-up${openFollowups === 1 ? "" : "s"}.`;
+                const dailyState = previewDailyState();
+                if (dailyState === "loading") return homeWaits();
+                if (dailyState === "error") throw new Error("Preview: the day could not be summarized.");
+                return clonePreview(previewDailyNarrative(dateStr, dailyState));
             }
             case "get_daily_summary_followups":
                 // Like the backend (stats.rs): a suggestion nobody accepted is

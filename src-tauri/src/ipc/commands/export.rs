@@ -25,12 +25,90 @@ fn load_pdf_font_family() -> Result<genpdf::fonts::FontFamily<genpdf::fonts::Fon
         bold_italic: load("Arial Bold Italic.ttf")?,
     })
 }
-/// Export a daily summary text to a PDF in the Downloads folder
+/// The Daily Summary sections printed above the per-capture list.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct PdfNarrative {
+    pub basic: bool,
+    pub paragraphs: Vec<String>,
+    pub action_items: Vec<String>,
+    pub reminders: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PdfBlock {
+    Heading(String),
+    Paragraph(String),
+    Bullet(String),
+}
+
+fn strip_bullet(line: &str) -> &str {
+    if line.starts_with("- ") || line.starts_with("* ") || line.starts_with("• ") {
+        line[2..].trim()
+    } else if line.starts_with('-') || line.starts_with('*') || line.starts_with('•') {
+        line[1..].trim()
+    } else {
+        line
+    }
+}
+
+/// The page content in reading order: the narrative sections, then the old
+/// per-capture list under "All activity". Pure, so the layout is testable.
+fn pdf_blocks(summary_text: &str, narrative: Option<&PdfNarrative>) -> Vec<PdfBlock> {
+    let mut blocks = Vec::new();
+    let activity: Vec<&str> = summary_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if let Some(narrative) = narrative {
+        blocks.push(PdfBlock::Heading(if narrative.basic {
+            "Your day (basic summary)".to_string()
+        } else {
+            "Your day".to_string()
+        }));
+        blocks.extend(
+            narrative
+                .paragraphs
+                .iter()
+                .cloned()
+                .map(PdfBlock::Paragraph),
+        );
+        for (title, items) in [
+            ("Action items", &narrative.action_items),
+            ("Reminders", &narrative.reminders),
+        ] {
+            if !items.is_empty() {
+                blocks.push(PdfBlock::Heading(title.to_string()));
+                blocks.extend(items.iter().cloned().map(PdfBlock::Bullet));
+            }
+        }
+        if !activity.is_empty() {
+            blocks.push(PdfBlock::Heading("All activity".to_string()));
+        }
+    }
+    if activity.is_empty() {
+        if narrative.is_none() {
+            blocks.push(PdfBlock::Paragraph(
+                "No activity captured for this date.".to_string(),
+            ));
+        }
+    } else {
+        blocks.extend(
+            activity
+                .into_iter()
+                .map(|line| PdfBlock::Bullet(strip_bullet(line).to_string())),
+        );
+    }
+    blocks
+}
+
+/// Export a daily summary to a PDF in the Downloads folder
 #[tauri::command]
 pub async fn export_daily_summary_pdf(
     _app: tauri::AppHandle,
     date_str: String,
     summary_text: String,
+    narrative: Option<PdfNarrative>,
 ) -> Result<String, String> {
     // 1. Resolve Downloads folder
     let downloads_dir = dirs::download_dir()
@@ -59,31 +137,33 @@ pub async fn export_daily_summary_pdf(
     );
     doc.push(genpdf::elements::Break::new(1.5));
 
-    if !summary_text.is_empty() {
-        let mut list = genpdf::elements::UnorderedList::new();
-        for line in summary_text.split('\n') {
-            let trim = line.trim();
-            if !trim.is_empty() {
-                // Remove existing bullet points if present as genpdf adds its own
-                let content = if trim.starts_with("- ")
-                    || trim.starts_with("* ")
-                    || trim.starts_with("• ")
-                {
-                    trim[2..].trim()
-                } else if trim.starts_with("-") || trim.starts_with("*") || trim.starts_with("•")
-                {
-                    trim[1..].trim()
-                } else {
-                    trim
-                };
-                list.push(genpdf::elements::Paragraph::new(content.to_string()));
+    let mut list: Option<genpdf::elements::UnorderedList> = None;
+    for block in pdf_blocks(&summary_text, narrative.as_ref()) {
+        if !matches!(block, PdfBlock::Bullet(_)) {
+            if let Some(done) = list.take() {
+                doc.push(done);
             }
         }
-        doc.push(list);
-    } else {
-        doc.push(genpdf::elements::Paragraph::new(
-            "No activity captured for this date.",
-        ));
+        match block {
+            PdfBlock::Heading(text) => {
+                doc.push(genpdf::elements::Break::new(0.8));
+                doc.push(
+                    genpdf::elements::Text::new(text)
+                        .styled(genpdf::style::Style::new().bold().with_font_size(13)),
+                );
+                doc.push(genpdf::elements::Break::new(0.4));
+            }
+            PdfBlock::Paragraph(text) => {
+                doc.push(genpdf::elements::Paragraph::new(text));
+                doc.push(genpdf::elements::Break::new(0.5));
+            }
+            PdfBlock::Bullet(text) => list
+                .get_or_insert_with(genpdf::elements::UnorderedList::new)
+                .push(genpdf::elements::Paragraph::new(text)),
+        }
+    }
+    if let Some(done) = list.take() {
+        doc.push(done);
     }
 
     // Save
@@ -193,4 +273,70 @@ fn open_path_with_system(path: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open exported PDF: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod daily_pdf_tests {
+    use super::*;
+
+    fn narrative() -> PdfNarrative {
+        PdfNarrative {
+            basic: false,
+            paragraphs: vec!["Spent the afternoon on Payments.".into()],
+            action_items: vec!["Send the Q3 budget draft".into()],
+            reminders: vec![],
+        }
+    }
+
+    #[test]
+    fn the_narrative_sections_come_before_the_activity_list() {
+        let blocks = pdf_blocks(
+            "- Xcode: 3 captures\n\n- Slack: 1 capture",
+            Some(&narrative()),
+        );
+        assert_eq!(
+            blocks,
+            vec![
+                PdfBlock::Heading("Your day".into()),
+                PdfBlock::Paragraph("Spent the afternoon on Payments.".into()),
+                PdfBlock::Heading("Action items".into()),
+                PdfBlock::Bullet("Send the Q3 budget draft".into()),
+                PdfBlock::Heading("All activity".into()),
+                PdfBlock::Bullet("Xcode: 3 captures".into()),
+                PdfBlock::Bullet("Slack: 1 capture".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_basic_summary_is_labelled_and_an_empty_section_is_left_out() {
+        let basic = PdfNarrative {
+            basic: true,
+            ..narrative()
+        };
+        let blocks = pdf_blocks("", Some(&basic));
+        assert_eq!(
+            blocks[0],
+            PdfBlock::Heading("Your day (basic summary)".into())
+        );
+        assert!(!blocks.contains(&PdfBlock::Heading("Reminders".into())));
+        assert!(!blocks.contains(&PdfBlock::Heading("All activity".into())));
+    }
+
+    #[test]
+    fn without_a_narrative_the_page_is_the_old_bullet_list() {
+        assert_eq!(
+            pdf_blocks("- one\n* two", None),
+            vec![
+                PdfBlock::Bullet("one".into()),
+                PdfBlock::Bullet("two".into())
+            ]
+        );
+        assert_eq!(
+            pdf_blocks("", None),
+            vec![PdfBlock::Paragraph(
+                "No activity captured for this date.".into()
+            )]
+        );
+    }
 }
