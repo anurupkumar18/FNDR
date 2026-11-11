@@ -2455,6 +2455,10 @@ export interface WeeklyWrapped {
     most_revisited_file: string | null;
 }
 
+export async function getReviewDates(): Promise<string[]> {
+    return invoke<string[]>("get_review_dates");
+}
+
 export async function getWeeklyWrapped(startDate?: string, endDate?: string): Promise<WeeklyWrapped> {
     return invoke<WeeklyWrapped>("get_weekly_wrapped", {
         startDate: startDate ?? null,

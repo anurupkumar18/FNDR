@@ -27,8 +27,18 @@ export async function getOnboardingState(): Promise<OnboardingState> {
     return invoke<OnboardingState>("get_onboarding_state");
 }
 
-export async function saveOnboardingState(state: OnboardingState): Promise<void> {
-    return invoke("save_onboarding_state", { state });
+export async function saveOnboardingState(state: OnboardingState, skipped?: boolean): Promise<OnboardingState> {
+    return invoke<OnboardingState>("save_onboarding_state", { state, skipped: skipped ?? null });
+}
+
+export type OnboardingFunnelEventKind =
+    | "error" | "search_submitted" | "result_selected" | "reopen_succeeded" | "reopen_failed";
+
+export async function recordOnboardingFunnelEvent(
+    kind: OnboardingFunnelEventKind,
+    step?: OnboardingStep,
+): Promise<void> {
+    return invoke("record_onboarding_funnel_event", { kind, step: step ?? null });
 }
 
 // ── Biometrics ────────────────────────────────────────────────────────────

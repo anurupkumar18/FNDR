@@ -14,6 +14,7 @@ import {
     type NeedsSignalCard,
 } from "@/shared/ipc/tauri";
 import { reopenOutcomeMessage } from "@/shared/reopenOutcome";
+import { recordOnboardingFunnelEvent } from "@/shared/ipc/onboarding";
 import "./MemoryCardsPanel.css";
 import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
@@ -419,11 +420,15 @@ export function MemoryCardsPanel({
     const handleReopen = async (memoryId: string) => {
         try {
             const outcome = await reopenMemory(memoryId);
+            void recordOnboardingFunnelEvent(
+                outcome.kind === "opened" || outcome.kind === "opened_moved" ? "reopen_succeeded" : "reopen_failed",
+            ).catch(() => undefined);
             setReopenStatusById((previous) => ({
                 ...previous,
                 [memoryId]: reopenOutcomeMessage(outcome),
             }));
         } catch (err) {
+            void recordOnboardingFunnelEvent("reopen_failed").catch(() => undefined);
             const message = err instanceof Error ? err.message : String(err);
             setReopenStatusById((previous) => ({
                 ...previous,

@@ -185,16 +185,26 @@ pub async fn export_weekly_wrapped_pdf(
         .ok_or_else(|| "Could not find Downloads folder on this system.".to_string())?;
     let safe_start = start_date.replace('/', "-").replace(' ', "_");
     let safe_end = end_date.replace('/', "-").replace(' ', "_");
-    let target_path = downloads_dir.join(format!("FNDR_Wrapped_{safe_start}_to_{safe_end}.pdf"));
+    let target_path = downloads_dir.join(format!("FNDR_Review_{safe_start}_to_{safe_end}.pdf"));
+    render_review_pdf(&target_path, &start_date, &end_date, &recap_text)?;
+    Ok(target_path.to_string_lossy().to_string())
+}
 
+/// Render a Week or Month review recap to `target_path`.
+fn render_review_pdf(
+    target_path: &Path,
+    start_date: &str,
+    end_date: &str,
+    recap_text: &str,
+) -> Result<(), String> {
     let mut doc = genpdf::Document::new(load_pdf_font_family()?);
-    doc.set_title(format!("FNDR Wrapped: {start_date} to {end_date}"));
+    doc.set_title(format!("FNDR Review: {start_date} to {end_date}"));
     let mut decorator = genpdf::SimplePageDecorator::new();
     decorator.set_margins(PDF_PAGE_MARGIN);
     doc.set_page_decorator(decorator);
 
     doc.push(
-        genpdf::elements::Text::new("FNDR Wrapped")
+        genpdf::elements::Text::new("FNDR Review")
             .styled(genpdf::style::Style::new().bold().with_font_size(20)),
     );
     doc.push(
@@ -203,18 +213,22 @@ pub async fn export_weekly_wrapped_pdf(
     );
     doc.push(genpdf::elements::Break::new(1.5));
 
-    for line in recap_text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        doc.push(genpdf::elements::Paragraph::new(line.to_string()));
-        doc.push(genpdf::elements::Break::new(0.5));
+    for line in recap_text.lines().map(str::trim) {
+        if line.is_empty() {
+            doc.push(genpdf::elements::Break::new(0.5));
+        } else if line.ends_with(':') {
+            doc.push(
+                genpdf::elements::Paragraph::new(line.to_string())
+                    .styled(genpdf::style::Style::new().bold()),
+            );
+        } else {
+            doc.push(genpdf::elements::Paragraph::new(line.to_string()));
+            doc.push(genpdf::elements::Break::new(0.5));
+        }
     }
 
-    doc.render_to_file(&target_path)
-        .map_err(|err| format!("Failed to generate PDF file: {err}"))?;
-    Ok(target_path.to_string_lossy().to_string())
+    doc.render_to_file(target_path)
+        .map_err(|err| format!("Failed to generate PDF file: {err}"))
 }
 
 /// Open a PDF exported by FNDR from the user's Downloads folder.
@@ -338,5 +352,22 @@ mod daily_pdf_tests {
                 "No activity captured for this date.".into()
             )]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_pdf_is_written_with_recap_content() {
+        let path = std::env::temp_dir().join("fndr_review_export_test.pdf");
+        let _ = std::fs::remove_file(&path);
+        let recap = "Month overview: June 2026\nCaptured memories: 42.\n\nApps with the most recorded activity:\n1. Safari - 2h";
+        render_review_pdf(&path, "2026-06-01", "2026-06-30", recap).expect("pdf renders");
+        let bytes = std::fs::read(&path).expect("pdf exists");
+        let _ = std::fs::remove_file(&path);
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.len() > 1000);
     }
 }

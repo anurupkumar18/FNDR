@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Onboarding } from "./Onboarding";
-import type { ModelDownloadStatus } from "@/shared/ipc/onboarding";
+import type { ModelDownloadStatus, OnboardingState } from "@/shared/ipc/onboarding";
 import type { ActivityTraceEvidence } from "@/shared/activity/activityTrace";
 
 const listAvailableModels = vi.fn();
@@ -12,6 +12,7 @@ const checkPermissions = vi.fn();
 const openSystemSettings = vi.fn();
 const refreshAiModels = vi.fn();
 const getAppleModelStatus = vi.fn();
+const recordOnboardingFunnelEvent = vi.fn();
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState: (...args: unknown[]) => getOnboardingState(...args),
@@ -23,6 +24,7 @@ vi.mock("@/shared/ipc/onboarding", () => ({
     downloadModel: (...args: unknown[]) => downloadModel(...args),
     refreshAiModels: (...args: unknown[]) => refreshAiModels(...args),
     getAppleModelStatus: (...args: unknown[]) => getAppleModelStatus(...args),
+    recordOnboardingFunnelEvent: (...args: unknown[]) => recordOnboardingFunnelEvent(...args),
 }));
 
 const downloadStatusValue: ModelDownloadStatus & {
@@ -55,7 +57,7 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getEncryptionStatement: (...args: unknown[]) => getEncryptionStatement(...args),
 }));
 vi.mock("@/domains/privacy-proof/PrivacyProof", () => ({ PrivacyProof: () => <div>Privacy Proof</div> }));
-vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: () => void }) => <button onClick={onContinue}>Skip imports</button> }));
+vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: (skipped: boolean) => void }) => <button onClick={() => onContinue(true)}>Skip imports</button> }));
 
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
     useModelDownloadStatus: () => downloadStatusValue,
@@ -81,7 +83,8 @@ beforeEach(() => {
         microphone: "not_determined",
         speech_recognition: "not_determined",
     });
-    saveOnboardingState.mockResolvedValue(undefined);
+    saveOnboardingState.mockImplementation(async (state: OnboardingState) => state);
+    recordOnboardingFunnelEvent.mockResolvedValue(undefined);
     ttsStatus.mockResolvedValue({ state: "not_installed", downloadedBytes: 0, totalBytes: 330_000_000 });
     ttsInstall.mockResolvedValue({ state: "downloading", downloadedBytes: 0, totalBytes: 330_000_000 });
     refreshAiModels.mockResolvedValue({ ai_model_available: true });
@@ -145,7 +148,7 @@ afterEach(() => {
 
 describe("Onboarding voice download", () => {
     it("offers the natural voice ticked, naming the size and where it comes from, and starts it when the person continues", async () => {
-        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        listAvailableModels.mockResolvedValue([qwenInfo(true), minilmInfo(true)]);
         render(<Onboarding onComplete={() => {}} />);
 
         const box = (await screen.findByLabelText(/natural voice \(330 MB\)/)) as HTMLInputElement;
@@ -153,17 +156,17 @@ describe("Onboarding voice download", () => {
         expect(screen.getByText(/Hugging Face and GitHub/)).toBeInTheDocument();
         expect(ttsInstall).not.toHaveBeenCalled();
 
-        fireEvent.click(await screen.findByText(/^Skip for now/));
+        fireEvent.click(await screen.findByRole("button", { name: /Use Qwen3-VL · 2B/ }));
         await waitFor(() => expect(ttsInstall).toHaveBeenCalledWith(true));
         expect(ttsInstall).toHaveBeenCalledTimes(1);
     });
 
     it("downloads nothing when the box is unticked", async () => {
-        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        listAvailableModels.mockResolvedValue([qwenInfo(true), minilmInfo(true)]);
         render(<Onboarding onComplete={() => {}} />);
 
         fireEvent.click(await screen.findByLabelText(/natural voice/));
-        fireEvent.click(await screen.findByText(/^Skip for now/));
+        fireEvent.click(await screen.findByRole("button", { name: /Use Qwen3-VL · 2B/ }));
         await waitFor(() => expect(saveOnboardingState).toHaveBeenCalled());
         expect(ttsInstall).not.toHaveBeenCalled();
     });
@@ -179,6 +182,15 @@ describe("Onboarding voice download", () => {
 });
 
 describe("Onboarding model step", () => {
+    it("explains that a model is required and does not offer a skip loop", async () => {
+        listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: "Select your local AI model" })).toBeInTheDocument();
+        expect(screen.getByText(/choose a local model to finish setup/i)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /^Skip for now/ })).toBeNull();
+    });
+
     it("uses available Apple text inference without downloading Qwen and still offers Qwen", async () => {
         getAppleModelStatus.mockResolvedValue({ availability: "available", enabled: true });
         listAvailableModels.mockResolvedValue([qwenInfo(), minilmInfo(true)]);
@@ -326,6 +338,20 @@ describe("Onboarding model step", () => {
 });
 
 describe("Onboarding persistence", () => {
+    it("records a skipped step and a save error without any entered name", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: false, model_id: null, display_name: null,
+        });
+        saveOnboardingState.mockRejectedValueOnce(new Error("disk full"));
+        render(<Onboarding onComplete={() => {}} />);
+        fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
+        await waitFor(() => expect(saveOnboardingState).toHaveBeenCalledWith(
+            expect.objectContaining({ step: "privacy_promise" }), true,
+        ));
+        await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("error", "welcome"));
+    });
+
     it("offers imports after permissions and allows skipping them", async () => {
         getOnboardingState.mockResolvedValue({
             step: "permissions", biometric_enabled: false, screen_permission: false,
@@ -338,6 +364,22 @@ describe("Onboarding persistence", () => {
         expect(onComplete).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole("button", { name: "Skip imports" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    });
+
+    it("keeps model setup open when the saved state rejects completion after a model skip", async () => {
+        const incomplete: OnboardingState = {
+            step: "bring_past", biometric_enabled: false, screen_permission: false,
+            accessibility_permission: false, model_downloaded: false, model_id: null, display_name: null,
+        };
+        getOnboardingState.mockResolvedValue(incomplete);
+        saveOnboardingState.mockResolvedValueOnce({ ...incomplete, step: "model_download" });
+        const onComplete = vi.fn();
+        render(<Onboarding onComplete={onComplete} />);
+
+        fireEvent.click(await screen.findByRole("button", { name: "Skip imports" }));
+
+        expect(await screen.findByRole("heading", { name: "Select your local AI model" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
     });
 
     it("shows the observed System Settings handoff without implying a grant", async () => {
@@ -419,6 +461,54 @@ describe("Onboarding permissions", () => {
 });
 
 describe("Onboarding privacy disclosures", () => {
+    it("introduces FNDR as the local work memory and explains that naming is optional", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "welcome",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByRole("heading", { name: /work memory, on your Mac/i })).toBeInTheDocument();
+        expect(screen.getByText("Continue without adding a name.")).toBeInTheDocument();
+    });
+
+    it("explains what skipping Touch ID or screen permission changes", async () => {
+        getOnboardingState.mockResolvedValue({
+            step: "biometrics",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        const view = render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText("Skipping keeps FNDR unlocked with your Mac login."))
+            .toBeInTheDocument();
+
+        view.unmount();
+        getOnboardingState.mockResolvedValue({
+            step: "permissions",
+            biometric_enabled: false,
+            screen_permission: false,
+            accessibility_permission: false,
+            model_downloaded: false,
+            model_id: null,
+            display_name: null,
+        });
+        render(<Onboarding onComplete={() => {}} />);
+
+        expect(await screen.findByText("Skipping leaves screen capture off until you grant it in Settings."))
+            .toBeInTheDocument();
+    });
+
     it("shows Privacy Proof before any import or biometric choice", async () => {
         getOnboardingState.mockResolvedValue({
             step: "welcome", biometric_enabled: false, screen_permission: false,

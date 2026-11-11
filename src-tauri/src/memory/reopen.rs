@@ -32,6 +32,17 @@ impl ReopenKind {
             _ => Self::Unknown,
         }
     }
+
+    /// Process-lifetime counter name for Engine diagnostics (no PII).
+    pub fn counter_name(&self) -> &'static str {
+        match self {
+            Self::BrowserUrl => "reopen.kind.browser_url",
+            Self::FilePath => "reopen.kind.file_path",
+            Self::AppBundle => "reopen.kind.app_bundle",
+            Self::AppDeepLink => "reopen.kind.app_deep_link",
+            Self::Unknown => "reopen.kind.unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -482,6 +493,55 @@ pub fn merge_reopen_targets(incoming: ReopenTarget, existing: ReopenTarget) -> R
     }
 }
 
+/// The target a stored memory can still support: its `url`, an editor path in
+/// the window title, `files_touched` (absolute paths first), then the app.
+/// Capture-time Accessibility state such as a document path is not stored, so
+/// it is never recovered here.
+pub fn reopen_target_from_stored_evidence(record: &crate::storage::MemoryRecord) -> ReopenTarget {
+    let url = record
+        .url
+        .as_deref()
+        .map(crate::capture::strip_url_credentials);
+    let deep_link = app_deep_link_for(record.bundle_id.as_deref(), &record.window_title, None);
+    let files = || record.files_touched.iter().map(|path| path.trim());
+    let file = files()
+        .find(|path| path.starts_with('/'))
+        .or_else(|| files().find(|path| !path.is_empty()));
+    let mut target = build_reopen_target(
+        url.as_deref(),
+        deep_link.as_deref(),
+        file,
+        record.bundle_id.as_deref(),
+        &record.app_name,
+        record.timestamp,
+    );
+    target.page = detect_reopen_page(&target, &record.window_title, &record.text);
+    target
+}
+
+/// A strictly more specific target than the stored one, or `None`. Unlike
+/// `merge_reopen_targets`, the stored target wins every tie, so a capture-time
+/// document path or passage is never swapped for a guess from
+/// `files_touched`. Leaf rows (agent notes and imports) keep only their
+/// explicit target.
+pub fn upgraded_reopen_target(record: &crate::storage::MemoryRecord) -> Option<ReopenTarget> {
+    if record.is_leaf_row() {
+        return None;
+    }
+    let mut stored = record.reopen_target();
+    let stored_rank = reopen_rank(&stored);
+    if stored.page.is_none() {
+        stored.page = detect_reopen_page(&stored, &record.window_title, &record.text);
+    }
+    let candidate = reopen_target_from_stored_evidence(record);
+    let best = if reopen_rank(&candidate) > reopen_rank(&stored) {
+        candidate
+    } else {
+        stored
+    };
+    (reopen_rank(&best) > stored_rank).then(|| best.normalized())
+}
+
 const MIN_ANCHOR_WORDS: usize = 8;
 const MAX_ANCHOR_WORDS: usize = 12;
 
@@ -638,6 +698,29 @@ pub enum ReopenOutcome {
     NoTarget,
     /// No source was opened because the id, its eligibility, or its store was unavailable.
     Unavailable,
+}
+
+impl ReopenOutcome {
+    /// Process-lifetime counter name for Engine diagnostics (no PII).
+    pub fn counter_name(&self) -> &'static str {
+        match self {
+            Self::Opened => "reopen.outcome.opened",
+            Self::OpenedMoved { .. } => "reopen.outcome.opened_moved",
+            Self::Missing { .. } => "reopen.outcome.missing",
+            Self::DriveNotConnected { .. } => "reopen.outcome.drive_not_connected",
+            Self::AppMissing { .. } => "reopen.outcome.app_missing",
+            Self::AppOnly { .. } => "reopen.outcome.app_only",
+            Self::Blocked { .. } => "reopen.outcome.blocked",
+            Self::NoTarget => "reopen.outcome.no_target",
+            Self::Unavailable => "reopen.outcome.unavailable",
+        }
+    }
+}
+
+/// Bump session counters for one completed reopen attempt (RE-13).
+pub fn record_reopen_session_metrics(outcome: &ReopenOutcome, kind: &ReopenKind) {
+    crate::telemetry::runtime_metrics::bump(outcome.counter_name());
+    crate::telemetry::runtime_metrics::bump(kind.counter_name());
 }
 
 /// External-drive root (`/Volumes/<name>`) when `path` lives on one.
@@ -1791,5 +1874,268 @@ mod tests {
             should_reveal_in_finder(&binary),
             "quarantined executable should reveal"
         );
+    }
+
+    fn stored_app_only(bundle: &str, app: &str) -> crate::storage::MemoryRecord {
+        let mut record = crate::storage::MemoryRecord {
+            id: "m1".into(),
+            timestamp: AT,
+            app_name: app.into(),
+            bundle_id: Some(bundle.into()),
+            ..Default::default()
+        };
+        record.apply_reopen_target(build_reopen_target(
+            None,
+            None,
+            None,
+            Some(bundle),
+            app,
+            AT,
+        ));
+        record
+    }
+
+    #[test]
+    fn upgraded_reopen_target_uses_stored_evidence_r37() {
+        struct Case {
+            label: &'static str,
+            edit: fn(&mut crate::storage::MemoryRecord),
+            kind: ReopenKind,
+            url: Option<&'static str>,
+            file_path: Option<&'static str>,
+            deep_link: Option<&'static str>,
+            page: Option<u32>,
+        }
+        let cases = [
+            Case {
+                label: "app_bundle with a stored https url",
+                edit: |r| r.url = Some("https://en.wikipedia.org/wiki/Nitrogen".into()),
+                kind: ReopenKind::BrowserUrl,
+                url: Some("https://en.wikipedia.org/wiki/Nitrogen"),
+                file_path: None,
+                deep_link: None,
+                page: None,
+            },
+            Case {
+                label: "credential stripped before storing",
+                edit: |r| r.url = Some("https://example.com/cb?token=abc".into()),
+                kind: ReopenKind::BrowserUrl,
+                url: Some("https://example.com/cb"),
+                file_path: None,
+                deep_link: None,
+                page: None,
+            },
+            Case {
+                label: "absolute files_touched path beats a relative one",
+                edit: |r| {
+                    r.files_touched = vec!["plan.md".into(), "/Users/qa/My Doc.pdf".into()]
+                },
+                kind: ReopenKind::FilePath,
+                url: None,
+                file_path: Some("/Users/qa/My Doc.pdf"),
+                deep_link: None,
+                page: None,
+            },
+            Case {
+                label: "file with a Preview page in the title",
+                edit: |r| {
+                    r.files_touched = vec!["/Users/qa/doc.pdf".into()];
+                    r.window_title = "doc.pdf – Page 112 of 150".into();
+                },
+                kind: ReopenKind::FilePath,
+                url: None,
+                file_path: Some("/Users/qa/doc.pdf"),
+                deep_link: None,
+                page: Some(112),
+            },
+            Case {
+                label: "browser pdf url with a page fragment",
+                edit: |r| r.url = Some("https://example.com/a.pdf#page=12".into()),
+                kind: ReopenKind::BrowserUrl,
+                url: Some("https://example.com/a.pdf#page=12"),
+                file_path: None,
+                deep_link: None,
+                page: Some(12),
+            },
+        ];
+        for case in cases {
+            let mut record = stored_app_only("com.apple.Preview", "Preview");
+            (case.edit)(&mut record);
+            let upgraded = upgraded_reopen_target(&record)
+                .unwrap_or_else(|| panic!("{}: expected an upgrade", case.label));
+            assert_eq!(upgraded.kind, case.kind, "{}", case.label);
+            assert_eq!(upgraded.url.as_deref(), case.url, "{}", case.label);
+            assert_eq!(upgraded.file_path.as_deref(), case.file_path, "{}", case.label);
+            assert_eq!(upgraded.app_deep_link.as_deref(), case.deep_link, "{}", case.label);
+            assert_eq!(upgraded.page, case.page, "{}", case.label);
+        }
+    }
+
+    #[test]
+    fn upgraded_reopen_target_builds_an_editor_deep_link_from_the_title() {
+        let mut record = stored_app_only("com.microsoft.VSCode", "Code");
+        record.window_title = "main.rs — /Users/qa/proj/src/main.rs:42 — proj".into();
+        let upgraded = upgraded_reopen_target(&record).expect("deep link upgrade");
+        assert_eq!(upgraded.kind, ReopenKind::AppDeepLink);
+        assert_eq!(
+            upgraded.app_deep_link.as_deref(),
+            Some("vscode://file/Users/qa/proj/src/main.rs:42")
+        );
+    }
+
+    #[test]
+    fn upgraded_reopen_target_gives_unknown_rows_an_honest_app_target() {
+        let record = crate::storage::MemoryRecord {
+            timestamp: AT,
+            app_name: "Zoom".into(),
+            bundle_id: Some("us.zoom.xos".into()),
+            ..Default::default()
+        };
+        let upgraded = upgraded_reopen_target(&record).expect("app target");
+        assert_eq!(upgraded.kind, ReopenKind::AppBundle);
+        assert_eq!(upgraded.app_bundle_id.as_deref(), Some("us.zoom.xos"));
+    }
+
+    #[test]
+    fn upgraded_reopen_target_never_downgrades_or_churns() {
+        let app_only = stored_app_only("us.zoom.xos", "Zoom");
+        assert!(
+            upgraded_reopen_target(&app_only).is_none(),
+            "app only with no other evidence stays as stored"
+        );
+
+        let mut relative_only = stored_app_only("com.apple.TextEdit", "TextEdit");
+        relative_only.files_touched = vec!["notes.txt".into()];
+        assert!(
+            upgraded_reopen_target(&relative_only).is_none(),
+            "a relative path is less useful than the app"
+        );
+
+        let mut browser = stored_app_only("com.google.Chrome", "Chrome");
+        browser.apply_reopen_target(url_target(
+            "https://example.com/a",
+            Some("existing passage stays here"),
+        ));
+        browser.files_touched = vec!["/Users/qa/stray.pdf".into()];
+        browser.url = Some("https://example.com/a".into());
+        assert!(
+            upgraded_reopen_target(&browser).is_none(),
+            "a url with a passage outranks the stray file and the bare url"
+        );
+
+        let mut document = stored_app_only("com.apple.Preview", "Preview");
+        document.apply_reopen_target(file_target("/Users/qa/from-ax.pdf", None));
+        document.files_touched = vec!["/Users/qa/model-guess.pdf".into()];
+        assert!(
+            upgraded_reopen_target(&document).is_none(),
+            "the stored document path wins the tie against files_touched"
+        );
+    }
+
+    #[test]
+    fn reopen_outcome_counter_names_are_static_and_payload_free() {
+        let cases = [
+            (ReopenOutcome::Opened, "reopen.outcome.opened"),
+            (
+                ReopenOutcome::OpenedMoved {
+                    new_path: "/secret/moved.pdf".into(),
+                },
+                "reopen.outcome.opened_moved",
+            ),
+            (
+                ReopenOutcome::Missing {
+                    path: "/secret/missing.pdf".into(),
+                },
+                "reopen.outcome.missing",
+            ),
+            (
+                ReopenOutcome::DriveNotConnected {
+                    volume: "Disk".into(),
+                    path: "/Volumes/Disk/a.pdf".into(),
+                },
+                "reopen.outcome.drive_not_connected",
+            ),
+            (
+                ReopenOutcome::AppMissing {
+                    bundle_id: "com.example.app".into(),
+                    app_name: Some("Example".into()),
+                },
+                "reopen.outcome.app_missing",
+            ),
+            (
+                ReopenOutcome::AppOnly {
+                    app_name: Some("Preview".into()),
+                },
+                "reopen.outcome.app_only",
+            ),
+            (
+                ReopenOutcome::Blocked {
+                    target: "javascript:alert(1)".into(),
+                },
+                "reopen.outcome.blocked",
+            ),
+            (ReopenOutcome::NoTarget, "reopen.outcome.no_target"),
+        ];
+        for (outcome, expected) in cases {
+            assert_eq!(outcome.counter_name(), expected);
+            assert!(!expected.contains('/'));
+        }
+    }
+
+    #[test]
+    fn reopen_kind_counter_names_match_stored_labels() {
+        let cases = [
+            (ReopenKind::BrowserUrl, "reopen.kind.browser_url"),
+            (ReopenKind::FilePath, "reopen.kind.file_path"),
+            (ReopenKind::AppBundle, "reopen.kind.app_bundle"),
+            (ReopenKind::AppDeepLink, "reopen.kind.app_deep_link"),
+            (ReopenKind::Unknown, "reopen.kind.unknown"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.counter_name(), expected);
+            assert_eq!(kind.as_str(), expected.strip_prefix("reopen.kind.").unwrap());
+        }
+    }
+
+    #[test]
+    fn record_reopen_session_metrics_bumps_outcome_and_kind() {
+        use crate::telemetry::runtime_metrics::counter;
+
+        const OUTCOME: &str = "reopen.outcome.opened";
+        const KIND: &str = "reopen.kind.file_path";
+        let before_outcome = counter(OUTCOME);
+        let before_kind = counter(KIND);
+
+        record_reopen_session_metrics(&ReopenOutcome::Opened, &ReopenKind::FilePath);
+
+        assert_eq!(counter(OUTCOME), before_outcome + 1);
+        assert_eq!(counter(KIND), before_kind + 1);
+    }
+
+    #[test]
+    fn upgraded_reopen_target_adds_a_page_to_the_stored_document_path() {
+        let mut record = stored_app_only("com.apple.Preview", "Preview");
+        record.apply_reopen_target(file_target("/Users/qa/from-ax.pdf", None));
+        record.files_touched = vec!["/Users/qa/model-guess.pdf".into()];
+        record.window_title = "from-ax.pdf – Page 3 of 9".into();
+        let upgraded = upgraded_reopen_target(&record).expect("page upgrade");
+        assert_eq!(upgraded.file_path.as_deref(), Some("/Users/qa/from-ax.pdf"));
+        assert_eq!(upgraded.page, Some(3));
+    }
+
+    #[test]
+    fn upgraded_reopen_target_skips_agent_notes() {
+        let mut note = stored_app_only("com.apple.TextEdit", "TextEdit");
+        note.source_type = crate::storage::AGENT_NOTE_SOURCE_TYPE.into();
+        note.url = Some("https://example.com".into());
+        assert!(upgraded_reopen_target(&note).is_none());
+    }
+
+    #[test]
+    fn upgraded_reopen_target_skips_imported_rows() {
+        let mut imported = stored_app_only("com.apple.TextEdit", "TextEdit");
+        imported.source_type = format!("{}notes", crate::storage::IMPORT_SOURCE_TYPE_PREFIX);
+        imported.url = Some("https://example.com".into());
+        assert!(upgraded_reopen_target(&imported).is_none());
     }
 }

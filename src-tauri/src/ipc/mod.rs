@@ -2,3 +2,4 @@
 
 pub mod commands;
 pub mod onboarding;
+pub mod onboarding_funnel;

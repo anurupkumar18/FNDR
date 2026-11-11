@@ -35,7 +35,7 @@ import {
     getStatus,
     getFunGreeting,
 } from "@/shared/ipc/tauri";
-import { getOnboardingState, type OnboardingState } from "@/shared/ipc/onboarding";
+import { getOnboardingState, recordOnboardingFunnelEvent, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import { SidebarDrawer } from "./SidebarDrawer";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
@@ -53,7 +53,7 @@ const PRIMARY_SIDEBAR_ITEMS = [
     { action: "home", text: "Home" },
     { key: "ask", text: "Search & Ask FNDR" },
     { key: "memoryCards", text: "Memory Vault" },
-    { key: "dailySummary", text: "Daily Brief" },
+    { key: "dailySummary", text: "FNDR Review" },
     { action: "settings", text: "Trust & Settings" },
 ] as const satisfies readonly SidebarItem[];
 
@@ -63,7 +63,6 @@ const LAB_SIDEBAR_ITEMS = [
     { key: "outputs", text: "Daily outputs" },
     { key: "stats", text: "Stats" },
     { key: "todo", text: "To-dos" },
-    { key: "wrapped", text: "FNDR Wrapped" },
     { key: "privacyProof", text: "Privacy Activity" },
 ] as const satisfies readonly SidebarItem[];
 
@@ -248,7 +247,10 @@ function App() {
             .trim();
 
         setQuery(normalized);
-        if (normalized) appendToSearchHistory(normalized);
+        if (normalized) {
+            appendToSearchHistory(normalized);
+            void recordOnboardingFunnelEvent("search_submitted").catch(() => undefined);
+        }
         if (typeof nextValue === "string") {
             setQueryDraft(nextValue);
         }
@@ -712,7 +714,10 @@ function App() {
                                 isLoading={isLoading}
                                 query={query}
                                 selectedResultId={selectedResult?.id ?? null}
-                                onSelectResult={setSelectedResult}
+                                onSelectResult={(result) => {
+                                    setSelectedResult(result);
+                                    void recordOnboardingFunnelEvent("result_selected").catch(() => undefined);
+                                }}
                                 evalUi={EVAL_UI}
                             />
                         </section>

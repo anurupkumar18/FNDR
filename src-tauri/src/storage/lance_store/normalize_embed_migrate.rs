@@ -14,7 +14,9 @@ use lancedb::{Connection, Table};
 
 use crate::config::{DEFAULT_EMBEDDING_MODEL_NAME, DEFAULT_TEXT_EMBEDDING_DIM};
 use crate::inference::extraction_evidence::has_source_evidence;
-use crate::memory::reopen::{build_reopen_target, ReopenKind};
+use crate::memory::reopen::{
+    reopen_target_from_stored_evidence, upgraded_reopen_target, ReopenKind,
+};
 use crate::memory_compaction::{build_lexical_shadow, compact_memory_record_payload};
 use crate::memory_embedding_document::{
     build_embedding_manifest, compose_memory_embedding_document, image_embedding_status,
@@ -170,29 +172,15 @@ pub fn normalize_record_for_index(record: &MemoryRecord) -> MemoryRecord {
     }
     normalized.activity_type = crate::inference::normalize_activity_type(&normalized.activity_type);
     // Leaf rows use only their explicit typed reopen provenance.
-    if normalized.reopen_kind == ReopenKind::Unknown && !normalized.is_leaf_row() {
-        let app_deep_link = crate::memory::reopen::app_deep_link_for(
-            normalized.bundle_id.as_deref(),
-            &normalized.window_title,
-            None,
-        );
-        let derived = build_reopen_target(
-            normalized.url.as_deref(),
-            app_deep_link.as_deref(),
-            normalized.files_touched.first().map(|value| value.as_str()),
-            normalized.bundle_id.as_deref(),
-            &normalized.app_name,
-            normalized.timestamp,
-        );
-        normalized.reopen_kind = derived.kind;
-        normalized.reopen_url = derived.url;
-        normalized.reopen_file_path = derived.file_path;
-        normalized.reopen_app_bundle_id = derived.app_bundle_id;
-        normalized.reopen_app_name = derived.app_name;
-        normalized.reopen_app_deep_link = derived.app_deep_link;
-        normalized.reopen_captured_at_ms = derived.captured_at_ms;
-        normalized.reopen_confidence = derived.confidence;
-        normalized.reopen_validation_status = derived.validation_status;
+    if !normalized.is_leaf_row() {
+        let derived = if normalized.reopen_kind == ReopenKind::Unknown {
+            Some(reopen_target_from_stored_evidence(&normalized))
+        } else {
+            upgraded_reopen_target(&normalized)
+        };
+        if let Some(target) = derived {
+            normalized.apply_reopen_target(target);
+        }
     }
     normalize_event_fields(&mut normalized);
 

@@ -10,6 +10,8 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 
 ## Engineering vocabulary
 
+- **FNDR Review**: one foreground destination for Day, Week, and Month. Day reuses the daily summary generator; Week and Month reuse the local Wrapped aggregator. Pickers offer only periods containing currently permitted captured activity. Every result returns to the same period selector. Legacy `dailySummary` and `wrapped` panel keys both route here.
+
 - **Memory record** (`MemoryRecord`): persisted unit of captured context stored and indexed for search. This is the **parent** in the parent-child RAG model, holding compacted text, insight fields, metadata, and bounded source statements when available. Normal storage compaction clears raw OCR text; the optional **verbatim text** (ADR 036, `memory_verbatim_v1`, off by default) keeps the cleaned page text per memory for consumers that need an exact value, and is never searched or ranked.
 - **Work identity** (`MemoryRecord.project`): an explicit, source-supported name for a piece of work such as an assignment, course, meeting, or software project. It groups Resume threads and work sets. `session_key` names the app-specific capture context; a short-time similarity link is weaker than shared work identity. See ADR 031.
 - **Named thread** (`resume::work_names`): windows in different apps whose titles share a name, joined into one Resume thread when threads are read. Nothing is stored and no model is read; an explicit work identity outranks a name. Its key is `work:<name>` and is the same for every surface. See the ADR 031 addendum.
@@ -41,6 +43,8 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 - **Notch status item**: FNDR's OS-managed menu-bar presence beside the notch. It exposes only fixed Screen Guide phases and never user questions, filenames, paths, screen text, answers, or detailed errors.
 - **Companion API**: the existing local-network API for FNDR's iPhone and Watch clients. Do not use “Companion” as the product or code name for Screen Guide.
 - **Document path**: POSIX path decoded from a native app’s Accessibility `AXDocument` `file://` URL; used as the reopen file target ahead of LLM `files_touched`. Browsers keep http(s) URLs only.
+- **Reopen specific share**: vault-health aggregate of memories whose stored `reopen_kind` is `browser_url`, `file_path`, or `app_deep_link` (a page, file, or deep link target, not app-only).
+- **Reopen outcome**: typed result of one reopen attempt (`Opened`, `Missing`, `AppOnly`, and the rest of `ReopenOutcome`); session counters in Engine diagnostics only, reset when the app quits.
 
 ## Default quality bar
 

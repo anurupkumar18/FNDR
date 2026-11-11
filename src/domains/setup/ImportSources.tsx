@@ -6,6 +6,7 @@ import {
     type ImportKind, type ImportSourceInfo, type ImportStatus, type MemoryCard,
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { recordOnboardingFunnelEvent } from "@/shared/ipc/onboarding";
 import "./ImportSources.css";
 
 const SOURCES: Array<{ kind: ImportKind; title: string; reads: string; permission: string }> = [
@@ -24,7 +25,7 @@ const readWindow = (kind: ImportKind) => {
     return Number.isInteger(stored) && stored >= 1 && stored <= 90 ? stored : 30;
 };
 
-export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "settings"; onContinue?: () => void }) {
+export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "settings"; onContinue?: (skipped: boolean) => void }) {
     const [sources, setSources] = useState<ImportSourceInfo[]>([]);
     const [consent, setConsent] = useState<Partial<Record<ImportKind, boolean>>>({});
     const [statuses, setStatuses] = useState<Partial<Record<ImportKind, ImportStatus>>>({});
@@ -33,6 +34,11 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    useEffect(() => {
+        if (mode === "onboarding" && error) {
+            void recordOnboardingFunnelEvent("error", "bring_past").catch(() => undefined);
+        }
+    }, [mode, error]);
     const [forgetKind, setForgetKind] = useState<ImportKind | null>(null);
     const [suggestions, setSuggestions] = useState<string[]>([]);
     const [query, setQuery] = useState("");
@@ -214,8 +220,9 @@ export function ImportSources({ mode, onContinue }: { mode: "onboarding" | "sett
             {mode === "onboarding" && <>
               <div className="import-actions">
                 <button type="button" className={hasImported ? "rcpt-quiet" : "rcpt-primary"} disabled={busy || loading || !RECOMMENDED.some((kind) => sources.some((source) => source.kind === kind))} onClick={recommended}>Import everything recommended</button>
-                <button type="button" className={hasImported ? "rcpt-primary" : "rcpt-quiet"} onClick={onContinue}>{hasImported ? "Continue to FNDR" : "Skip imports"}</button>
+                <button type="button" className={hasImported ? "rcpt-primary" : "rcpt-quiet"} onClick={() => onContinue?.(!hasImported)}>{hasImported ? "Continue to FNDR" : "Skip imports"}</button>
               </div>
+              {!hasImported && <p className="import-onboarding-note">Skipping imports opens FNDR without bringing in past browser, file, or calendar history. You can import later in Settings.</p>}
             </>}
             {mode === "settings" && answerMs !== null && <p>First imported answer: {(answerMs / 1000).toFixed(1)} seconds. Stored locally.</p>}
             {forgetKind && <div ref={forgetDialog} role="alertdialog" aria-label="Forget source" aria-modal="true">

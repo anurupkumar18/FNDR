@@ -39,14 +39,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("FndrWrappedPanel", () => {
+    it("loads a selected month and delegates back navigation to Review", async () => {
+        const back = vi.fn();
+        render(<FndrWrappedPanel isVisible onClose={vi.fn()} reviewRange={{ startDate: "2026-09-01", endDate: "2026-09-30" }} reviewPeriod="month" onBackToReview={back} />);
+        expect(await screen.findByText("Monthly recap ready")).toBeInTheDocument();
+        expect(ipc.getWeeklyWrapped).toHaveBeenCalledWith("2026-09-01", "2026-09-30");
+        fireEvent.click(screen.getByRole("button", { name: /Back to review selection/ }));
+        expect(back).toHaveBeenCalledOnce();
+    });
+
     it("traces recap generation using only aggregate result metadata", async () => {
         render(<FndrWrappedPanel isVisible onClose={vi.fn()} />);
 
         fireEvent.click(screen.getByRole("button", { name: /start wrapped/i }));
 
         expect(await screen.findByText("Weekly recap ready")).toBeInTheDocument();
-        const trace = screen.getByLabelText("FNDR Wrapped activity");
-        fireEvent.click(within(trace).getByRole("button", { name: "Show FNDR Wrapped activity details" }));
+        const trace = screen.getByLabelText("FNDR Review activity");
+        fireEvent.click(within(trace).getByRole("button", { name: "Show FNDR Review activity details" }));
         expect(within(trace).getByText("8 captures across 2 active days")).toBeInTheDocument();
         expect(within(trace).getByText(/verified result/i)).toBeInTheDocument();
     });
@@ -113,8 +122,8 @@ describe("FndrWrappedPanel", () => {
         const onClose = vi.fn();
         const { rerender } = render(<FndrWrappedPanel isVisible onClose={onClose} />);
 
-        const dialog = screen.getByRole("dialog", { name: /fndr wrapped/i });
-        const closeButton = screen.getByRole("button", { name: /close fndr wrapped/i });
+        const dialog = screen.getByRole("dialog", { name: /fndr review/i });
+        const closeButton = screen.getByRole("button", { name: /close fndr review/i });
         expect(dialog).toHaveAttribute("aria-modal", "true");
         await waitFor(() => expect(closeButton).toHaveFocus());
         await waitFor(() => expect(screen.getAllByRole("radio").length).toBeGreaterThan(0));

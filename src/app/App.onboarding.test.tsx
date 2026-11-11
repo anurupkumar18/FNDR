@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const getOnboardingState = vi.hoisted(() => vi.fn());
 const useSearchMock = vi.hoisted(() => vi.fn());
 const resumeWork = vi.hoisted(() => vi.fn());
+const recordOnboardingFunnelEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("./AppPanels", () => ({
     AppPanels: ({
@@ -47,6 +48,7 @@ vi.mock("@/shared/hooks/useTauriEvent", () => ({ useTauriEvent: vi.fn() }));
 
 vi.mock("@/shared/ipc/onboarding", () => ({
     getOnboardingState,
+    recordOnboardingFunnelEvent,
     getAppleModelStatus: vi.fn().mockResolvedValue({ availability: "unsupported_os", enabled: false }),
     listAvailableModels: vi.fn().mockResolvedValue([]),
     saveOnboardingState: vi.fn().mockResolvedValue(undefined),
@@ -139,6 +141,13 @@ describe("App onboarding gate", () => {
         expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument();
     });
 
+    it("records only that a deliberate search was submitted", async () => {
+        getOnboardingState.mockResolvedValue(completedOnboarding);
+        render(<App />);
+        fireEvent.click(await screen.findByRole("button", { name: "Run search" }));
+        expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("search_submitted");
+    });
+
     it("shows recent work on Home after onboarding", async () => {
         getOnboardingState.mockResolvedValue(completedOnboarding);
         resumeWork.mockResolvedValue([{
@@ -204,13 +213,13 @@ describe("App onboarding gate", () => {
         expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Search & Ask FNDR" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Memory Vault" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Daily Brief" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "FNDR Review" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Trust & Settings" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Screen Guide" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Hermes Agent" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Stats" })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "To-dos" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "FNDR Wrapped" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "FNDR Wrapped" })).not.toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Privacy Activity" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Engine diagnostics" })).toBeNull();
 

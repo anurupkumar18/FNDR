@@ -54,6 +54,7 @@ const READERS: Record<string, string> = {
     "ipc/commands/privacy.rs": "internal: range deletion preview returns counts only and never serves memory content",
     "privacy/export.rs": "export: applies memory_is_visible before sealing any memory content",
     "memory_review/backfill.rs": "internal: review queue",
+    "memory/reopen_backfill.rs": "internal: upgrades reopen metadata; returns progress counts, never captured content",
     "memory_review/daily.rs": "internal: review queue",
     "memory_review/pipeline.rs": "internal: review queue",
     "memory_review/repair_truncated.rs": "internal: summary repair",

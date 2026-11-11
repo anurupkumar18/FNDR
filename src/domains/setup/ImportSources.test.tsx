@@ -9,6 +9,8 @@ const ipc = vi.hoisted(() => ({
     listMemoryCards: vi.fn(), searchMemoryCards: vi.fn(), reopenMemory: vi.fn(),
 }));
 vi.mock("@/shared/ipc/tauri", () => ipc);
+const recordOnboardingFunnelEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/shared/ipc/onboarding", () => ({ recordOnboardingFunnelEvent }));
 
 const kinds = ["browser", "file", "calendar", "mail", "slack", "git"];
 const status = (source: string, state = "idle", stored = 0) => ({
@@ -104,6 +106,7 @@ describe("Bring your past", () => {
         ipc.importListSources.mockRejectedValueOnce(new Error("unavailable"));
         render(<ImportSources mode="onboarding" onContinue={vi.fn()} />);
         expect(await screen.findByRole("alert")).toHaveTextContent("Could not load import sources");
+        await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("error", "bring_past"));
         fireEvent.click(screen.getByRole("button", { name: "Retry" }));
         await waitFor(() => expect(screen.getAllByRole("switch")).toHaveLength(6));
     });

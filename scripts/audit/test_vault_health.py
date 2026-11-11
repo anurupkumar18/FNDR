@@ -212,6 +212,17 @@ class VaultHealthTest(unittest.TestCase):
         for table in (vh.V4_PARENT_TABLE, vh.V5_PARENT_TABLE, vh.CHUNK_TABLE):
             self.assertIn(table, rendered)
         self.assertNotIn(SECRET, rendered)
+        self.assertEqual(
+            v4["reopen_kind_counts"],
+            {
+                "app_bundle": {"rows": 1, "share_pct": 50.0},
+                "browser_url": {"rows": 1, "share_pct": 50.0},
+            },
+        )
+        self.assertIn("## Reopen targets:", rendered)
+        self.assertIn("Reopen specific share", rendered)
+        self.assertIn("| browser_url | 1 | 50.0% |", rendered)
+        self.assertIn("| app_bundle | 1 | 50.0% |", rendered)
 
     def test_reads_only_the_columns_needed_for_aggregate_metrics(self):
         selections = []
@@ -232,6 +243,11 @@ class VaultHealthTest(unittest.TestCase):
         self.assertEqual(vh._safe_summary_source("Visual_Capture"), "visual_capture")
         self.assertEqual(vh._safe_summary_source("PrivateCustomerName"), "<other>")
         self.assertEqual(vh._safe_summary_source(""), "<missing>")
+
+    def test_reopen_kind_labels_never_echo_raw_paths(self):
+        self.assertEqual(vh._safe_reopen_kind("browser_url"), "browser_url")
+        self.assertEqual(vh._safe_reopen_kind("file:///Users/secret/doc.pdf"), "<other>")
+        self.assertEqual(vh._safe_reopen_kind(""), "<missing>")
 
     def test_missing_database_is_refused_without_creating_it_or_output(self):
         with tempfile.TemporaryDirectory() as directory:

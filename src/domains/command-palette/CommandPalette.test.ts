@@ -7,7 +7,6 @@ describe("demo command palette", () => {
             "go-home",
             "ask-fndr",
             "memory-cards",
-            "daily-brief",
             "daily-outputs",
             "trust-settings",
             "screen-guide",

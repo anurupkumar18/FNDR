@@ -392,6 +392,10 @@ fn main() {
                 fndr_lib::memory_review::spawn_worker(review_state, MEMORY_REVIEW_INTERVAL);
             }
 
+            // Background: one resumable pass that stores better reopen targets
+            // for memories captured before capture recorded them (RE-11).
+            fndr_lib::memory::reopen_backfill::spawn(state.clone(), MAINTENANCE_FIRST_DELAY);
+
             // Background: daily memory-review scheduler. Wakes hourly and runs
             // the previous calendar day's batch review pass once per day when
             // the inference engine is loaded and the pressure gate allows. The
@@ -1050,6 +1054,7 @@ fn main() {
             ipc::commands::generate_daily_summary_narrative,
             ipc::commands::get_daily_summary_followups,
             ipc::commands::get_weekly_wrapped,
+            ipc::commands::get_review_dates,
             // Time tracking & Focus Mode
             ipc::commands::get_time_tracking,
             ipc::commands::set_focus_task,
@@ -1126,6 +1131,7 @@ fn main() {
             // Onboarding
             ipc::onboarding::get_onboarding_state,
             ipc::onboarding::save_onboarding_state,
+            ipc::onboarding_funnel::record_onboarding_funnel_event,
             ipc::onboarding::request_biometric_auth,
             ipc::onboarding::check_permissions,
             ipc::onboarding::open_system_settings,

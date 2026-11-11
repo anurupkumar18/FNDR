@@ -6,6 +6,7 @@ import {
     ModelInfo,
     getOnboardingState,
     saveOnboardingState,
+    recordOnboardingFunnelEvent,
     requestBiometricAuth,
     checkPermissions,
     openSystemSettings,
@@ -78,25 +79,25 @@ function StepWelcome({
     onSave,
 }: {
     state: OnboardingState;
-    onSave: (s: OnboardingState) => void;
+    onSave: (s: OnboardingState, skipped?: boolean) => void;
 }) {
     const [displayName, setDisplayName] = useState(state.display_name ?? "");
 
-    function handleNext() {
+    function handleNext(skipped = false) {
         onSave({
             ...state,
             display_name: displayName.trim() || null,
             step: "privacy_promise",
-        });
+        }, skipped);
     }
 
     return (
         <>
             <span className="ob-icon">⌘</span>
-            <h1 className="ob-title">Your memory, on your Mac.</h1>
+            <h1 className="ob-title">Your work memory, on your Mac.</h1>
             <p className="ob-subtitle">
-                FNDR remembers what you&apos;ve worked on so you don&apos;t have to.
-                Synthesize meetings and track tasks — all instantly.
+                Find what you saw by what it meant, get back to it, and give your AI assistant the context.
+                Your captures stay on this Mac.
                 <br /><br />
                 FNDR stores your captured memory on this Mac and processes it locally by default.
                 Model downloads connect to Hugging Face; optional integrations can connect to services you configure.
@@ -117,20 +118,22 @@ function StepWelcome({
                     }
                 }}
             />
-            <button id="ob-get-started" className="ob-btn-primary" onClick={handleNext}>
+            <button id="ob-get-started" className="ob-btn-primary" onClick={() => handleNext()}>
                 Get Started
             </button>
-            <button className="ob-btn-ghost" onClick={handleNext}>
+            <button className="ob-btn-ghost" onClick={() => handleNext(true)}>
                 Skip for now
             </button>
+            <p className="ob-choice-note">Continue without adding a name.</p>
         </>
     );
 }
 
 // ── Step 2: Biometrics ────────────────────────────────────────────────────
-function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
+function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState, skipped?: boolean) => void }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    useEffect(() => { if (error) void recordOnboardingFunnelEvent("error", "biometrics").catch(() => undefined); }, [error]);
 
     async function handleEnable() {
         setLoading(true);
@@ -150,7 +153,7 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
     }
 
     function handleSkip() {
-        onSave({ ...state, step: "model_download", biometric_enabled: false });
+        onSave({ ...state, step: "model_download", biometric_enabled: false }, true);
     }
 
     return (
@@ -168,12 +171,13 @@ function StepBiometrics({ state, onSave }: { state: OnboardingState; onSave: (s:
             <button className="ob-btn-ghost" onClick={handleSkip}>
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping keeps FNDR unlocked with your Mac login.</p>
         </>
     );
 }
 
 // ── Step 3: Privacy Promise ───────────────────────────────────────────────
-function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
+function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState, skipped?: boolean) => void }) {
     const [proof, setProof] = useState<PrivacyProofData | null>(null);
     useEffect(() => { void getPrivacyProof().then(setProof).catch(() => undefined); }, []);
     return (
@@ -223,16 +227,17 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
             </button>
             <button
                 className="ob-btn-ghost"
-                onClick={() => onSave({ ...state, step: "biometrics" })}
+                onClick={() => onSave({ ...state, step: "biometrics" }, true)}
             >
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping the details does not change FNDR's local-first defaults.</p>
         </>
     );
 }
 
 // ── Step 4: Permissions ───────────────────────────────────────────────────
-function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
+function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState, skipped?: boolean) => void }) {
     const [perms, setPerms] = useState<Record<"screen_recording" | "accessibility" | "microphone" | "speech_recognition", PermissionState>>({
         screen_recording: "not_determined",
         accessibility: "not_determined",
@@ -277,6 +282,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             }));
         } catch {
             if (!isMounted()) return;
+            void recordOnboardingFunnelEvent("error", "permissions").catch(() => undefined);
             const failedAtMs = Date.now();
             setPermissionActivity(recordActivityStep(startedTrace, {
                 id: "permission-check",
@@ -328,6 +334,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                 durationMs: finishedAtMs - startedAtMs,
             }) : current);
         } catch {
+            void recordOnboardingFunnelEvent("error", "permissions").catch(() => undefined);
             const failedAtMs = Date.now();
             setPermissionActivity((current) => current ? recordActivityStep(current, {
                 id: "system-settings",
@@ -341,13 +348,13 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
         }
     }
 
-    function handleContinue() {
+    function handleContinue(skipped = false) {
         onSave({
             ...state,
             step: "bring_past",
             screen_permission: perms.screen_recording === "granted",
             accessibility_permission: perms.accessibility === "granted",
-        });
+        }, skipped);
     }
 
     const canContinue = perms.screen_recording === "granted";
@@ -428,7 +435,7 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
                 id="ob-continue-permissions"
                 className="ob-btn-primary"
                 style={{ marginTop: 20 }}
-                onClick={handleContinue}
+                onClick={() => handleContinue()}
                 disabled={!canContinue}
                 title={canContinue ? undefined : "Screen Recording is required to continue"}
             >
@@ -436,20 +443,22 @@ function StepPermissions({ state, onSave }: { state: OnboardingState; onSave: (s
             </button>
             <button
                 className="ob-btn-ghost"
-                onClick={handleContinue}
+                onClick={() => handleContinue(true)}
             >
                 Skip for now
             </button>
+            <p className="ob-choice-note">Skipping leaves screen capture off until you grant it in Settings.</p>
         </>
     );
 }
 
 // ── Step 5: Model Download ────────────────────────────────────────────────
-function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState) => void }) {
+function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: (s: OnboardingState, skipped?: boolean) => void }) {
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [appleModel, setAppleModel] = useState<AppleModelStatus | null>(null);
     const [selected, setSelected] = useState<ModelInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
+    useEffect(() => { if (error) void recordOnboardingFunnelEvent("error", "model_download").catch(() => undefined); }, [error]);
     const [pendingModelId, setPendingModelId] = useState<string | null>(null);
     const [isActivatingModel, setIsActivatingModel] = useState(false);
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
@@ -813,6 +822,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                 Downloading connects to Hugging Face. After the model files are installed, supported analysis
                 runs on this Mac. Optional helpers for transcription and TTS are loaded only when needed.
             </p>
+            <p className="ob-subtitle">
+                Choose a local model to finish setup. You can quit FNDR and return to this step later.
+            </p>
 
             {!isDownloading && (
                 <div className="ob-model-cards">
@@ -937,31 +949,9 @@ function StepModelDownload({ state, onSave }: { state: OnboardingState; onSave: 
                             ? `Use ${selected?.name}`
                             : `Download ${selected?.name ?? ""} · ${selected?.size_label ?? ""}`}
                     </button>
-                    <button
-                        className="ob-btn-ghost"
-                        onClick={() => {
-                            beginVoice();
-                            onSave({ ...state, step: "permissions" });
-                        }}
-                    >
-                        {embedderMissing
-                            ? "Skip for now (capture stays paused until the search model is installed)"
-                            : "Skip for now"}
-                    </button>
                 </>
             )}
 
-            {isDownloading && (
-                <button
-                    className="ob-btn-ghost"
-                    onClick={() => {
-                        beginVoice();
-                        onSave({ ...state, step: "permissions" });
-                    }}
-                >
-                    Skip for now (downloads continue in the background)
-                </button>
-            )}
         </>
     );
 }
@@ -982,20 +972,23 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     }, []);
 
     const save = useCallback(
-        async (next: OnboardingState) => {
+        async (next: OnboardingState, skipped = false) => {
             setSaveError(null);
             try {
-                await saveOnboardingState(next);
+                const saved = skipped
+                    ? await saveOnboardingState(next, true)
+                    : await saveOnboardingState(next);
+                setState(saved);
+                if (saved.step === "complete") {
+                    onComplete(saved);
+                }
             } catch {
                 setSaveError("FNDR couldn't save your setup. Please try again.");
+                void recordOnboardingFunnelEvent("error", state?.step).catch(() => undefined);
                 return;
             }
-            setState(next);
-            if (next.step === "complete") {
-                onComplete(next);
-            }
         },
-        [onComplete]
+        [onComplete, state]
     );
 
     if (!state) return null;
@@ -1019,7 +1012,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 {(state.step === "permissions" || state.step === "indexing_started") && (
                     <StepPermissions state={state} onSave={save} />
                 )}
-                {state.step === "bring_past" && <ImportSources mode="onboarding" onContinue={() => void save({ ...state, step: "complete" })} />}
+                {state.step === "bring_past" && <ImportSources mode="onboarding" onContinue={(skipped) => void save({ ...state, step: "complete" }, skipped)} />}
             </div>
         </div>
     );

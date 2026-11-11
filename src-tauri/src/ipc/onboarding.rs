@@ -121,6 +121,11 @@ fn onboarding_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub async fn get_onboarding_state(app: AppHandle) -> Result<OnboardingState, String> {
     let path = onboarding_path(&app)?;
     if !path.exists() {
+        if let Err(error) = super::onboarding_funnel::start_if_new(
+            path.parent().ok_or("No onboarding data directory")?, false, &OnboardingStep::Welcome,
+        ) {
+            tracing::warn!(%error, "Could not start local onboarding funnel log");
+        }
         return Ok(OnboardingState::default());
     }
 
@@ -142,14 +147,38 @@ pub async fn get_onboarding_state(app: AppHandle) -> Result<OnboardingState, Str
 }
 
 #[tauri::command]
-pub async fn save_onboarding_state(app: AppHandle, state: OnboardingState) -> Result<(), String> {
+pub async fn save_onboarding_state(
+    app: AppHandle,
+    state: OnboardingState,
+    skipped: Option<bool>,
+) -> Result<OnboardingState, String> {
     let path = onboarding_path(&app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let old_state = if path.exists() {
+        std::fs::read_to_string(&path).ok()
+            .and_then(|raw| serde_json::from_str::<OnboardingState>(&raw).ok())
+            .map(normalize_onboarding_state)
+            .unwrap_or_default()
+    } else {
+        if let Err(error) = super::onboarding_funnel::start_if_new(
+            path.parent().ok_or("No onboarding data directory")?, false, &OnboardingStep::Welcome,
+        ) {
+            tracing::warn!(%error, "Could not start local onboarding funnel log");
+        }
+        OnboardingState::default()
+    };
     let normalized_state = normalize_onboarding_state(state);
     let json = serde_json::to_string_pretty(&normalized_state).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    if let Err(error) = super::onboarding_funnel::transition(
+        path.parent().ok_or("No onboarding data directory")?,
+        &old_state.step, &normalized_state.step, skipped.unwrap_or(false),
+    ) {
+        tracing::warn!(%error, "Could not record local onboarding transition");
+    }
+    Ok(normalized_state)
 }
 
 /// Persist the user's preferred local LLM/VLM choice and (when the model
