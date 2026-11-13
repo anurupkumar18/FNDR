@@ -32,7 +32,8 @@ jobs:
       - name: Stage static site
         run: |
           mkdir -p _site
-          cp website/index.html website/styles.css website/release.js website/favicon.svg website/.nojekyll _site/
+          cp website/index.html website/tutorial.html website/team.html website/styles.css website/release.js website/favicon.svg website/.nojekyll _site/
+          if [ -d website/team ]; then cp -R website/team _site/team; fi
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -95,3 +95,54 @@ test("workflows preserve one release path and deploy Pages with least privileges
   assert.match(pages, /id-token:\s*write/);
   assert.doesNotMatch(pages, /contents:\s*write/);
 });
+
+test("every page links the About, Tutorial, Team and Download pages the course asks for", async () => {
+  for (const name of ["index.html", "tutorial.html", "team.html"]) {
+    const html = await read(`website/${name}`);
+    assert.match(html, /href="(index\.html)?#about"/, name);
+    assert.match(html, /href="tutorial\.html"/, name);
+    assert.match(html, /href="team\.html"/, name);
+    assert.match(html, /href="(index\.html)?#install"/, name);
+    assert.match(html, /Content-Security-Policy/, name);
+  }
+});
+
+test("the About section names the problem, the stages and the technologies", async () => {
+  const html = await read("website/index.html");
+  const about = html.slice(html.indexOf('id="about"'), html.indexOf('id="install"'));
+  for (const word of ["Capture", "Remember", "Retrieve", "Act", "Tauri", "Rust", "React", "LanceDB", "University of Utah"]) {
+    assert.match(about, new RegExp(word), word);
+  }
+});
+
+test("the tutorial covers install, search, reopen, ask, investigate and privacy in order", async () => {
+  const html = await read("website/tutorial.html");
+  const headings = [...html.matchAll(/<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
+  assert.deepEqual(headings, [
+    "Install and set up",
+    "Find something you saw",
+    "Go back to the source",
+    "Ask a question",
+    "Investigate a piece of work",
+    "Pick work back up",
+    "Stay in control",
+  ]);
+  assert.match(html, /Screen Recording and Accessibility/);
+  assert.match(html, /blocklist/);
+});
+
+test("the team page lists four members, alternating photo sides in CSS", async () => {
+  const html = await read("website/team.html");
+  const css = await read("website/styles.css");
+  assert.equal([...html.matchAll(/<article class="member">/g)].length, 4);
+  assert.match(css, /\.member:nth-child\(even\)/);
+});
+
+// Holds the Pages deploy until each person has supplied a bio, a photo and a
+// contact. Fill them in team.html; do not delete this test to publish.
+test("the team page is ready to publish: no bio, photo or contact still to come", async () => {
+  const html = await read("website/team.html");
+  const missing = [...html.matchAll(/data-todo="(\w+)"/g)].map((match) => match[1]);
+  const photos = [...html.matchAll(/class="member__photo"/g)].length;
+  assert.deepEqual({ missing, photosToCome: photos }, { missing: [], photosToCome: 0 });
+});

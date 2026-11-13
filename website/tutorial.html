@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="How to use FNDR: install, search by meaning, ask a question, reopen the source, investigate a piece of work, and control what is remembered.">
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+    <meta name="color-scheme" content="light dark">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+    <link rel="canonical" href="https://anurupkumar18.github.io/FNDR/tutorial.html">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <title>FNDR tutorial: from install to finding it again</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="nav-shell" aria-label="Primary navigation">
+        <a class="brand" href="index.html" aria-label="FNDR home">
+          <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
+            <rect width="64" height="64" rx="16"></rect>
+            <path d="M25 25h-7a7 7 0 1 1 7-7v28a7 7 0 1 1-7-7h28a7 7 0 1 1-7 7V18a7 7 0 1 1 7 7H18"></path>
+          </svg>
+          <span>FNDR</span>
+        </a>
+        <div class="nav-shell__links">
+          <a href="index.html#about">About</a>
+          <a href="tutorial.html" aria-current="page">Tutorial</a>
+          <a href="team.html">Team</a>
+          <a href="index.html#install">Download</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="section-shell page-hero" aria-labelledby="page-title">
+        <p class="eyebrow">User tutorial</p>
+        <h1 class="page-title" id="page-title">From install to finding it again.</h1>
+        <p class="page-lede">Seven short steps. Each one is something you can do in under a minute once FNDR has been running for a while.</p>
+      </section>
+
+      <section class="section-shell guide" aria-label="Steps">
+        <ol class="guide-steps">
+        <li class="guide-step" id="step-1">
+          <span class="step-number" aria-hidden="true">1</span>
+          <div>
+            <p class="guide-step__where">About five minutes</p>
+            <h2>Install and set up</h2>
+            <ol>
+              <li>Download the DMG from the <a href="index.html#install">home page</a>, drag FNDR into Applications and open it.</li>
+              <li>Onboarding asks for two macOS permissions, Screen Recording and Accessibility, and says what each one is for. FNDR reads what is on screen to build memories; without them there is nothing to search.</li>
+              <li>It then downloads the on-device models that search needs. Nothing else is required: no account and no sign-in.</li>
+            </ol>
+            <p class="guide-step__tip">FNDR now runs in the background. Keep working as usual for a while so it has something to remember.</p>
+          </div>
+        </li>
+        <li class="guide-step" id="step-2">
+          <span class="step-number" aria-hidden="true">2</span>
+          <div>
+            <p class="guide-step__where">Home, or Search &amp; Ask</p>
+            <h2>Find something you saw</h2>
+            <ol>
+              <li>Type what you remember into the search box on Home. Exact words work (<kbd>LL-1482</kbd>, a file name), and so does the gist (<kbd>that article about local embeddings</kbd>).</li>
+              <li>Say when or where if it helps: <kbd>the contract in Slack yesterday</kbd>.</li>
+              <li>Each result is a memory card: what was on screen, the app, and when. If nothing fits, FNDR says there is no strong match instead of showing a guess.</li>
+            </ol>
+            <p class="guide-step__tip">Press <kbd>⌘K</kbd> anywhere in FNDR to jump between destinations.</p>
+          </div>
+        </li>
+        <li class="guide-step" id="step-3">
+          <span class="step-number" aria-hidden="true">3</span>
+          <div>
+            <p class="guide-step__where">From any memory card</p>
+            <h2>Go back to the source</h2>
+            <ol>
+              <li>Open a card to see the whole memory and why it matched.</li>
+              <li>Choose Reopen. FNDR opens the page, the document or the app the memory came from. A PDF opens at the page it was on when FNDR recorded one.</li>
+              <li>If the place no longer exists, FNDR says so.</li>
+            </ol>
+          </div>
+        </li>
+        <li class="guide-step" id="step-4">
+          <span class="step-number" aria-hidden="true">4</span>
+          <div>
+            <p class="guide-step__where">Search &amp; Ask</p>
+            <h2>Ask a question</h2>
+            <ol>
+              <li>Open Search &amp; Ask from the sidebar and type a question: <kbd>When is the dry run?</kbd></li>
+              <li>FNDR answers from your memories on this Mac and lists the memories it used under Sources. Select one to open it.</li>
+              <li>When your memories do not hold the answer it says “Not in your memories”.</li>
+            </ol>
+          </div>
+        </li>
+        <li class="guide-step" id="step-5">
+          <span class="step-number" aria-hidden="true">5</span>
+          <div>
+            <p class="guide-step__where">Search &amp; Ask, from the Final release</p>
+            <h2>Investigate a piece of work</h2>
+            <ol>
+              <li>Type a request about a project, a document or a ticket: <kbd>catch me up on the Smart Reminders launch</kbd>. Press Investigate.</li>
+              <li>FNDR works through it in steps you can watch: it searches, follows the work across apps, and checks its findings.</li>
+              <li>The case file lists next steps on record, steps a later memory records as done, decisions, problems, and what happened in order. Every line opens the memory it came from.</li>
+              <li>Press Open places to bring back the pages and files of that work. Press Add to To-dos on a step to keep it.</li>
+            </ol>
+            <p class="guide-step__tip">An investigation needs a topic. For a whole day or week, use FNDR Review.</p>
+          </div>
+        </li>
+        <li class="guide-step" id="step-6">
+          <span class="step-number" aria-hidden="true">6</span>
+          <div>
+            <p class="guide-step__where">Home</p>
+            <h2>Pick work back up</h2>
+            <ol>
+              <li>Home lists your recent work as threads: the windows and pages that belong to one piece of work, with what changed since you last looked.</li>
+              <li>Choose Open all on a thread to reopen its places. More than three wait for one more tap.</li>
+              <li>FNDR Review shows a day, a week or a month at a glance, and To-dos keeps the tasks you add or accept.</li>
+            </ol>
+          </div>
+        </li>
+        <li class="guide-step" id="step-7">
+          <span class="step-number" aria-hidden="true">7</span>
+          <div>
+            <p class="guide-step__where">Trust &amp; Settings</p>
+            <h2>Stay in control</h2>
+            <ol>
+              <li>Pause capture at any time from the sidebar or the menu bar.</li>
+              <li>Add an app or a site to the blocklist. FNDR stops recording it and hides what it already recorded from every screen.</li>
+              <li>Turn on Private Mode when you do not want FNDR looking at all.</li>
+              <li>Delete memories, or set how long they are kept. Privacy Activity lists every request that left this Mac, which by default is none.</li>
+            </ol>
+          </div>
+        </li>
+        </ol>
+
+        <aside class="gatekeeper-note" aria-labelledby="needs-title">
+          <div class="gatekeeper-note__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3 7.8 7.5 9.5 4.5-1.7 7.5-5 7.5-9.5V6L12 3Z"></path><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg>
+          </div>
+          <div>
+            <h3 id="needs-title">What needs more than FNDR</h3>
+            <p>Everything on this page runs on your Mac with nothing else installed. A few optional features in Labs, such as operating other apps by voice, use a ChatGPT sign-in that you set up in the app. FNDR says so before anything is sent.</p>
+          </div>
+        </aside>
+      </section>
+
+    </main>
+
+    <footer class="site-footer">
+      <div class="section-shell site-footer__inner">
+        <div>
+          <a class="brand brand--footer" href="index.html" aria-label="FNDR home">
+            <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
+            <rect width="64" height="64" rx="16"></rect>
+            <path d="M25 25h-7a7 7 0 1 1 7-7v28a7 7 0 1 1-7-7h28a7 7 0 1 1-7 7V18a7 7 0 1 1 7 7H18"></path>
+          </svg>
+            <span>FNDR</span>
+          </a>
+          <p>Searchable local memory for macOS. A CS 4500 senior capstone project, Kahlert School of Computing, University of Utah.</p>
+        </div>
+        <div class="site-footer__links" aria-label="Project links">
+          <a href="index.html">About</a>
+          <a href="tutorial.html">Tutorial</a>
+          <a href="team.html">Team</a>
+          <a href="https://github.com/anurupkumar18/FNDR">Source</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -36,10 +36,10 @@
           <span>FNDR</span>
         </a>
         <div class="nav-shell__links">
-          <a href="#how-it-works">How it works</a>
-          <a href="#privacy">Privacy</a>
-          <a href="#install">Install</a>
-          <a href="https://github.com/anurupkumar18/FNDR">GitHub</a>
+          <a href="#about">About</a>
+          <a href="tutorial.html">Tutorial</a>
+          <a href="team.html">Team</a>
+          <a href="#install">Download</a>
         </div>
       </nav>
     </header>
@@ -173,6 +173,43 @@
         </div>
       </section>
 
+      <section class="section-shell about-section" id="about" aria-labelledby="about-title">
+        <div class="section-heading">
+          <p class="eyebrow">About the project</p>
+          <h2 id="about-title">Work disappears into tabs. FNDR keeps the thread.</h2>
+          <p>A knowledge worker's day is spread over a browser, a chat app, documents and meetings. Finding last Tuesday's decision means remembering which of them it was in. FNDR remembers for you, on your own Mac, and takes you back to the source.</p>
+        </div>
+
+        <ol class="pipeline" aria-label="How FNDR works, in four stages">
+          <li><strong>Capture</strong><span>Reads the text on screen with Apple Vision and Accessibility. No screenshot is kept.</span></li>
+          <li><strong>Remember</strong><span>An on-device model writes a short record; embeddings and a keyword index are stored in LanceDB on the Mac.</span></li>
+          <li><strong>Retrieve</strong><span>One path fuses meaning and exact words, applies the blocklist, and says when nothing matches.</span></li>
+          <li><strong>Act</strong><span>Cited answers, exact reopen, and Investigate: a case file for a whole piece of work.</span></li>
+        </ol>
+
+        <div class="about-grid">
+          <div>
+            <h3>What it is built with</h3>
+            <ul class="tech-list">
+              <li><strong>Tauri 2 and Rust</strong> for the app core, capture and retrieval</li>
+              <li><strong>React and TypeScript</strong> for the interface</li>
+              <li><strong>LanceDB</strong> for vectors and full-text search, stored locally</li>
+              <li><strong>Apple Vision</strong> for on-device text recognition</li>
+              <li><strong>ONNX Runtime and llama.cpp</strong> for local embeddings and a local language model</li>
+              <li><strong>Model Context Protocol</strong> so other assistants can ask FNDR, with permission</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Who made it</h3>
+            <p>FNDR is a CS 4500 senior capstone project at the Kahlert School of Computing, University of Utah, built by four students.</p>
+            <p class="about-links">
+              <a class="text-link" href="team.html">Meet the team <span aria-hidden="true">→</span></a>
+              <a class="text-link" href="tutorial.html">Read the tutorial <span aria-hidden="true">→</span></a>
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section class="install-section" id="install" aria-labelledby="install-title">
         <div class="section-shell">
           <div class="section-heading section-heading--install">
@@ -232,6 +269,8 @@
           <p>Searchable local memory for macOS.</p>
         </div>
         <div class="site-footer__links" aria-label="Project links">
+          <a href="tutorial.html">Tutorial</a>
+          <a href="team.html">Team</a>
           <a href="https://github.com/anurupkumar18/FNDR">Source</a>
           <a href="https://github.com/anurupkumar18/FNDR/releases">All releases</a>
           <a href="https://github.com/anurupkumar18/FNDR/blob/main/docs/setup/releasing.md">Release guide</a>
