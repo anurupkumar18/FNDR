@@ -4,6 +4,7 @@ target/
 src-tauri/target/
 dist/
 .venv/
+.venv-audit/
 __pycache__/
 *.pyc
 .eval-tmp/

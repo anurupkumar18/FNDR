@@ -291,6 +291,16 @@ How to work this lane: test first, then fix, then rerun the matrix. The two matr
 
 **Evidence.** The matrix and vault health.
 
+**Status (2026-11-12, build `9b98247`).** Proof pass started; ticket **open**.
+
+| Bar | Result |
+|---|---|
+| Matrix rows exact or honest | 28 / 41 (need 36) |
+| R35 executions | 0 on unit revalidation |
+| Live-day exact reopen | n/a (`re14-liveday` empty; 90% bar not met) |
+
+Evidence: `docs/product/reopen-qa-matrix.md` (RE-14 section), `docs/evidence/W04/re14-vault-health.md`, `docs/evidence/W04/re14-reopenqa-vault-health.md`.
+
 ## RE-15 Store the browser URL when Accessibility has no http document
 - assignee: minhpro001
 - labels: area::reopen, type::bug, prio::p0
