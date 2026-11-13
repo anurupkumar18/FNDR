@@ -79,10 +79,12 @@ mod hermes_codex;
 mod setup_center;
 mod hand_off;
 mod work_set;
+mod investigate;
 pub use computer_use::*;
 pub use setup_center::*;
 pub use hand_off::*;
 pub use work_set::*;
+pub use investigate::*;
 
 mod peer;
 pub use peer::*;

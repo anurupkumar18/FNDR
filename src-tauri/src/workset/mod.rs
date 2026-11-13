@@ -17,6 +17,8 @@ pub mod routines;
 
 pub use open::{open_ids, open_items, open_items_with, ItemOutcome};
 pub use rank::{rank, topic_words, Hit, Inputs, ThreadInput};
+// Investigate lists a case's places with the same rule and the same items.
+pub(crate) use rank::{eligible, item_of};
 
 use serde::{Deserialize, Serialize};
 
@@ -211,7 +213,7 @@ pub async fn resolve_saved(state: &AppState, set: &named::SavedSet) -> Resolutio
 }
 
 /// Words in a request that say when, for the search's time filter.
-fn time_filter(query: &str) -> Option<String> {
+pub(crate) fn time_filter(query: &str) -> Option<String> {
     let lower = query.to_lowercase();
     if lower.contains("yesterday") {
         Some("yesterday".to_string())

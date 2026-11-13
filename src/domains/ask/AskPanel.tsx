@@ -5,6 +5,7 @@ import "./AskPanel.css";
 import { PanelState } from "@/shared/components/PanelState";
 import { PanelHeader } from "@/shared/components/PanelHeader";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import { Investigation } from "./Investigation";
 import {
     beginActivityTrace,
     recordActivityStep,
@@ -14,6 +15,8 @@ import {
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
     "Search finds memories. Ask FNDR uses that same private, on-device evidence to give a cited answer.";
+const INVESTIGATE_HINT =
+    "Investigate follows one piece of work across apps and reports what happened, what was decided and which next steps are on record.";
 const EXAMPLES = [
     "What was the Rust borrow error I fixed this week?",
     "What chunk size did the chunking paper recommend?",
@@ -55,6 +58,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
     const [draft, setDraft] = useState("");
     const [state, setState] = useState<AskState>({ kind: "idle" });
     const [activityTrace, setActivityTrace] = useState<ActivityTraceSnapshot | null>(null);
+    const [investigation, setInvestigation] = useState<{ id: number; goal: string } | null>(null);
     const seq = useRef(0);
     const dialogRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -62,10 +66,21 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
 
     if (!isVisible) return null;
 
+    /** Starts an investigation (ADR 039); a pending answer is dropped. */
+    const investigateGoal = (text: string) => {
+        const goal = text.trim();
+        if (!goal) return;
+        const id = ++seq.current;
+        setActivityTrace(null);
+        setState({ kind: "idle" });
+        setInvestigation({ id, goal });
+    };
+
     const ask = async (text: string) => {
         const question = text.trim();
         if (!question) return;
         const id = ++seq.current;
+        setInvestigation(null);
         const startedAtMs = Date.now();
         let nextTrace = beginActivityTrace({
             id: `ask-${id}`,
@@ -195,12 +210,35 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                             }
                         }}
                     />
-                    <button type="submit" className="ui-action-btn btn-primary ask-submit" disabled={state.kind === "asking"}>
-                        Search & Ask
-                    </button>
+                    <div className="ask-form-actions">
+                        <button type="submit" className="ui-action-btn btn-primary ask-submit" disabled={state.kind === "asking"}>
+                            Search & Ask
+                        </button>
+                        <button
+                            type="button"
+                            className="ui-action-btn ask-investigate"
+                            disabled={draft.trim().length === 0}
+                            title={INVESTIGATE_HINT}
+                            onClick={() => investigateGoal(draft)}
+                        >
+                            Investigate
+                        </button>
+                    </div>
                 </form>
 
-                {activityTrace && (
+                {investigation && (
+                    <Investigation
+                        key={investigation.id}
+                        goal={investigation.goal}
+                        onOpenMemoryById={onOpenMemoryById}
+                        onDismiss={() => {
+                            setInvestigation(null);
+                            inputRef.current?.focus();
+                        }}
+                    />
+                )}
+
+                {!investigation && activityTrace && (
                     <ActivityTrace
                         trace={activityTrace}
                         className="ask-activity-trace"
@@ -208,7 +246,11 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                     />
                 )}
 
-                {state.kind === "idle" && (
+                {!investigation && state.kind === "idle" && (
+                    <p className="ask-hint ask-investigate-hint">{INVESTIGATE_HINT}</p>
+                )}
+
+                {!investigation && state.kind === "idle" && (
                     <div className="ask-examples" aria-label="Example questions">
                         {EXAMPLES.map((example) => (
                             <button
@@ -264,6 +306,13 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                                 </ul>
                             </div>
                         )}
+                        <button
+                            type="button"
+                            className="ui-action-btn ask-investigate ask-investigate--further"
+                            onClick={() => investigateGoal(state.question)}
+                        >
+                            Investigate this further
+                        </button>
                     </section>
                 )}
             </main>

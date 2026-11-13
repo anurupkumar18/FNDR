@@ -1030,6 +1030,8 @@ fn main() {
             ipc::commands::hand_off_update_draft,
             ipc::commands::hand_off_start,
             ipc::commands::hand_off_stop,
+            ipc::commands::investigate,
+            ipc::commands::investigate_stop,
             ipc::commands::hand_off_open,
             ipc::commands::hand_off_rate,
             ipc::commands::open_work_set,

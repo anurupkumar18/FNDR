@@ -22,6 +22,19 @@ const producers = Object.entries(sources).filter(([path, text]) =>
 
 /** Interpolations inside a template-literal `label:` or `detail:`. */
 const ALLOWED_INTERPOLATIONS: Record<string, string[]> = {
+    // Investigate (ADR 039). Every value is a number on the typed backend
+    // step event, or `routes`: that event's route names ("vector", "keyword").
+    // The event has no text field; `tests/investigate.rs` checks none leaks.
+    "/src/domains/ask/Investigation.tsx": [
+        'plural(step.added, "line")',
+        'plural(step.found, "memory", "memories")',
+        'plural(step.found, "weak result")',
+        'plural(step.total, "memory", "memories")',
+        'routes',
+        'step.added',
+        'step.found',
+        'step.marked',
+    ],
     // Counts of observed worker events and of claims FNDR checked (ADR 032).
     "/src/domains/handoff/handOffTrace.ts": [
         'checked',
@@ -105,6 +118,8 @@ const ALLOWED_INTERPOLATIONS: Record<string, string[]> = {
 /** Non-literal `label:` or `detail:` values, each reviewed as producer copy. */
 const ALLOWED_BARE_VALUES: Record<string, string[]> = {
     "/src/domains/ask/AskPanel.tsx": ["label resultLabel", "detail resultDetail"],
+    // Both come from stepCopy: fixed copy plus the counts listed above.
+    "/src/domains/ask/Investigation.tsx": ["label copy.label", "detail copy.detail"],
     "/src/domains/notch/NotchOperator.tsx": [
         "label input.label",
         "label event.final",

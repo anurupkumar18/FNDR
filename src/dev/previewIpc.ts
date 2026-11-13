@@ -22,6 +22,8 @@ import type {
     WeeklyWrapped,
     NotchDoRun,
     NotchDoSkill,
+    CaseFile,
+    InvestigateStep,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
 
@@ -877,6 +879,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     // step is visible; a started job plays a short scripted run.
     let handOffToolchain: "missing" | "installed" = "missing";
     let handOffRunning = false;
+    const investigateStopped = new Set<string>();
     const handOffItems = [
         { kind: "memory", memoryId: "memory-q4-mail", label: "Mail: Q4 onboarding readout", appName: "Mail", capturedAt: previewNow - 75 * 60 * 1000 },
         { kind: "memory", memoryId: "memory-churn-notes", label: "Notes: churn hypotheses", appName: "Notes", capturedAt: previewNow - 50 * 60 * 1000 },
@@ -2044,6 +2047,110 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
                 run.remote_state = "TASK_STATE_CANCELED";
                 return { run: clonePreview(run), output_text: null };
             }
+            case "investigate": {
+                // Preview: a scripted run over the preview cards, so the live
+                // steps and the case file can be seen in a browser. The real
+                // loop is `investigate::agent` in the backend.
+                const goal = requiredString(payload, "goal", command);
+                const runId = requiredString(payload, "runId", command);
+                investigateStopped.delete(runId);
+                const steps: InvestigateStep[] = [];
+                const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+                const blank = { found: 0, added: 0, total: 0, marked: 0, routes: [] as string[], ms: 0 };
+                const take = async (step: Omit<InvestigateStep, "index" | "status"> & { status?: InvestigateStep["status"] }) => {
+                    const index = steps.length;
+                    await emitPreviewEventIfAvailable("investigate://step", { runId, ...blank, kind: step.kind, inquiry: step.inquiry, index, status: "running" });
+                    await pause(420);
+                    const done: InvestigateStep = { ...step, index, status: step.status ?? "completed" };
+                    await emitPreviewEventIfAvailable("investigate://step", { runId, ...done });
+                    steps.push(done);
+                };
+                const file = (outcome: CaseFile["outcome"]): CaseFile => ({
+                    goal,
+                    outcome,
+                    title: "",
+                    stats: { memories: 0, apps: [], firstMs: 0, lastMs: 0, ms: steps.reduce((sum, step) => sum + step.ms, 0) },
+                    timeline: [],
+                    decisions: [],
+                    open: [],
+                    done: [],
+                    problems: [],
+                    places: [],
+                    steps,
+                });
+                if (/^(what did i do|catch me up)( yesterday| today)?\??$/i.test(goal.trim())) {
+                    return file("needs_topic");
+                }
+                const cards = searchPreviewCards(previewCards, goal, null, null, 8)
+                    .slice()
+                    .sort((a, b) => a.timestamp - b.timestamp);
+                if (cards.length === 0) {
+                    await take({ ...blank, kind: "search", status: "degraded", note: "weak_match", found: 4, routes: ["vector"], ms: 380 });
+                    if (investigateStopped.has(runId)) return file("cancelled");
+                    await take({ ...blank, kind: "widen", status: "degraded", note: "weak_match", found: 3, routes: ["vector"], ms: 360 });
+                    return file("nothing_found");
+                }
+                const kept = Math.min(cards.length, 3);
+                await take({ ...blank, kind: "search", found: cards.length + 4, added: kept, total: kept, routes: ["vector", "keyword"], ms: 390 });
+                if (investigateStopped.has(runId)) return file("cancelled");
+                await take({ ...blank, kind: "thread", found: cards.length, added: cards.length - kept, total: cards.length, ms: 48 });
+                if (investigateStopped.has(runId)) return file("cancelled");
+                await take({ ...blank, kind: "todos", found: tasks.length, added: 0, total: cards.length, ms: 2 });
+                if (investigateStopped.has(runId)) return file("cancelled");
+                const first = cards[0];
+                const last = cards[cards.length - 1];
+                const found = file("found");
+                found.title = first.project?.trim() || last.title;
+                found.stats = {
+                    memories: cards.length,
+                    apps: Array.from(new Set(cards.map((card) => card.app_name))),
+                    firstMs: first.timestamp,
+                    lastMs: last.timestamp,
+                    ms: 860,
+                };
+                found.timeline = cards.map((card) => ({
+                    memoryId: card.id,
+                    atMs: card.timestamp,
+                    app: card.app_name,
+                    title: card.title,
+                    line: card.summary,
+                }));
+                found.decisions = [
+                    { text: "Keep the preview on synthetic data only", atMs: first.timestamp, memoryId: first.id, app: first.app_name, also: cards.length > 1 ? 1 : 0 },
+                ];
+                found.open = [
+                    { text: "Walk the panel with the keyboard only", atMs: last.timestamp, memoryId: last.id, app: last.app_name },
+                    { text: "Check the case file at 390 px", atMs: first.timestamp, memoryId: first.id, app: first.app_name },
+                ];
+                found.done = cards.length > 1
+                    ? [{
+                        text: "Check contrast in dark mode",
+                        atMs: first.timestamp,
+                        memoryId: first.id,
+                        clause: "Checked contrast in dark mode",
+                        doneAtMs: last.timestamp,
+                        doneMemoryId: last.id,
+                        doneApp: last.app_name,
+                    }]
+                    : [];
+                found.places = cards
+                    .filter((card) => Boolean(card.reopen_target))
+                    .slice(0, 6)
+                    .map((card) => ({
+                        memoryId: card.id,
+                        label: card.title,
+                        kind: "url" as const,
+                        reopenRank: 4,
+                        appName: card.app_name,
+                        capturedAt: card.timestamp,
+                    }));
+                const lines = found.timeline.length + found.decisions.length + found.open.length + found.done.length;
+                await take({ ...blank, kind: "check", found: cards.length, added: lines, total: cards.length, marked: found.done.length, ms: 4 });
+                return found;
+            }
+            case "investigate_stop":
+                investigateStopped.add(requiredString(payload, "runId", command));
+                return null;
             case "resolve_work_set": {
                 // Preview: the newest cards with a reopen target, as one set.
                 const items = previewCards

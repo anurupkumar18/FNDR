@@ -23,6 +23,7 @@ pub mod handoff;
 pub mod http_util;
 pub mod import;
 pub mod inference;
+pub mod investigate;
 pub mod ipc;
 pub mod mcp;
 pub mod meeting;

@@ -3344,6 +3344,102 @@ export async function openWorkSet(memoryIds: string[], layout?: WorkSetLayout): 
     return invoke<ItemOutcome[]>("open_work_set", { memoryIds, layout: layout ?? null });
 }
 
+/** Investigate (ADR 039): a bounded agent loop over the person's own
+ *  memories. The run only reads; each step arrives as a counts-only event. */
+export type InvestigateInquiry = "decisions" | "open" | "problems";
+export type InvestigateStepKind = "search" | "widen" | "thread" | "probe" | "links" | "todos" | "check";
+export type InvestigateStepStatus = "running" | "completed" | "degraded";
+export type InvestigateNote = "weak_match" | "no_thread" | "nothing_new" | "tool_failed";
+
+/** One step: counts and route names only, never memory text (ADR 021). */
+export interface InvestigateStep {
+    index: number;
+    kind: InvestigateStepKind;
+    status: InvestigateStepStatus;
+    /** What the tool returned. */
+    found: number;
+    /** What entered the case: memories, to-dos, or lines for the check. */
+    added: number;
+    /** Memories in the case after the step. */
+    total: number;
+    /** Next steps the check found recorded as done. */
+    marked: number;
+    routes: string[];
+    inquiry?: InvestigateInquiry;
+    note?: InvestigateNote;
+    ms: number;
+}
+
+export interface InvestigateStepEvent extends InvestigateStep {
+    runId: string;
+}
+
+export type InvestigateOutcome = "found" | "nothing_found" | "needs_topic" | "private" | "cancelled";
+
+export interface CaseEntry {
+    memoryId: string;
+    atMs: number;
+    app: string;
+    title: string;
+    line: string;
+}
+
+export interface CaseFinding {
+    text: string;
+    atMs: number;
+    memoryId: string;
+    app: string;
+    /** Other memories that record the same line. */
+    also: number;
+}
+
+export interface CaseOpenItem {
+    text: string;
+    atMs: number;
+    memoryId?: string;
+    app: string;
+    /** Set when the line is one of the person's own to-dos. */
+    todoId?: string;
+}
+
+/** A next step with the later clause that records it as done. */
+export interface CaseDoneItem {
+    text: string;
+    atMs: number;
+    memoryId: string;
+    clause: string;
+    doneAtMs: number;
+    doneMemoryId: string;
+    doneApp: string;
+}
+
+export interface CaseFile {
+    goal: string;
+    outcome: InvestigateOutcome;
+    title: string;
+    stats: { memories: number; apps: string[]; firstMs: number; lastMs: number; ms: number };
+    timeline: CaseEntry[];
+    decisions: CaseFinding[];
+    open: CaseOpenItem[];
+    done: CaseDoneItem[];
+    problems: CaseFinding[];
+    places: WorkItem[];
+    steps: InvestigateStep[];
+}
+
+export const INVESTIGATE_STEP_EVENT = "investigate://step";
+
+/** Runs one investigation and returns its case file. `runId` names the run
+ *  in its step events and for `investigateStop`. */
+export async function investigate(goal: string, runId: string): Promise<CaseFile> {
+    return invoke<CaseFile>("investigate", { goal, runId });
+}
+
+/** Ends a run before its next step. */
+export async function investigateStop(runId: string): Promise<void> {
+    return invoke<void>("investigate_stop", { runId });
+}
+
 /** A work set saved under a name. `items` are re-resolved on every read: a
  *  memory deleted or now private or blocklisted is left out. */
 export interface NamedWorkSet {

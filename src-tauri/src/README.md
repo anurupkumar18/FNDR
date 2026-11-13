@@ -32,6 +32,7 @@ Modules follow **product and infrastructure boundaries**. Prefer extending an ex
 | `timeline/` | Action classification for timeline buckets (`classify`, `classify_rules`). |
 | `wiki/` | Wiki synthesis stubs / policies. |
 | `context_runtime/` | MCP and context packs. |
+| `investigate/` | Investigate (ADR 039): a bounded loop over memories that returns a cited case file. Code picks each step; no model. |
 | `mcp/` | MCP server surface. |
 
 ## Platform & I/O
