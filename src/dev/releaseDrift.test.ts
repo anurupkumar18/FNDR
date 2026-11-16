@@ -62,6 +62,10 @@ describe("release workflow", () => {
 });
 
 describe("app version", () => {
+    it("lets Tauri generate native bundle versions instead of overriding them", () => {
+        expect(read("src-tauri/Info.plist")).not.toMatch(/<key>CFBundle(?:ShortVersionString|Version)<\/key>/);
+    });
+
     it("is the same in every file that states it", () => {
         const versions = {
             "package.json": JSON.parse(read("package.json")).version,
