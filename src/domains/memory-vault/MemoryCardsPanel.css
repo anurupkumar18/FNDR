@@ -215,9 +215,7 @@
     gap: 5px;
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: 9px;
-    letter-spacing: var(--film-track-stamp);
-    text-transform: uppercase;
+    font-size: 12px;
     color: var(--fg-3);
 }
 
@@ -333,9 +331,7 @@
     left: 12px;
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: 9px;
-    letter-spacing: var(--film-track-stamp);
-    text-transform: uppercase;
+    font-size: 12px;
     color: var(--fg-3);
     z-index: 2;
     pointer-events: none;
@@ -885,9 +881,7 @@
 }
 
 .memory-snippets-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: 12px;
     color: var(--fg-4);
 }
 
@@ -1025,8 +1019,6 @@
     background: transparent;
     color: var(--fg-2);
     font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     padding: 0;
     cursor: pointer;
 }

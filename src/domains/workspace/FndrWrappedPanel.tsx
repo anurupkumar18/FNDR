@@ -505,7 +505,6 @@ export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod
                         {wrapped && (
                             <div className="wrapped-results-content">
                                 <section className="wrapped-hero">
-                                    <span className="wrapped-eyebrow">{reviewPeriod.toUpperCase()} OVERVIEW</span>
                                     <h3>{activityNarrative}</h3>
                                 </section>
 
@@ -518,7 +517,7 @@ export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod
                                 ) : (
                                     <div className="wrapped-results-grid">
                                         <section className="wrapped-card wrapped-overview-card">
-                                            <span className="wrapped-card-label">{reviewPeriod.toUpperCase()} OVERVIEW</span>
+                                            <span className="wrapped-card-label">{reviewPeriod[0].toUpperCase()}{reviewPeriod.slice(1)} overview</span>
                                             <div className="wrapped-overview-stats">
                                                 <div><strong>{wrapped.total_captures.toLocaleString()}</strong><span>Captured memories</span></div>
                                                 <div><strong>{wrapped.active_days}</strong><span>Active days</span></div>
@@ -527,22 +526,22 @@ export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod
                                         </section>
 
                                         <section className="wrapped-card wrapped-rank-card">
-                                            <span className="wrapped-card-label">APPS WITH THE MOST RECORDED ACTIVITY</span>
+                                            <span className="wrapped-card-label">Apps with the most recorded activity</span>
                                             <RankedList items={wrapped.apps} emptyLabel="No app activity recorded yet." />
                                         </section>
 
                                         <section className="wrapped-card wrapped-rank-card">
-                                            <span className="wrapped-card-label">PROJECTS &amp; TOPICS</span>
+                                            <span className="wrapped-card-label">Projects &amp; topics</span>
                                             <CountedList items={wrapped.projects_and_topics} emptyLabel="No project or topic labels recorded yet." />
                                         </section>
 
                                         <section className="wrapped-card wrapped-rank-card">
-                                            <span className="wrapped-card-label">MOST-VISITED WEBSITES</span>
+                                            <span className="wrapped-card-label">Most-visited websites</span>
                                             <RankedList items={wrapped.websites} emptyLabel="No website activity recorded yet." />
                                         </section>
 
                                         <section className="wrapped-card">
-                                            <span className="wrapped-card-label">BUSIEST DAY</span>
+                                            <span className="wrapped-card-label">Busiest day</span>
                                             <div className="wrapped-static-detail">
                                                 <span>{wrapped.busiest_day?.day ?? "No activity recorded"}</span>
                                                 <small>Most active hour: {formatHour(wrapped.busiest_hour)}</small>
@@ -550,7 +549,7 @@ export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod
                                         </section>
 
                                         <section className="wrapped-card">
-                                            <span className="wrapped-card-label">DOCUMENTS &amp; FILES</span>
+                                            <span className="wrapped-card-label">Documents &amp; files</span>
                                             <div className="wrapped-static-detail">
                                                 <strong>{wrapped.document_count.toLocaleString()}</strong>
                                                 <small>
@@ -562,7 +561,7 @@ export function FndrWrappedPanel({ isVisible, onClose, reviewRange, reviewPeriod
                                         </section>
 
                                         <section className="wrapped-card">
-                                            <span className="wrapped-card-label">OPEN FOLLOW-UPS OR TO-DOS</span>
+                                            <span className="wrapped-card-label">Open follow-ups or to-dos</span>
                                             <div className="wrapped-static-detail">
                                                 <strong>{wrapped.open_tasks}</strong>
                                                 <small>{wrapped.open_followups} follow-up{wrapped.open_followups === 1 ? "" : "s"} open</small>

@@ -118,7 +118,7 @@ describe("journeys through the real app shell", () => {
         renderPreview();
         fireEvent.click(await screen.findByRole("button", { name: "Open sidebar" }));
         fireEvent.click(screen.getByRole("button", { name: "To-dos" }));
-        expect(await screen.findByText("Today's Briefing")).toBeInTheDocument();
+        expect(await screen.findByText("Today's briefing")).toBeInTheDocument();
         expect(await screen.findByText(/finish the keyboard walkthrough/i)).toBeInTheDocument();
     });
 });

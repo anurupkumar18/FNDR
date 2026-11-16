@@ -19,11 +19,12 @@
     --spring-lively: linear(0, 0.0718, 0.2332, 0.4233, 0.6045, 0.7571, 0.8737, 0.9551, 1.0063, 1.0339, 1.0449, 1.0451, 1.0393, 1.0309, 1.0222, 1.0145, 1.0083, 1.0038, 1.0007, 0.999, 0.9981, 0.9979, 0.998, 0.9984, 0.9988);
     --spring-lively-dur: 640ms;
 
-    /* One radius scale. Nested shapes use the inner value so corners stay
-       concentric: a 14px row holding a button 5px in gets 9px. */
-    --r-inset: 9px;
+    /* One radius scale. Controls (buttons, fields, rows inside a card) are
+       10px, cards 16px, sheets and dialogs 20px. Pills (999px) are reserved
+       for chips, tags and segmented tracks. */
+    --r-inset: 10px;
     --r-control: 10px;
-    --r-card: 14px;
+    --r-card: 16px;
     --r-sheet: 20px;
 }
 
@@ -89,6 +90,48 @@
     :root .fndr-os-chrome-btn:hover {
         translate: 0 -1px;
     }
+}
+
+/* ── Radius: one scale across every page ─────────────────────────────
+   Pages were mixing 0, 5, 6, 7, 8, 9, 12 and 999px on the same kind of
+   control. `:root` lifts these over each component's own rule. */
+:root :is(
+    .ui-action-btn, .fndr-button, .rcpt-primary, .rcpt-quiet, .rcpt-danger,
+    .aw-new-chat, .aw-peer-nav, .aw-primary, .codex-btn, .codex-link,
+    .wrapped-start-btn, .work-set-open, .work-set-primary,
+    .thread-changes-toggle, .thread-changes-dismiss, .palette-option,
+    .cp-item, .ask-source, .sg-hold-button, .todo-row button, .profile-save-btn
+) {
+    border-radius: var(--r-control);
+}
+
+:root :is(
+    input[type="text"], input[type="search"], input[type="email"], input[type="url"],
+    input[type="number"], input[type="password"], input[type="date"],
+    input[type="datetime-local"], input:not([type]), select, textarea
+) {
+    border-radius: var(--r-control);
+}
+
+:root :is(
+    .panel-section, .pipeline-panel-card, .stats-playing-card, .codex-card,
+    .smart-fill-setting, .aw-disclosure, .ask-result, .daily-followups-card,
+    .daily-narrative-card, .summary-bullets, .wrapped-card,
+    .wrapped-week-selector, .sg-ask-card, .sg-diagnostics-card, .sg-readiness,
+    .sg-settings-card, .sg-privacy-note, .notch-do-settings-item, .todo-row,
+    .home-deadlines, .home-routine, .home-sets, .meeting-brief, .resume-work,
+    .activity-trace
+) {
+    border-radius: var(--r-card);
+}
+
+/* Panels nested inside a card take the inner radius. */
+:root :is(.stats-donut-panel, .stats-wave-panel, .stats-weekday-bars, .stats-meter-card, .stats-page-card) {
+    border-radius: var(--r-control);
+}
+
+:root .cp-modal {
+    border-radius: var(--r-sheet);
 }
 
 /* ── Sliders: WebKit's default range thumb clipped inside FNDR's cards.

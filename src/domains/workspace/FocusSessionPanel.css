@@ -94,10 +94,8 @@
 }
 
 .fs-active-label {
-    font-size: 0.68rem;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--text-muted);
 }
 
@@ -122,10 +120,8 @@
 
 /* Section label */
 .fs-section-label {
-    font-size: 0.68rem;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: var(--text-muted);
     padding: 0 2px;
     margin-top: 4px;

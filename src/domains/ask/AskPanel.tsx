@@ -171,8 +171,6 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
             />
 
             <main className="ask-body">
-                <p className="ask-takeaway">{TAKEAWAY}</p>
-
                 <form
                     className="ask-form"
                     onSubmit={(event) => {
@@ -195,9 +193,15 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                             }
                         }}
                     />
-                    <button type="submit" className="ui-action-btn btn-primary ask-submit" disabled={state.kind === "asking"}>
-                        Search & Ask
-                    </button>
+                    <div className="ask-form-footer">
+                        <p className="ask-takeaway">{TAKEAWAY}</p>
+                        <button type="submit" className="ask-submit" disabled={state.kind === "asking" || !draft.trim()}>
+                            Search & Ask
+                            <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M5 12h14M13 6l6 6-6 6" />
+                            </svg>
+                        </button>
+                    </div>
                 </form>
 
                 {activityTrace && (

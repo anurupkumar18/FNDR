@@ -157,13 +157,12 @@
     border: 1px solid var(--border);
 }
 
+/* Section titles are real headings, not small-caps labels. */
 .panel-section h3 {
-    font-size: 0.76rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin: 0 0 10px 0;
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text-primary);
+    margin: 0 0 6px 0;
 }
 
 .panel-section h4 {
@@ -507,8 +506,6 @@
     font-family: var(--film-font-ui, system-ui, sans-serif);
     font-size: 0.78rem;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: var(--text-secondary);
 }
 
@@ -1321,10 +1318,8 @@
    the sheet they read as sections like every other one. */
 .settings-panel .panel-content .action-approval-panel.embedded h2,
 .settings-panel .panel-content .import-sources h2 {
-    font: 600 0.76rem/1.3 var(--font-body);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
+    font: 650 15px/1.3 var(--font-body);
+    color: var(--text-primary);
 }
 
 .settings-panel .panel-content .setup-center-row strong {

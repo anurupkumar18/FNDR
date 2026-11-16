@@ -111,9 +111,8 @@ body,
     display: block;
     margin-bottom: 5px;
     color: #f07b38;
-    font-size: 0.62rem;
-    font-weight: 750;
-    letter-spacing: 0.05em;
+    font-size: 12px;
+    font-weight: 650;
 }
 
 .sg-overlay-wave {

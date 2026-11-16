@@ -39,7 +39,7 @@ it("routes Month through the recap engine with a full calendar range and can go 
     expect(screen.getAllByRole("option")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Generate month review" }));
     await waitFor(() => expect(ipc.getWeeklyWrapped).toHaveBeenCalledWith("2026-09-01", "2026-09-30"));
-    expect((await screen.findAllByText("MONTH OVERVIEW")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Month overview")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: /Back to review selection/ }));
     expect(screen.getByRole("button", { name: "Month" })).toHaveAttribute("aria-pressed", "true");
 });
@@ -71,7 +71,7 @@ it("routes the selected week once and preserves it when returning", async () => 
     fireEvent.click(screen.getByRole("button", { name: "Week" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Available weeks" }), { target: { value: "2026-06-29" } });
     fireEvent.click(screen.getByRole("button", { name: "Generate week review" }));
-    await screen.findAllByText("WEEK OVERVIEW");
+    await screen.findAllByText("Week overview");
     expect(ipc.getWeeklyWrapped).toHaveBeenCalledTimes(1);
     expect(ipc.getWeeklyWrapped).toHaveBeenCalledWith("2026-06-29", "2026-07-05");
     fireEvent.click(screen.getByRole("button", { name: /Back to review selection/ }));
@@ -120,7 +120,7 @@ for (const [period, start, end] of [["week", "2026-09-01", "2026-09-30"], ["mont
         await screen.findByRole("button", { name: "Generate day review" });
         fireEvent.click(screen.getByRole("button", { name: period === "week" ? "Week" : "Month" }));
         fireEvent.click(screen.getByRole("button", { name: `Generate ${period} review` }));
-        await screen.findAllByText(`${period.toUpperCase()} OVERVIEW`);
+        await screen.findAllByText(`${period[0].toUpperCase()}${period.slice(1)} overview`);
         fireEvent.click(screen.getByRole("button", { name: "Export" }));
         await waitFor(() => expect(ipc.exportWeeklyWrappedPdf).toHaveBeenCalled());
         const [from, to, text] = ipc.exportWeeklyWrappedPdf.mock.calls[0];
@@ -149,7 +149,7 @@ it("does not rebuild a review when the parent re-renders", async () => {
     const { rerender } = render(<ReviewPanel {...props} />);
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
     fireEvent.click(screen.getByRole("button", { name: "Generate month review" }));
-    await screen.findAllByText("MONTH OVERVIEW");
+    await screen.findAllByText("Month overview");
     rerender(<ReviewPanel {...props} />);
     rerender(<ReviewPanel {...props} />);
     await Promise.resolve();

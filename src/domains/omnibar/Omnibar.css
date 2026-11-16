@@ -210,10 +210,8 @@ body,
     color: var(--fg-3, #999);
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
 }
 
 .omnibar-answer-grounding {

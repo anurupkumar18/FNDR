@@ -44,8 +44,6 @@
     font-family: var(--film-font-ui);
     font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--text-secondary);
     margin: 0 0 var(--s-3);
     animation: heroIn 0.55s var(--film-ease-shutter) 0.05s both;

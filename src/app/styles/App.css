@@ -419,10 +419,8 @@
 }
 
 .recording-consent-banner strong {
-    font-size: 0.7rem;
+    font-size: 12px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: rgba(252, 205, 205, 0.9);
 }
 
@@ -749,10 +747,8 @@
 .home-date-context {
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: var(--cp-wall-text-secondary, var(--text-secondary));
     margin-bottom: 0;
     opacity: 0.85;

@@ -218,8 +218,6 @@
 .breakdown-item h4 {
     margin: 0 0 12px;
     font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
     color: var(--text-muted);
 }
 

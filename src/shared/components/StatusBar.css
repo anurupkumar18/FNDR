@@ -14,9 +14,7 @@
     color: var(--fg-3);
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: var(--t-micro);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
+    font-size: 12px;
     display: flex;
     align-items: center;
     justify-content: space-between;

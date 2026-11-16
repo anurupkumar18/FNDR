@@ -590,10 +590,8 @@
 .sg-tile-title {
     margin: 4px 4px -6px;
     color: var(--text-muted);
-    font-size: 0.68rem;
+    font-size: 12px;
     font-weight: 650;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
 }
 
 .sg-bento .sg-setting-row {

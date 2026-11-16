@@ -79,8 +79,6 @@
 .result-app {
   font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: var(--text-primary);
   background: var(--bg-3);
   padding: 2px 8px;
@@ -200,8 +198,6 @@
   background: transparent;
   color: var(--text-secondary);
   font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   padding: 0;
   cursor: pointer;
 }
@@ -221,8 +217,6 @@
   flex-basis: 100%;
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--text-muted);
 }
 
