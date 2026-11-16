@@ -10,6 +10,7 @@ import {
     recordActivityStep,
     type ActivityTraceSnapshot,
 } from "@/shared/activity/activityTrace";
+import { OpenSourceButton } from "@/shared/components/OpenSourceButton";
 
 const ANSWER_TIMEOUT_MS = 60_000;
 const TAKEAWAY =
@@ -252,7 +253,7 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                                 <h3>Sources</h3>
                                 <ul>
                                     {state.answer.cards.slice(0, 5).map((card) => (
-                                        <li key={card.id}>
+                                        <li key={card.id} className="ask-source-row">
                                             <button
                                                 type="button"
                                                 className="ask-source"
@@ -263,6 +264,9 @@ export function AskPanel({ isVisible, onClose, onOpenMemoryById }: AskPanelProps
                                                     {card.app_name} · {sourceTime(card)}
                                                 </span>
                                             </button>
+                                            {card.reopen_target ? (
+                                                <OpenSourceButton memoryId={card.id} />
+                                            ) : null}
                                         </li>
                                     ))}
                                 </ul>

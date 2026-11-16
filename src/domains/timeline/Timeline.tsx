@@ -7,6 +7,7 @@ import { InsightLayers } from "@/domains/memory-vault/InsightLayers";
 import { Icon } from "@/shared/components/atoms";
 import "./Timeline.css";
 import { ThinkingIndicator } from "@/shared/components/ThinkingIndicator";
+import { OpenSourceButton } from "@/shared/components/OpenSourceButton";
 
 interface TimelineProps {
     results: MemoryCard[];
@@ -185,6 +186,12 @@ export function Timeline({
                                             score {result.score.toFixed(3)}
                                         </span>
                                     )}
+                                    {result.reopen_target ? (
+                                        <OpenSourceButton
+                                            memoryId={result.id}
+                                            className="timeline-open-source"
+                                        />
+                                    ) : null}
                                     <button
                                         type="button"
                                         className="ui-action-btn timeline-select-btn"

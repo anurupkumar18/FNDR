@@ -263,6 +263,12 @@
     gap: 2px;
 }
 
+.ask-source-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 :root .ask-source {
     width: 100%;
     text-align: left;

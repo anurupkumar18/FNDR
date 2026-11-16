@@ -89,19 +89,22 @@ pub async fn delete_memory(
     Ok(deleted)
 }
 
+/// Reopen one memory with the same checks and core as work sets and MCP.
+pub(crate) async fn reopen_memory_id(state: &AppState, memory_id: &str) -> ReopenOutcome {
+    let outcomes = crate::workset::open_ids(state, &[memory_id.to_string()]).await;
+    outcomes
+        .into_iter()
+        .next()
+        .and_then(|item| item.outcome)
+        .unwrap_or(ReopenOutcome::Unavailable)
+}
+
 #[tauri::command]
 pub async fn reopen_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
 ) -> Result<ReopenOutcome, String> {
-    // Use the work-set opener for a single source too. It checks the current
-    // blocklist, visibility, Private Mode and action switch at open time.
-    let outcomes = crate::workset::open_ids(state.inner(), &[memory_id]).await;
-    Ok(outcomes
-        .into_iter()
-        .next()
-        .and_then(|item| item.outcome)
-        .unwrap_or(ReopenOutcome::Unavailable))
+    Ok(reopen_memory_id(state.inner(), &memory_id).await)
 }
 
 /// Opens what one memory points at: the shared core of `reopen_memory` and

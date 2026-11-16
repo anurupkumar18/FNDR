@@ -1,0 +1,15 @@
+.open-source-button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.open-source-button-status {
+    margin: 0;
+    max-width: 42ch;
+    font-family: var(--font-body);
+    font-size: var(--t-micro);
+    line-height: 1.4;
+    color: var(--fg-3);
+}

@@ -2174,7 +2174,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "fndr.open_target",
-                "description": "Resolve a memory id to its reopen target (URL / file:// / app:// link) so the agent can hand it back to the user.",
+                "description": "Open a memory's source on this Mac after approval and report what happened (typed outcome).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2778,28 +2778,11 @@ async fn run_fndr_namespace_open_target(
             code: -32602,
             message: format!("Invalid fndr.open_target args: {err}"),
         })?;
-    let Some(record) = app_state
-        .store
-        .get_memory_by_id(&args.memory_id)
-        .await
-        .map_err(internal_tool_error)?
-    else {
-        return Ok(tool_error(format!("memory not found: {}", args.memory_id)));
-    };
-    // Do not launch the target here. RE-12 will route this through
-    // `reopen_memory`, which reveals installers instead of executing them.
-    let reveal_only = record
-        .reopen_file_path
-        .as_deref()
-        .map(Path::new)
-        .is_some_and(crate::memory::reopen::should_reveal_in_finder);
+    let outcome =
+        crate::ipc::commands::memory::reopen_memory_id(app_state.as_ref(), &args.memory_id).await;
     Ok(tool_success(json!({
         "memory_id": args.memory_id,
-        "reopen_url": record.reopen_url,
-        "reopen_file_path": record.reopen_file_path,
-        "reopen_app_deep_link": record.reopen_app_deep_link,
-        "url": record.url,
-        "reveal_only": reveal_only,
+        "outcome": outcome,
     })))
 }
 
@@ -6405,6 +6388,74 @@ mod tests {
             resume["inputSchema"]["properties"]["budget_tokens"]["maximum"],
             4000
         );
+    }
+
+    #[test]
+    fn fndr_open_target_matches_reopen_memory_id_for_safe_outcomes() {
+        use crate::ipc::commands::memory::reopen_memory_id;
+        use crate::memory::reopen::{ReopenKind, ReopenOutcome};
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let state = build_test_app_state();
+        let mut no_target = related_test_record("re12-no-target");
+        no_target.reopen_kind = ReopenKind::Unknown;
+        let mut blocked = related_test_record("re12-blocked");
+        blocked.reopen_kind = ReopenKind::BrowserUrl;
+        blocked.reopen_url = Some("javascript:alert(1)".into());
+        let mut app_missing = related_test_record("re12-app-missing");
+        app_missing.reopen_kind = ReopenKind::AppBundle;
+        app_missing.reopen_app_bundle_id = Some("com.re12.uninstalled".into());
+        app_missing.app_name = "Uninstalled".into();
+        let mut blocklisted = related_test_record("re12-blocklisted");
+        blocklisted.app_name = "BlocklistedApp".into();
+        runtime
+            .block_on(
+                state.store.add_batch_preserving_ids(&[
+                    no_target,
+                    blocked,
+                    app_missing,
+                    blocklisted,
+                ]),
+            )
+            .expect("seed memories");
+        {
+            let mut config = state.config.write();
+            config.blocklist = vec!["BlocklistedApp".into()];
+        }
+
+        let cases: [(&str, ReopenOutcome); 5] = [
+            ("re12-no-target", ReopenOutcome::NoTarget),
+            (
+                "re12-blocked",
+                ReopenOutcome::Blocked {
+                    target: "javascript:alert(1)".into(),
+                },
+            ),
+            (
+                "re12-app-missing",
+                ReopenOutcome::AppMissing {
+                    bundle_id: "com.re12.uninstalled".into(),
+                    app_name: Some("Uninstalled".into()),
+                },
+            ),
+            ("re12-blocklisted", ReopenOutcome::Unavailable),
+            ("re12-missing", ReopenOutcome::Unavailable),
+        ];
+
+        for (memory_id, expected) in cases {
+            let ipc = runtime.block_on(reopen_memory_id(state.as_ref(), memory_id));
+            assert_eq!(ipc, expected, "ipc {memory_id}");
+            let response = runtime.block_on(run_fndr_namespace_open_target(
+                state.clone(),
+                json!({ "memory_id": memory_id }),
+            ))
+            .expect("mcp handler");
+            assert_eq!(
+                response["structuredContent"]["outcome"],
+                serde_json::to_value(expected).expect("outcome json"),
+                "mcp {memory_id}"
+            );
+        }
     }
 
     #[test]

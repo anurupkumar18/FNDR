@@ -15,6 +15,7 @@ const ipcMocks = vi.hoisted(() => ({
     notchDoSkills: vi.fn(),
     pasteClipboardEntry: vi.fn(),
     searchMemoryCards: vi.fn(),
+    reopenMemory: vi.fn(),
 }));
 
 vi.mock("@/shared/hooks/useTauriEvent", () => ({
@@ -25,6 +26,7 @@ vi.mock("@/shared/hooks/useTauriEvent", () => ({
 vi.mock("@/shared/ipc/tauri", () => ({
     ...ipcMocks,
     OMNIBAR_FOCUS_EVENT: "omnibar://focus",
+    reopenMemory: ipcMocks.reopenMemory,
 }));
 
 import { OmnibarApp } from "./OmnibarApp";
@@ -384,5 +386,21 @@ describe("OmnibarApp", () => {
         fireEvent.keyDown(screen.getByRole("dialog"), { key: "Tab" });
 
         await waitFor(() => expect(screen.queryByText("Stale answer")).not.toBeInTheDocument());
+    });
+
+    it("shows Open source on memory rows and dismisses after a successful reopen", async () => {
+        ipcMocks.searchMemoryCards.mockResolvedValue([memoryCard("mem-1", "Policy doc")]);
+        ipcMocks.reopenMemory.mockResolvedValue({ kind: "opened" });
+        ipcMocks.dismissOmnibar.mockResolvedValue(undefined);
+        render(<OmnibarApp />);
+
+        fireEvent.change(screen.getByRole("searchbox", { name: "Search your memory" }), {
+            target: { value: "policy" },
+        });
+        await screen.findByRole("button", { name: "Open source" });
+        fireEvent.click(screen.getByRole("button", { name: "Open source" }));
+
+        await waitFor(() => expect(ipcMocks.reopenMemory).toHaveBeenCalledWith("mem-1"));
+        await waitFor(() => expect(ipcMocks.dismissOmnibar).toHaveBeenCalled());
     });
 });

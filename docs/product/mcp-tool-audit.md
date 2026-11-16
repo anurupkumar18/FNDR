@@ -77,7 +77,7 @@ module doc comment), **verdict**.
 | `fndr.timeline` | read | no | none | `memory.timeline` | `fndr.timeline` | **keep as the canonical timeline tool** |
 | `fndr.quality_status` | read | no | none | `get_fndr_stats` | none | merge |
 | `fndr.privacy_status` | read | no | none | `agent.privacy_status` | `fndr.privacy_status` | **keep as the canonical privacy-status tool** |
-| `fndr.open_target` | execute | no | opens a URL/app/file | none | `fndr.open_target` (sanitized, else explicit unavailable) | approval card required; closed if unavailable, declined, or expired |
+| `fndr.open_target` | execute | no | opens a memory source through `reopen_memory` | none | typed `outcome` (same JSON as IPC; `unavailable` when blocked or missing) | approval card required; closed if unavailable, declined, or expired |
 
 ## Summary
 
