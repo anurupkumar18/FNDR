@@ -168,9 +168,13 @@ body,
 
 /* The measured column: the panel's height follows this element, so its own
    padding is part of what the silhouette grows to fit. */
+/* Capped at the panel envelope (notchMetrics.panelMaxHeight) so the thread
+   scrolls and the footer stays in view instead of being clipped. */
 .notch-content {
     display: flex;
     flex-direction: column;
+    max-height: 400px;
+    box-sizing: border-box;
     padding-bottom: 10px;
 }
 
@@ -264,6 +268,8 @@ body,
     display: flex;
     flex-direction: column;
     gap: 14px;
+    flex: 1 1 auto;
+    min-height: 0;
     max-height: 292px;
     overflow-y: auto;
     scrollbar-width: none;
@@ -475,10 +481,6 @@ body,
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-}
-
-.notch-operator-btn:active {
-    transform: scale(0.96);
 }
 
 .notch-operator-btn-primary {

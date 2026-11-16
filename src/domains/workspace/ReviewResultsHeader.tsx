@@ -1,5 +1,6 @@
 import type { Ref } from "react";
 import "./FndrWrappedPanel.css";
+import "@/shared/components/PanelHeader.css";
 
 interface ReviewResultsHeaderProps {
     titleId: string;
@@ -46,11 +47,13 @@ export function ReviewResultsHeader({
                 <button
                     ref={closeRef}
                     type="button"
-                    className="ui-action-btn wrapped-close-btn"
+                    className="fndr-panel-close wrapped-close-btn"
                     onClick={onClose}
                     aria-label="Close FNDR Review"
                 >
-                    <span aria-hidden="true">×</span>
+                    <svg viewBox="0 0 12 12" aria-hidden="true">
+                        <path d="M3 3l6 6M9 3l-6 6" />
+                    </svg>
                 </button>
             </div>
         </header>

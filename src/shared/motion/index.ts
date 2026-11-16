@@ -20,3 +20,4 @@ export {
     tSpringMomentum,
 } from "./transitions";
 export { project, rubberband, nearestSnapPoint } from "./gesture";
+export { installPressFeedback, pressScaleFor } from "./pressFeedback";

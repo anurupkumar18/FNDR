@@ -645,6 +645,7 @@ export function ScreenGuidePanel({
                     <button
                         type="button"
                         className={`sg-hold-button ${holding ? "is-holding" : ""}`}
+                        data-no-press
                         disabled={questionDisabled}
                         aria-label={holding ? "Release to ask" : "Hold to talk"}
                         aria-pressed={holding}

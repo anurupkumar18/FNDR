@@ -20,6 +20,7 @@ import {
     type DailyOutputTool,
 } from "@/shared/ipc/tauri";
 import { useModalFocus } from "@/shared/hooks/useModalFocus";
+import { PanelHeader } from "@/shared/components/PanelHeader";
 import "./OutputsPanel.css";
 
 interface OutputsPanelProps {
@@ -180,10 +181,13 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
 
     return (
         <div className="outputs-page" role="dialog" aria-modal="true" aria-label="Daily outputs" ref={dialogRef}>
-            <header className="outputs-header">
-                <div><h2>Daily outputs</h2><p>Work notes from visible memories, with a source on every line.</p></div>
-                <button ref={closeRef} type="button" className="ui-action-btn" onClick={onClose} aria-label="Close daily outputs">Close</button>
-            </header>
+            <PanelHeader
+                title="Daily outputs"
+                subtitle="Work notes from visible memories, with a source on every line."
+                closeLabel="Close daily outputs"
+                closeRef={closeRef}
+                onClose={onClose}
+            />
             <main className="outputs-body">
                 <div className="outputs-controls">
                     <label>Output
@@ -238,12 +242,12 @@ export function OutputsPanel({ isVisible, onClose, onOpenMemoryById }: OutputsPa
                     {DESTINATIONS.map(({ name, label, type }) => <div key={name} className="outputs-setting">
                         <label>{label} <input type={type} value={values[name] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [name]: event.target.value }))} /></label>
                         <span>{status?.[name] ? "Saved" : "Not set"}</span>
-                        <button type="button" onClick={() => saveSetting(name)} disabled={busy}>Save {label}</button>
+                        <button type="button" className="ui-action-btn" onClick={() => saveSetting(name)} disabled={busy} aria-label={`Save ${label}`}>Save</button>
                     </div>)}
                     <h4>Allowed destinations</h4>
                     {allowedDestinations.length === 0 ? <p>None allowed yet.</p> : allowedDestinations.map((entry) => <div className="outputs-setting" key={entry.key}>
                         <span>{entry.destination} ({TOOL_LABELS[entry.tool]})</span>
-                        <button type="button" onClick={() => forget(entry.key)} disabled={busy}>Remove {entry.destination}</button>
+                        <button type="button" className="ui-action-btn" onClick={() => forget(entry.key)} disabled={busy} aria-label={`Remove ${entry.destination}`}>Remove</button>
                     </div>)}
                 </section>}
             </main>

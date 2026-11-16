@@ -3,8 +3,11 @@ import "./styles/index.css";
 import "@/domains/omnibar/Omnibar.css";
 import { OmnibarApp } from "@/domains/omnibar/OmnibarApp";
 import { installAuxiliaryAppearanceSync } from "./auxiliaryAppearance";
+import { installPressFeedback } from "@/shared/motion/pressFeedback";
 
 installAuxiliaryAppearanceSync();
+
+installPressFeedback();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <OmnibarApp />

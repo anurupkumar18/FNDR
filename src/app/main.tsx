@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { AppShell } from "./AppShell";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 import { applyPalette, type PaletteMode, resolveStoredPalette } from "@/shared/theme/cinematic-palettes";
+import { installPressFeedback } from "@/shared/motion/pressFeedback";
 import "./styles/index.css";
 
 const storedTheme = localStorage.getItem(STORAGE_KEYS.theme) as PaletteMode | null;
@@ -14,6 +15,8 @@ applyPalette(resolveStoredPalette(storedPalette, theme), theme);
 
 // Immersive mode was merged into the default shell; clear legacy key.
 localStorage.removeItem(STORAGE_KEYS.appMode);
+
+installPressFeedback();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

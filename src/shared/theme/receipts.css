@@ -47,7 +47,6 @@
         transform var(--film-dur-fast) var(--film-ease-shutter);
 }
 .rcpt-primary:hover:not(:disabled) { filter: brightness(1.1); }
-.rcpt-primary:active:not(:disabled) { transform: scale(0.985); }
 .rcpt-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 .rcpt-primary:focus-visible,
 .rcpt-quiet:focus-visible,

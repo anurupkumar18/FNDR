@@ -340,7 +340,7 @@ function DefaultExclusions() {
         return () => { current = false; };
     }, []);
     if (categories.length === 0) {
-        return failed ? <p role="alert">Default exclusions could not be loaded.</p> : null;
+        return failed ? <p role="alert" className="privacy-proof-inline-error">Default exclusions could not be loaded.</p> : null;
     }
     return (
         <section aria-label="Default capture exclusions" className="pipeline-panel-card">

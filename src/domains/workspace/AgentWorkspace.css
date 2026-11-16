@@ -396,10 +396,6 @@
     cursor: not-allowed;
 }
 
-.aw-send:active:not(:disabled) {
-    transform: scale(0.92);
-}
-
 /* Memory picker */
 .aw-picker {
     position: absolute;
@@ -528,6 +524,11 @@
 /* Setup */
 .aw-setup {
     display: grid;
+    /* Rows keep their content height and the column scrolls. Without it the
+       grid squeezed the overflow-hidden ChatGPT card to fit, cutting off its
+       Sign in button. */
+    grid-auto-rows: max-content;
+    align-content: start;
     gap: 14px;
     width: 100%;
     max-width: 560px;

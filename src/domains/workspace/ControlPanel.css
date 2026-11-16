@@ -203,26 +203,29 @@
     cursor: pointer;
 }
 
+/* Same look as .fndr-switch (index.css): a white knob on a quiet track
+   that turns accent when on. */
 .settings-switch {
     appearance: none;
     flex: 0 0 40px;
     width: 40px;
     height: 24px;
     margin: 0;
-    border: 1px solid var(--border-strong);
+    border: 1px solid transparent;
     border-radius: 999px;
-    background: var(--surface-elevated);
+    background: color-mix(in srgb, var(--fg) 18%, transparent);
     cursor: pointer;
 }
 
 .settings-switch::before {
     content: "";
     display: block;
-    width: 16px;
-    height: 16px;
-    margin: 3px;
+    width: 18px;
+    height: 18px;
+    margin: 2px;
     border-radius: 50%;
-    background: var(--text-secondary);
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 }
 
 .settings-switch:checked {
@@ -231,7 +234,6 @@
 
 .settings-switch:checked::before {
     transform: translateX(16px);
-    background: var(--bg-primary);
 }
 
 .settings-switch:focus-visible {
@@ -1293,10 +1295,6 @@
     box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
-.wallpaper-option:active .wallpaper-preview {
-    transform: scale(0.97);
-}
-
 .wallpaper-option.is-selected {
     color: var(--text-primary);
 }
@@ -1317,4 +1315,19 @@
     font-size: 0.74rem;
     font-weight: 400;
     line-height: 1.35;
+}
+
+/* Components embedded in Settings bring their own page-sized headings; inside
+   the sheet they read as sections like every other one. */
+.settings-panel .panel-content .action-approval-panel.embedded h2,
+.settings-panel .panel-content .import-sources h2 {
+    font: 600 0.76rem/1.3 var(--font-body);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.settings-panel .panel-content .setup-center-row strong {
+    font-size: 14px;
+    font-weight: 600;
 }

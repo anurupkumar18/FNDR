@@ -1,4 +1,6 @@
 .sg-panel-page {
+    /* Screen Guide speaks in the app's accent, like every other page. */
+    --info: var(--accent);
     position: fixed;
     inset: 0;
     z-index: 1040;
@@ -318,12 +320,11 @@
 
 .sg-hold-button:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--info) 65%, transparent);
-    background: rgba(40, 112, 202, 0.17);
+    background: color-mix(in srgb, var(--info) 17%, transparent);
 }
 
 .sg-hold-button.is-holding {
-    transform: scale(0.99);
-    background: rgba(40, 112, 202, 0.28);
+    background: color-mix(in srgb, var(--info) 28%, transparent);
 }
 
 .sg-hold-button:disabled,

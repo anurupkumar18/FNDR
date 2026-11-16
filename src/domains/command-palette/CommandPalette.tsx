@@ -2,7 +2,9 @@
 // A global Cmd+K palette that surfaces every action in FNDR with fuzzy search,
 // keyboard navigation, and a confirmation gate for destructive operations.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { motionTokens } from "@/shared/motion";
 import {
     MemoryCard,
     deleteMemory,
@@ -636,7 +638,7 @@ export function CommandPalette({
 
                 {/* Results */}
                 {!pendingCommand && !feedback && (
-                    <div className="cp-results" ref={listRef}>
+                    <motion.div className="cp-results" ref={listRef} layoutScroll>
                         {flatVisible.length === 0 && (
                             <div className="cp-empty">No commands match "{query}"</div>
                         )}
@@ -654,6 +656,14 @@ export function CommandPalette({
                                             onClick={() => void executeCommand(cmd)}
                                             onMouseEnter={() => setActiveIdx(idx)}
                                         >
+                                            {isActive && (
+                                                <motion.span
+                                                    layoutId="cp-active-highlight"
+                                                    className="cp-item-highlight"
+                                                    aria-hidden="true"
+                                                    transition={motionTokens.spring.soft}
+                                                />
+                                            )}
                                             <span className="cp-item-body">
                                                 <span className="cp-item-label">{cmd.label}</span>
                                                 <span className="cp-item-desc">{cmd.description}</span>
@@ -669,7 +679,7 @@ export function CommandPalette({
                                 })}
                             </div>
                         ))}
-                    </div>
+                    </motion.div>
                 )}
 
                 <div className="cp-footer">

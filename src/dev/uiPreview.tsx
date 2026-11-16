@@ -6,6 +6,7 @@ import { createPreviewIpcHandler } from "./previewIpc";
 import { applyPalette } from "@/shared/theme/cinematic-palettes";
 import { STORAGE_KEYS } from "@/shared/utils/config";
 import { resolvePreviewConfig } from "./previewConfig";
+import { installPressFeedback } from "@/shared/motion/pressFeedback";
 import { VoicePreviewGallery } from "./VoicePreviewGallery";
 import "@/app/styles/index.css";
 
@@ -18,6 +19,7 @@ localStorage.setItem(STORAGE_KEYS.palette, preview.palette);
 applyPalette(preview.palette, preview.theme);
 
 mockIPC(createPreviewIpcHandler(), { shouldMockEvents: true });
+installPressFeedback();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

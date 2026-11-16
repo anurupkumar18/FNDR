@@ -117,11 +117,8 @@
 [data-theme="light"] .top-right-control .fndr-os-chrome-btn,
 [data-theme="paper"] .top-right-control .fndr-os-chrome-btn {
     color: var(--cp-text-inverse, #ffffff) !important;
-}
-
-.fndr-os-chrome-btn:active {
-    transform: scale(0.94);
-    transition-duration: 0ms;
+    background: color-mix(in srgb, var(--cp-text-primary, #3e2723) 86%, transparent);
+    border-color: color-mix(in srgb, var(--cp-text-primary, #3e2723) 60%, transparent);
 }
 
 .fndr-os-chrome-btn.active {

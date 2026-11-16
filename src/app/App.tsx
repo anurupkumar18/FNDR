@@ -38,6 +38,9 @@ import {
 import { getOnboardingState, recordOnboardingFunnelEvent, type OnboardingState } from "@/shared/ipc/onboarding";
 import { EVAL_UI } from "@/shared/utils/eval-ui";
 import { SidebarDrawer } from "./SidebarDrawer";
+import { SidebarHighlight } from "./SidebarPills";
+import { Icon, type IconName } from "@/shared/components/atoms/Icon";
+import { motionTokens } from "@/shared/motion";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
 import "./styles/App.css";
 
@@ -46,31 +49,31 @@ function nextToastId(): string {
 }
 
 type SidebarItem =
-    | { text: string; key: MountedPanelKey }
-    | { text: string; action: "home" | "settings" };
+    | { text: string; icon: IconName; key: MountedPanelKey }
+    | { text: string; icon: IconName; action: "home" | "settings" };
 
 const PRIMARY_SIDEBAR_ITEMS = [
-    { action: "home", text: "Home" },
-    { key: "ask", text: "Search & Ask FNDR" },
-    { key: "memoryCards", text: "Memory Vault" },
-    { key: "dailySummary", text: "FNDR Review" },
-    { action: "settings", text: "Trust & Settings" },
+    { action: "home", text: "Home", icon: "home" },
+    { key: "ask", text: "Search & Ask FNDR", icon: "search" },
+    { key: "memoryCards", text: "Memory Vault", icon: "archive" },
+    { key: "dailySummary", text: "FNDR Review", icon: "calendar" },
+    { action: "settings", text: "Trust & Settings", icon: "shield" },
 ] as const satisfies readonly SidebarItem[];
 
 const LAB_SIDEBAR_ITEMS = [
-    { key: "screenGuide", text: "Screen Guide" },
-    { key: "agent", text: "Hermes Agent" },
-    { key: "outputs", text: "Daily outputs" },
-    { key: "stats", text: "Stats" },
-    { key: "todo", text: "To-dos" },
-    { key: "privacyProof", text: "Privacy Activity" },
+    { key: "screenGuide", text: "Screen Guide", icon: "pointer" },
+    { key: "agent", text: "Hermes Agent", icon: "bot" },
+    { key: "outputs", text: "Daily outputs", icon: "file-text" },
+    { key: "stats", text: "Stats", icon: "bar-chart" },
+    { key: "todo", text: "To-dos", icon: "check-square" },
+    { key: "privacyProof", text: "Privacy Activity", icon: "eye-off" },
 ] as const satisfies readonly SidebarItem[];
 
 /** Visible navigation follows ADR 023. Engine diagnostics is intentionally
  * absent until someone explicitly enables Developer Mode in Settings. */
 export function getSidebarGroups(developerMode: boolean) {
     const labs = developerMode
-        ? [...LAB_SIDEBAR_ITEMS, { key: "engineMetrics" as const, text: "Engine diagnostics" }]
+        ? [...LAB_SIDEBAR_ITEMS, { key: "engineMetrics" as const, text: "Engine diagnostics", icon: "cpu" as const }]
         : LAB_SIDEBAR_ITEMS;
     return [
         { label: "Navigate", items: PRIMARY_SIDEBAR_ITEMS },
@@ -105,6 +108,8 @@ function App() {
     const [biometricUnlocked, setBiometricUnlocked] = useState(false);
     const [selectedResult, setSelectedResult] = useState<MemoryCard | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [sidebarHover, setSidebarHover] = useState({ key: "", visible: false });
+    const hideSidebarHover = useCallback(() => setSidebarHover((hover) => ({ ...hover, visible: false })), []);
     const [deletedMemoryIds, setDeletedMemoryIds] = useState<Set<string>>(new Set());
     const [displayName, setDisplayName] = useState<string | null>(null);
     const [now, setNow] = useState(() => new Date());
@@ -581,20 +586,35 @@ function App() {
                         sidebarButtonRef.current?.focus();
                     }}
                 >
+                    <SidebarHighlight
+                        className="sidebar-item-hover"
+                        targetKey={sidebarHover.key || null}
+                        visible={sidebarHover.visible}
+                        transition={motionTokens.spring.snappy}
+                    />
+                    <SidebarHighlight
+                        className="sidebar-item-pill"
+                        targetKey={isHomeActive ? "action:home" : activePanel}
+                        visible={isHomeActive || activePanel !== null}
+                        transition={motionTokens.spring.soft}
+                    />
                     <div className="sidebar-brand"></div>
 
                     {sidebarGroups.map((group) => (
-                        <div key={group.label} className="sidebar-group">
+                        <div key={group.label} className="sidebar-group" onPointerLeave={hideSidebarHover}>
                             <div className="sidebar-label">{group.label}</div>
                             {group.items.map((item) => {
                                 if ("action" in item) {
                                     const isHome = item.action === "home";
+                                    const hoverKey = `action:${item.action}`;
                                     return (
                                         <button
                                             key={item.action}
                                             type="button"
                                             className={`sidebar-item ${isHome && isHomeActive ? "active" : ""}`}
                                             aria-current={isHome && isHomeActive ? "page" : undefined}
+                                            data-sidebar-key={hoverKey}
+                                            onPointerEnter={() => setSidebarHover({ key: hoverKey, visible: true })}
                                             onClick={() => {
                                                 if (isHome) {
                                                     goHome();
@@ -604,18 +624,23 @@ function App() {
                                                 }
                                             }}
                                         >
-                                            {item.text}
+                                            <span className="sidebar-item-label">
+                                                <Icon name={item.icon} size={15} className="sidebar-item-icon" />
+                                                {item.text}
+                                            </span>
                                         </button>
                                     );
                                 }
 
-                                const { key, text } = item;
+                                const { key, text, icon } = item;
                                 return (
                                     <button
                                         key={key}
                                         type="button"
                                         className={`sidebar-item ${activePanel === key ? "active" : ""}`}
                                         aria-current={activePanel === key ? "page" : undefined}
+                                        data-sidebar-key={key}
+                                        onPointerEnter={() => setSidebarHover({ key, visible: true })}
                                         onClick={() => {
                                             if (activePanel === key) {
                                                 closeActivePanel();
@@ -624,25 +649,33 @@ function App() {
                                             }
                                         }}
                                     >
-                                        {text}
+                                        <span className="sidebar-item-label">
+                                            <Icon name={icon} size={15} className="sidebar-item-icon" />
+                                            {text}
+                                        </span>
                                     </button>
                                 );
                             })}
                         </div>
                     ))}
 
-                    <div className="sidebar-group">
+                    <div className="sidebar-group" onPointerLeave={hideSidebarHover}>
                         <div className="sidebar-label">Commands</div>
                         <button
                             type="button"
                             className="sidebar-item"
+                            data-sidebar-key="command-palette"
+                            onPointerEnter={() => setSidebarHover({ key: "command-palette", visible: true })}
                             onClick={() => {
                                 sidebarButtonRef.current?.focus();
                                 setShowCommandPalette(true);
                                 setIsSidebarOpen(false);
                             }}
                         >
-                            Command Palette
+                            <span className="sidebar-item-label">
+                                <Icon name="command" size={15} className="sidebar-item-icon" />
+                                Command Palette
+                            </span>
                             <kbd className="sidebar-item-shortcut">⌘K</kbd>
                         </button>
                     </div>

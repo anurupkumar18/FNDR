@@ -188,12 +188,6 @@
     color: var(--cp-accent, var(--accent));
 }
 
-.home-hero__voice-btn:active:not(:disabled),
-.home-hero__search-submit:active:not(:disabled) {
-    transform: scale(0.95);
-    transition-duration: 0ms;
-}
-
 .home-hero__voice-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;

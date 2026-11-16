@@ -24,7 +24,10 @@
 .cp-modal {
     width: min(540px, calc(100vw - 32px));
     max-height: 70vh;
-    background: color-mix(in srgb, var(--bg-2) 92%, transparent);
+    /* Nearly opaque: inside the blurred overlay, WebKit (and so the app's
+       WKWebView) cannot blur the modal's own backdrop, so a thinner tint
+       lets Home's headline read through the command list. */
+    background: color-mix(in srgb, var(--bg-2) 97%, transparent);
     border: 1px solid var(--hairline-strong);
     border-radius: var(--radius-lg);
     box-shadow:
@@ -33,7 +36,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    animation: cpModalIn var(--film-dur-base) var(--film-ease-shutter);
+    animation: cpModalIn var(--spring-soft-dur) var(--spring-soft);
     backdrop-filter: blur(20px) saturate(140%);
     -webkit-backdrop-filter: blur(20px) saturate(140%);
 }
@@ -296,18 +299,29 @@
     position: relative;
 }
 
-.cp-item.active {
-    background: var(--bg-4);
-    box-shadow: var(--halation-soft);
+.cp-item {
+    isolation: isolate;
 }
 
-.cp-item:hover {
-    background: var(--bg-3);
+/* One highlight travels between rows; the palette moves it on hover and on
+   the arrow keys, so rows paint no background of their own. */
+.cp-item-highlight {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--bg-4);
+    box-shadow: var(--halation-soft);
+    pointer-events: none;
+}
+
+/* The caret marks the field; the whole palette is the input's surface. */
+.cp-input:focus-visible {
+    outline: none;
 }
 
 .cp-item:focus-visible,
-.cp-confirm-btn:focus-visible,
-.cp-input:focus-visible {
+.cp-confirm-btn:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--accent) 72%, var(--fg) 18%);
     outline-offset: -2px;
 }
@@ -484,9 +498,9 @@
     color: rgba(80, 80, 100, 0.5);
 }
 
-[data-theme="light"] .cp-item.active,
-[data-theme="light"] .cp-item:hover {
-    background: rgba(0, 0, 0, 0.04);
+[data-theme="light"] .cp-item-highlight {
+    background: rgba(0, 0, 0, 0.05);
+    box-shadow: none;
 }
 
 [data-theme="light"] .cp-footer {

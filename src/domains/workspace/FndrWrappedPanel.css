@@ -67,7 +67,6 @@
     font-size: 0.82rem;
 }
 
-.wrapped-close-btn,
 .wrapped-change-week-btn,
 .wrapped-refresh-btn,
 .wrapped-export-btn {
@@ -76,10 +75,9 @@
     font-size: 0.76rem;
 }
 
+/* The round close shared with every other panel (PanelHeader.css). */
 .wrapped-close-btn {
-    width: 44px;
-    padding: 0;
-    font-size: 1.35rem;
+    flex-shrink: 0;
 }
 
 .wrapped-week-selector {

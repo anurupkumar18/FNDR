@@ -1284,3 +1284,13 @@
         display: none;
     }
 }
+
+.privacy-proof-inline-error {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--alarm, #e5484d) 30%, transparent);
+    background: color-mix(in srgb, var(--alarm, #e5484d) 8%, transparent);
+    color: var(--fg-2);
+    font-size: 13px;
+}

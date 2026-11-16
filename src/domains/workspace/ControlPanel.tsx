@@ -5,6 +5,7 @@ import { NotchDoSettings } from "@/domains/notch/NotchDoSettings";
 import { SetupCenter } from "@/domains/setup/SetupCenter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { EdgeSheet } from "@/shared/components/EdgeSheet";
 import {
     type CaptureStatus,
     PRIVACY_ALERTS_EVENT,
@@ -603,17 +604,16 @@ export function ControlPanel({
                 </button>
             </div>
 
-            {typeof document !== "undefined" && isOpen && createPortal(
-                <>
-                    <div className="panel-backdrop" onClick={() => setIsOpen(false)} />
-                    <aside
-                        ref={settingsPanelRef}
-                        id="fndr-settings-panel"
-                        className="settings-panel open"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="fndr-settings-title"
-                    >
+            {typeof document !== "undefined" && createPortal(
+                <EdgeSheet
+                    isOpen={isOpen}
+                    onClose={() => setIsOpen(false)}
+                    sheetRef={settingsPanelRef}
+                    id="fndr-settings-panel"
+                    className="settings-panel open"
+                    backdropClassName="panel-backdrop"
+                    ariaLabelledBy="fndr-settings-title"
+                >
                         <PanelHeader
                             title="Settings"
                             titleId="fndr-settings-title"
@@ -1058,8 +1058,7 @@ export function ControlPanel({
                                 </section>
                             </SettingsTabPanel>
                         </div>
-                    </aside>
-                </>,
+                </EdgeSheet>,
                 document.body,
             )}
         </div>

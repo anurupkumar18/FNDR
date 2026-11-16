@@ -39,6 +39,9 @@ export const motion = {
         // Damping ~0.8 / response 0.3 — drawers and sheets released by a
         // gesture. Only use when a drag or flick preceded the motion.
         momentum: { type: "spring", bounce: 0.2, visualDuration: 0.3 } as const,
+        // Bounce 0.18 / response 0.35 — a selection that travels (sidebar,
+        // palette, tab pills). Matches `--spring-soft` in feel.css.
+        soft: { type: "spring", bounce: 0.18, visualDuration: 0.35 } as const,
     },
 } as const;
 

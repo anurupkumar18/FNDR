@@ -157,7 +157,6 @@
     outline-offset: 2px;
 }
 .fndr-button:active {
-    transform: scale(0.985);
     opacity: 0.92;
 }
 .fndr-button--primary {
