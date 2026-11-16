@@ -76,8 +76,11 @@
     color: var(--fg-3);
 }
 
+/* minmax(0, 1fr) lets long titles ellipsize inside the rail instead of
+   pushing the row past its right edge. */
 .aw-chat-list {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     margin: 0;
     padding: 0;
@@ -88,7 +91,8 @@
     position: relative;
     display: flex;
     align-items: center;
-    border-radius: 8px;
+    min-width: 0;
+    border-radius: var(--r-control, 10px);
 }
 
 .aw-chat-list li:hover,
@@ -334,8 +338,8 @@
 }
 
 .aw-input-row:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--focus-ring);
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline-2));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .aw-memories-btn {

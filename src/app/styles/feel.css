@@ -100,7 +100,7 @@
     .aw-new-chat, .aw-peer-nav, .aw-primary, .codex-btn, .codex-link,
     .wrapped-start-btn, .work-set-open, .work-set-primary,
     .thread-changes-toggle, .thread-changes-dismiss, .palette-option,
-    .cp-item, .ask-source, .sg-hold-button, .todo-row button, .profile-save-btn
+    .cp-item, .ask-source, .sg-hold-button, .profile-save-btn
 ) {
     border-radius: var(--r-control);
 }
