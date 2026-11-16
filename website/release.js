@@ -143,28 +143,6 @@ async function enhanceRelease() {
   }
 }
 
-function enableMemoryField() {
-  const finePointer = window.matchMedia?.("(pointer: fine)").matches;
-  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  if (!finePointer || reduceMotion) return;
-
-  let frame = 0;
-  let x = 50;
-  let y = 18;
-  const render = () => {
-    frame = 0;
-    document.documentElement.style.setProperty("--pointer-x", `${x}%`);
-    document.documentElement.style.setProperty("--pointer-y", `${y}%`);
-  };
-
-  window.addEventListener("pointermove", (event) => {
-    x = (event.clientX / window.innerWidth) * 100;
-    y = (event.clientY / window.innerHeight) * 100;
-    if (!frame) frame = window.requestAnimationFrame(render);
-  }, { passive: true });
-}
-
 if (typeof document !== "undefined") {
-  enableMemoryField();
   enhanceRelease();
 }
