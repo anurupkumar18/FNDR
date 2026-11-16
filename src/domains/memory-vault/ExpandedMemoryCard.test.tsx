@@ -180,7 +180,7 @@ describe("ExpandedMemoryCard", () => {
             />,
         );
         expect(screen.getByText(/Preview · doc\.pdf – Page 112 of 150 · page 112/)).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Open source (page 112)" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Open page 112 in Preview" })).toBeTruthy();
     });
 
     it("shows a one-line reopen status under Open source", async () => {

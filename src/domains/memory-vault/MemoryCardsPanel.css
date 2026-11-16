@@ -131,8 +131,6 @@
     font-size: 11px;
     font-weight: 600;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .memory-cards-filter-control {
@@ -402,123 +400,150 @@
     font-size: 13px;
 }
 
-/* ── Vault list: day, then thread, then one row per near-duplicate group ── */
+/* ── Vault list: day, then thread, then one row per near-duplicate group ──
+   Rows are flat: title, one line, and app + time on the right. The source
+   button lives inside the row and takes the place of app + time on hover or
+   focus, so the list has one right edge instead of a ragged button column. */
 .vault-day {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
 }
 
 .vault-day + .vault-day {
-    margin-top: 14px;
+    margin-top: 18px;
 }
 
-/* The stream has 24px top padding; -24px pins the heading flush to its edge. */
+/* Sticky at -24px with matching padding, so the heading covers the stream's
+   top padding and rows never show through above it. */
 .vault-day-heading {
     position: sticky;
-    top: 0;
-    z-index: 2;
+    top: -24px;
+    z-index: 3;
     display: flex;
     align-items: baseline;
-    gap: 10px;
-    margin: 0;
-    padding: 6px 0;
+    gap: 8px;
+    margin: -24px 0 0;
+    padding: 30px 14px 8px;
     background: var(--panel-bg);
     font-family: var(--film-font-ui);
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 650;
     color: var(--text-primary);
 }
 
 .vault-day-count {
     font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
+    font-weight: 400;
+    color: var(--text-muted);
 }
 
 .vault-thread {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
 }
 
 .vault-thread-heading {
-    margin: 6px 0 0;
+    margin: 8px 0 0;
+    padding: 0 14px;
     font-family: var(--film-font-ui);
     font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: 500;
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .vault-thread-count {
-    font-weight: 500;
+    font-weight: 400;
 }
 
 .vault-rows {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
     margin: 0;
     padding: 0;
     list-style: none;
 }
 
 .vault-rows--similar {
-    margin-top: 6px;
-    padding-left: 20px;
-    border-left: 2px solid var(--hairline);
+    margin: 2px 0 6px 14px;
+    padding-left: 10px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+/* The card and the source button share the first grid cell. */
 .vault-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 148px;
+    grid-template-columns: minmax(0, 1fr);
     align-items: center;
-    gap: 8px;
 }
 
-/* Denser rows than the stand-alone compact card: the day heading carries the date. */
+.vault-row > .fndr-mc--compact {
+    grid-area: 1 / 1;
+}
+
 .vault-row .fndr-mc--compact {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+        "main source"
+        "main time";
+    gap: 2px 16px;
     min-height: 0;
-    padding: 9px 16px 9px 18px;
+    padding: 10px 14px;
+    border: 1px solid transparent;
+    border-radius: var(--r-card, 14px);
+    background: transparent;
+    box-shadow: none;
+    align-items: center;
+    transition:
+        background-color 150ms var(--film-ease-shutter),
+        border-color 150ms var(--film-ease-shutter);
 }
 
+.vault-row .fndr-mc--compact:hover,
+.vault-row .fndr-mc--compact:focus-visible {
+    background: color-mix(in srgb, var(--fg) 5%, transparent);
+    border-color: transparent;
+    transform: none;
+}
+
+.vault-row .fndr-mc--compact:focus-visible {
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.vault-row .fndr-mc-bar,
+.vault-row .fndr-mc-c-chip,
+.vault-row .fndr-mc-c-route,
+.vault-row .fndr-mc-c-threads,
 .vault-row .fndr-mc-c-day {
     display: none;
 }
 
-.vault-row-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
+.vault-row .fndr-mc-c-title {
+    font-size: 15px;
 }
 
-.vault-row-session-range {
-    color: var(--text-secondary);
-    font-family: var(--film-font-ui);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-    text-align: center;
-    white-space: nowrap;
+.vault-row .fndr-mc-c-source {
+    justify-content: flex-end;
+    align-self: end;
 }
 
-.vault-row-action {
-    min-height: 30px;
-    padding: 4px 10px;
-    font-family: var(--film-font-ui);
+.vault-row .fndr-mc-c-time {
+    align-self: start;
     font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-muted);
 }
 
-/* Out-ranks the themed .ui-action-btn rules, which load after this sheet. */
-.vault-row-actions .vault-row-similar[aria-expanded="true"] {
-    border-color: var(--accent);
-    color: var(--accent);
+.vault-row .fndr-mc-c-source,
+.vault-row .fndr-mc-c-time {
+    transition: opacity 120ms var(--film-ease-shutter);
 }
 
 .vault-source-icon {
@@ -527,21 +552,152 @@
     color: var(--text-secondary);
 }
 
-@container memory-stream (max-width: 560px) {
-    .vault-row {
-        grid-template-columns: minmax(0, 1fr);
-    }
+/* Source button: inset in the row, radius nested inside the row's 14px. */
+.vault-row-open {
+    grid-area: 1 / 1;
+    justify-self: end;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    margin-right: 10px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--r-inset, 9px);
+    background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+    color: var(--text-primary);
+    font-family: var(--film-font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 140ms var(--film-ease-shutter),
+        background-color 150ms var(--film-ease-shutter),
+        color 150ms var(--film-ease-shutter);
+}
 
-    .vault-row-actions {
-        flex-direction: row;
-        justify-content: flex-end;
-        flex-wrap: wrap;
-        align-items: center;
-    }
+.vault-row--reopenable:hover > .vault-row-open,
+.vault-row--reopenable:focus-within > .vault-row-open,
+.vault-row.is-opening > .vault-row-open,
+.vault-row.is-opened > .vault-row-open {
+    opacity: 1;
+    pointer-events: auto;
+}
 
-    .vault-row-actions:empty {
-        display: none;
+.vault-row--reopenable:hover > .fndr-mc--compact :is(.fndr-mc-c-source, .fndr-mc-c-time),
+.vault-row--reopenable:focus-within > .fndr-mc--compact :is(.fndr-mc-c-source, .fndr-mc-c-time),
+.vault-row.is-opening > .fndr-mc--compact :is(.fndr-mc-c-source, .fndr-mc-c-time),
+.vault-row.is-opened > .fndr-mc--compact :is(.fndr-mc-c-source, .fndr-mc-c-time) {
+    opacity: 0;
+}
+
+.vault-row-open:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+.vault-row-open:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.vault-row-open[data-phase="opening"] {
+    background: var(--accent);
+    color: #fff;
+    cursor: progress;
+}
+
+.vault-row-open[data-phase="opened"] {
+    background: color-mix(in srgb, var(--success, #30d158) 22%, var(--bg-2));
+    color: var(--text-primary);
+}
+
+.vault-row-open-spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, #fff 35%, transparent);
+    border-top-color: #fff;
+    animation: vault-spin 700ms linear infinite;
+}
+
+@keyframes vault-spin {
+    to {
+        transform: rotate(360deg);
     }
+}
+
+@media (hover: none) {
+    .vault-row--reopenable > .vault-row-open {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+/* What happened when the source could not open, under its row. */
+.vault-row-note {
+    margin: 2px 14px 6px;
+    padding: 8px 12px;
+    border-radius: var(--r-inset, 9px);
+    border: 1px solid color-mix(in srgb, var(--warning, #d9a400) 30%, transparent);
+    background: color-mix(in srgb, var(--warning, #d9a400) 10%, transparent);
+    color: var(--text-primary);
+    font-family: var(--film-font-ui);
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+
+/* Session expander: a quiet line under the row, not a second button column. */
+.vault-row-similar {
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 4px 8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--r-inset, 9px);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--film-font-ui);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+}
+
+.vault-row-similar:hover {
+    background: color-mix(in srgb, var(--fg) 5%, transparent);
+    color: var(--text-primary);
+}
+
+.vault-row-similar:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+}
+
+.vault-row-similar-chevron {
+    transition: transform 420ms var(--spring-soft, ease);
+}
+
+.vault-row-similar[aria-expanded="true"] {
+    color: var(--text-primary);
+}
+
+.vault-row-similar[aria-expanded="true"] .vault-row-similar-chevron {
+    transform: rotate(90deg);
+}
+
+.vault-row-session-range {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.vault-row-session-range::before {
+    content: "· ";
 }
 
 .memory-cards-load-more {
@@ -947,37 +1103,52 @@
     align-items: center;
 }
 
+/* One field, then quiet filter controls that only look like controls on
+   hover. Every control shares the --r-control radius. */
 .memory-cards-search {
-    flex: 1 1 200px;
-    min-width: 160px;
-    min-height: 36px;
-    border-radius: 10px;
-    border: 1px solid var(--border-strong);
-    background: var(--surface-elevated);
+    flex: 1 1 260px;
+    min-width: 180px;
+    min-height: 38px;
+    border-radius: var(--r-control, 10px);
+    border: 1px solid transparent;
+    background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a88a78' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E") 12px 50% / 15px no-repeat,
+        color-mix(in srgb, var(--fg) 6%, transparent);
     color: var(--text-primary);
-    padding: 6px 12px;
+    padding: 6px 12px 6px 36px;
     font-family: var(--film-font-ui);
     font-size: 14px;
+    transition: box-shadow 160ms ease, background-color 160ms ease;
 }
 
 .memory-cards-search:focus-visible {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--focus-ring);
+    border-color: transparent;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 65%, transparent), 0 0 0 4px var(--focus-ring);
     outline: none;
 }
 
 .memory-cards-filter select {
-    min-width: 132px;
-    min-height: 36px;
-    border-radius: 999px;
+    min-width: 0;
+    min-height: 38px;
+    border-radius: var(--r-control, 10px);
+    border: 1px solid transparent;
+    background: transparent;
     padding: 6px 30px 6px 12px;
     font-size: 13px;
+    color: var(--text-secondary);
+    transition: background-color 150ms ease, color 150ms ease;
+}
+
+.memory-cards-filter select:hover {
+    background: color-mix(in srgb, var(--fg) 6%, transparent);
+    color: var(--text-primary);
 }
 
 .memory-cards-toolbar-top .memory-cards-tab {
     min-height: 32px;
     padding: 4px 12px;
     font-size: 12px;
+    border-radius: var(--r-control, 10px);
 }
 
 .memory-cards-activity-trace {
@@ -989,20 +1160,18 @@
 
 /* The most detailed earlier moment of a session, under the row's own line. */
 .vault-row-earlier {
-    grid-column: 1 / -1;
-    margin: -4px 0 6px;
-    padding: 0 16px 0 18px;
+    margin: 0 0 4px;
+    padding: 0 16px;
     color: var(--text-secondary);
     font-family: var(--film-font-ui);
-    font-size: 12px;
-    line-height: 1.4;
+    font-size: 12.5px;
+    line-height: 1.45;
 }
 
 .vault-row-earlier-label {
     margin-right: 6px;
-    font-size: 10px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--text-muted);
 }
 
 /* A session in another app that shares a file or a title with this one. */

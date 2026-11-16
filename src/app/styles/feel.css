@@ -18,6 +18,13 @@
     /* Bounce 0.3, response 0.4 s: switch knobs and small badges only. */
     --spring-lively: linear(0, 0.0718, 0.2332, 0.4233, 0.6045, 0.7571, 0.8737, 0.9551, 1.0063, 1.0339, 1.0449, 1.0451, 1.0393, 1.0309, 1.0222, 1.0145, 1.0083, 1.0038, 1.0007, 0.999, 0.9981, 0.9979, 0.998, 0.9984, 0.9988);
     --spring-lively-dur: 640ms;
+
+    /* One radius scale. Nested shapes use the inner value so corners stay
+       concentric: a 14px row holding a button 5px in gets 9px. */
+    --r-inset: 9px;
+    --r-control: 10px;
+    --r-card: 14px;
+    --r-sheet: 20px;
 }
 
 /* ── Switches: the knob has mass. It stretches toward its travel while
