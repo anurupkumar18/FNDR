@@ -102,7 +102,7 @@ describe("AskPanel activity boundaries", () => {
         expect(document.body).not.toHaveTextContent("abc123");
     });
 
-    it("lets a newer question supersede an in-flight one and ignores the stale answer", async () => {
+    it("prevents overlapping submissions and ignores a reply after Stop waiting", async () => {
         const first = deferred<ComposedAnswer>();
         const second = deferred<ComposedAnswer>();
         vi.mocked(fndrAnswer)
@@ -111,6 +111,9 @@ describe("AskPanel activity boundaries", () => {
         render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
 
         ask("first question");
+        ask("second question");
+        expect(fndrAnswer).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
         ask("second question");
         await act(async () => {
             first.resolve(answer("stale answer"));

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AskPanel } from "./AskPanel";
 import { fndrAnswer, type ComposedAnswer, type MemoryCard } from "@/shared/ipc/tauri";
 
@@ -37,6 +37,79 @@ afterEach(() => {
 });
 
 describe("AskPanel", () => {
+    it("keeps both sides of successive exchanges and clears the composer", async () => {
+        vi.mocked(fndrAnswer)
+            .mockResolvedValueOnce(answer({ answer: "First grounded reply." }))
+            .mockResolvedValueOnce(answer({ answer: "Second grounded reply." }));
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        const input = screen.getByLabelText("Search or ask FNDR");
+        for (const [question, reply] of [["First question", "First grounded reply."], ["Second question", "Second grounded reply."]]) {
+            fireEvent.change(input, { target: { value: question } });
+            fireEvent.keyDown(input, { key: "Enter" });
+            expect(await screen.findByText(reply)).toBeInTheDocument();
+            expect(input).toHaveValue("");
+        }
+        expect(screen.getByText("First question")).toBeInTheDocument();
+        expect(screen.getByText("Second question")).toBeInTheDocument();
+        expect(screen.getByText("First grounded reply.")).toBeInTheDocument();
+        expect(screen.getByText("Each message searches local memories independently.")).toBeInTheDocument();
+    });
+
+    it("starts a new chat without accepting a late reply from the previous one", async () => {
+        let finish!: (value: ComposedAnswer) => void;
+        vi.mocked(fndrAnswer).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), { target: { value: "Old question" } });
+        fireEvent.click(screen.getByRole("button", { name: "Search & Ask" }));
+        fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+        await act(async () => { finish(answer({ answer: "Late reply" })); });
+        expect(screen.queryByText("Old question")).not.toBeInTheDocument();
+        expect(screen.queryByText("Late reply")).not.toBeInTheDocument();
+        expect(screen.getByLabelText("Search or ask FNDR")).toHaveFocus();
+    });
+
+    it("retries a failed turn in place without losing earlier exchanges", async () => {
+        vi.mocked(fndrAnswer)
+            .mockResolvedValueOnce(answer({ answer: "Keep this reply." }))
+            .mockRejectedValueOnce(new Error("private backend error"))
+            .mockResolvedValueOnce(answer({ answer: "Retried reply." }));
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        const input = screen.getByLabelText("Search or ask FNDR");
+        fireEvent.change(input, { target: { value: "First question" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByText("Keep this reply.");
+        fireEvent.change(input, { target: { value: "Failed question" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+        await screen.findByText("Retried reply.");
+        expect(screen.getAllByText("Failed question")).toHaveLength(1);
+        expect(screen.getByText("Keep this reply.")).toBeInTheDocument();
+        expect(screen.queryByText("private backend error")).not.toBeInTheDocument();
+    });
+
+    it("does not submit Shift+Enter or an IME composition Enter", () => {
+        render(<AskPanel isVisible onClose={() => {}} onOpenMemoryById={() => {}} />);
+        const input = screen.getByLabelText("Search or ask FNDR");
+        fireEvent.change(input, { target: { value: "Draft question" } });
+        fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+        fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+        expect(fndrAnswer).not.toHaveBeenCalled();
+    });
+
+    it("retains the thread when the panel is hidden and reopened", async () => {
+        vi.mocked(fndrAnswer).mockResolvedValue(answer({ answer: "Reply to keep." }));
+        const panel = (visible: boolean) => <AskPanel isVisible={visible} onClose={() => {}} onOpenMemoryById={() => {}} />;
+        const { rerender } = render(panel(true));
+        fireEvent.change(screen.getByLabelText("Search or ask FNDR"), { target: { value: "Question to keep" } });
+        fireEvent.keyDown(screen.getByLabelText("Search or ask FNDR"), { key: "Enter" });
+        await screen.findByText("Reply to keep.");
+        rerender(panel(false));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        rerender(panel(true));
+        expect(screen.getByText("Question to keep")).toBeInTheDocument();
+        expect(screen.getByText("Reply to keep.")).toBeInTheDocument();
+    });
+
     it("owns modal focus, closes on Escape, and restores the invoking control", async () => {
         const onClose = vi.fn();
         const panel = (visible: boolean) => (
