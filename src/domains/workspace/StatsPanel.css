@@ -275,18 +275,24 @@
     min-width: 0;
 }
 
+/* Title over its caption; side by side they squeezed "Top apps" onto two lines. */
+.stats-chart-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
 .stats-chart-head h4 {
     margin: 0;
     font-size: 0.95rem;
     color: var(--text-primary);
     font-weight: 600;
+    white-space: nowrap;
 }
 
 .stats-chart-head span {
-    font-size: 0.73rem;
+    font-size: 0.75rem;
     color: var(--text-muted);
-    letter-spacing: 0.02em;
-    text-align: right;
 }
 
 .stats-page-grid {

@@ -1279,3 +1279,16 @@
     color: var(--fg-2);
     font-size: 13px;
 }
+
+/* Privacy Activity reads as one 860px column of theme-coloured cards, like
+   the other panels, instead of black boxes stretched edge to edge. */
+.pipeline-panel--privacy .pipeline-body {
+    padding: 24px max(16px, calc((100% - 860px) / 2)) 40px;
+    gap: 16px;
+}
+
+.pipeline-panel--privacy .pipeline-panel-card {
+    border-color: var(--border);
+    background: var(--surface-translucent);
+    padding: 16px 18px;
+}

@@ -63,11 +63,7 @@
 }
 
 .cp-search-icon {
-    font-family: var(--font-body);
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-    letter-spacing: var(--film-track-stamp);
-    text-transform: uppercase;
+    display: inline-flex;
     color: var(--fg-3);
     flex-shrink: 0;
 }
@@ -332,12 +328,25 @@
 }
 
 .cp-item-icon {
-    font-size: 1rem;
     flex-shrink: 0;
-    width: 22px;
-    text-align: center;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
     color: var(--fg-2);
+    transition: background-color 150ms ease, color 150ms ease;
+}
+
+.cp-item.active .cp-item-icon {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--fg);
+}
+
+.cp-item.danger .cp-item-icon {
+    color: rgba(255, 140, 140, 0.85);
 }
 
 .cp-item-body {

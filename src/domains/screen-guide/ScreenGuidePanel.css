@@ -568,19 +568,13 @@
 .sg-bento .sg-diagnostics-card,
 .sg-bento .sg-privacy-note,
 .sg-bento .sg-bento-voice > section {
-    border-radius: 20px;
+    border-radius: var(--r-card, 16px);
     border-color: color-mix(in srgb, var(--border) 80%, transparent);
     background:
         linear-gradient(160deg, color-mix(in srgb, var(--text-primary) 5%, transparent), transparent 62%),
         color-mix(in srgb, var(--surface-elevated, #202020) 70%, transparent);
     box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent) inset;
     transition: border-color 220ms ease, transform 220ms ease;
-}
-
-.sg-bento .sg-settings-card:hover,
-.sg-bento .sg-ask-card:hover,
-.sg-bento .sg-bento-voice > section:hover {
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
 
 .sg-bento .sg-readiness {

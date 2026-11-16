@@ -11,7 +11,7 @@ import {
     pauseCapture,
     resumeCapture,
 } from "@/shared/ipc/tauri";
-import { Icon } from "@/shared/components/atoms";
+import { Icon, type IconName } from "@/shared/components/atoms";
 import "./CommandPalette.css";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -33,6 +33,29 @@ interface Command {
     globalOnly?: boolean;
     run: (ctx: CommandContext) => void | Promise<void>;
 }
+
+/** Same icons as the sidebar, so a destination looks the same in both. */
+const COMMAND_ICONS: Partial<Record<string, IconName>> = {
+    "go-home": "home",
+    "ask-fndr": "search",
+    wrapped: "calendar",
+    "hermes-agent": "bot",
+    "screen-guide": "pointer",
+    "memory-cards": "archive",
+    "knowledge-graph": "network",
+    "daily-outputs": "file-text",
+    "trust-settings": "shield",
+    stats: "bar-chart",
+    "engine-metrics": "cpu",
+    "privacy-proof": "eye-off",
+    todo: "check-square",
+    meetings: "mic",
+    "pause-capture": "eye-off",
+    "resume-capture": "monitor",
+    "open-url": "globe",
+    "find-similar": "sparkles",
+    "delete-memory": "trash",
+};
 
 interface CommandContext {
     selectedMemory: MemoryCard | null;
@@ -358,6 +381,14 @@ const COMMANDS: Command[] = [
 
 const CATEGORY_ORDER: CommandCategory[] = ["navigate", "smart", "memory", "capture", "destructive"];
 
+const CATEGORY_ICONS: Record<CommandCategory, IconName> = {
+    navigate: "home",
+    smart: "search",
+    memory: "sparkles",
+    capture: "monitor",
+    destructive: "trash",
+};
+
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
     navigate: "Go to",
     smart: "Smart actions",
@@ -583,7 +614,7 @@ export function CommandPalette({
             >
                 {/* Search bar */}
                 <div className="cp-search-row">
-                    <span className="cp-search-icon">⌘</span>
+                    <span className="cp-search-icon" aria-hidden="true"><Icon name="search" size={18} /></span>
                     <input
                         ref={inputRef}
                         className="cp-input"
@@ -664,6 +695,9 @@ export function CommandPalette({
                                                     transition={motionTokens.spring.soft}
                                                 />
                                             )}
+                                            <span className="cp-item-icon" aria-hidden="true">
+                                                <Icon name={COMMAND_ICONS[cmd.id] ?? CATEGORY_ICONS[cmd.category] ?? "zap"} size={16} />
+                                            </span>
                                             <span className="cp-item-body">
                                                 <span className="cp-item-label">{cmd.label}</span>
                                                 <span className="cp-item-desc">{cmd.description}</span>

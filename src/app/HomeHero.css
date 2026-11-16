@@ -93,7 +93,7 @@
     align-items: center;
     gap: 0;
     min-height: 60px;
-    border-radius: 18px;
+    border-radius: var(--r-card, 16px);
     padding: 0 8px 0 18px;
     background: var(--surface-elevated);
     border: 1px solid var(--border-strong);
