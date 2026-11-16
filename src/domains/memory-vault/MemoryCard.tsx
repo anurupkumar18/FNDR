@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import type { MemoryCard as MemoryCardData } from "@/shared/ipc/tauri";
-import { DossierCorners, Stamp, Pill, Button } from "@/shared/components/atoms";
+import { DossierCorners, Stamp, Button } from "@/shared/components/atoms";
 import { MemoryProvenanceStrip } from "./MemoryProvenanceStrip";
 import "./MemoryCard.css";
 
@@ -191,7 +191,7 @@ export function MemoryCard({
             role={variant === "preview" && onOpen ? "button" : undefined}
             tabIndex={variant === "preview" && onOpen ? 0 : undefined}
         >
-            <DossierCorners />
+            {variant !== "expanded" && <DossierCorners />}
 
             <header className="fndr-mc-strip">
                 <Stamp
@@ -208,6 +208,7 @@ export function MemoryCard({
                     </Stamp>
                 )}
                 <span className="fndr-mc-ts">
+                    {variant === "expanded" && !isAgentNote && card.app_name ? `${card.app_name} · ` : ""}
                     {dayLabel} · {timeLabel}
                 </span>
             </header>
@@ -216,7 +217,7 @@ export function MemoryCard({
 
             <h3 className="fndr-mc-title">{card.title}</h3>
 
-            {previewText && (
+            {previewText && !(variant === "expanded" && previewText.trim() === card.insight_what_happened?.trim()) && (
                 <p className="fndr-mc-preview">
                     {card.low_confidence && (
                         <span className="fndr-mc-low-confidence" aria-label="Low confidence">
@@ -225,6 +226,26 @@ export function MemoryCard({
                     )}{" "}
                     &ldquo;{previewText}&rdquo;
                 </p>
+            )}
+
+            {variant === "expanded" && !isAgentNote && onReopen && card.reopen_target && (
+                <div className="fndr-mc-reopen">
+                    <button
+                        type="button"
+                        className="fndr-mc-reopen-btn"
+                        onClick={() => onReopen(card)}
+                    >
+                        {reopenDestinationLabel(card)}
+                        <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M7 17 17 7M9 7h8v8" />
+                        </svg>
+                    </button>
+                    {reopenStatus ? (
+                        <p className="fndr-mc-reopen-status" role="status">
+                            {reopenStatus}
+                        </p>
+                    ) : null}
+                </div>
             )}
 
             <div className="fndr-mc-source">
@@ -245,27 +266,19 @@ export function MemoryCard({
                 <>
                     <MemoryProvenanceStrip card={card} />
 
-                    {(card.session_duration_mins ?? 0) > 0 ||
-                    card.timeline_action_class ||
-                    card.source_count > 1 ? (
-                        <div className="fndr-mc-meta-row">
-                            {card.source_count > 1 && (
-                                <Pill tone="muted" noDot>
-                                    {card.source_count} captures
-                                </Pill>
-                            )}
-                            {(card.session_duration_mins ?? 0) > 0 && (
-                                <Pill tone="muted" noDot>
-                                    {card.session_duration_mins}m
-                                </Pill>
-                            )}
-                            {card.timeline_action_class &&
-                                card.timeline_action_class !== "other" && (
-                                    <Pill tone="live" noDot>
-                                        {card.timeline_action_class}
-                                    </Pill>
-                                )}
-                        </div>
+                    {(card.session_duration_mins ?? 0) > 0 || card.source_count > 1 ? (
+                        <p className="fndr-mc-meta-row">
+                            {[
+                                card.source_count > 1 ? `${card.source_count} captures` : "",
+                                (card.session_duration_mins ?? 0) > 0
+                                    ? card.source_count > 1
+                                        ? `over ${card.session_duration_mins} min`
+                                        : `${card.session_duration_mins} min on screen`
+                                    : "",
+                            ]
+                                .filter(Boolean)
+                                .join(" ")}
+                        </p>
                     ) : null}
 
                     {insightsSlot && (
@@ -290,18 +303,7 @@ export function MemoryCard({
                                 See in graph
                             </Button>
                         )}
-                        {!isAgentNote && onReopen && card.reopen_target && (
-                            <div className="fndr-mc-reopen">
-                                <Button mono variant="secondary" onClick={() => onReopen(card)}>
-                                    {reopenButtonLabel(card)}
-                                </Button>
-                                {reopenStatus ? (
-                                    <p className="fndr-mc-reopen-status" role="status">
-                                        {reopenStatus}
-                                    </p>
-                                ) : null}
-                            </div>
-                        )}
+
                         {onResearch && (
                             <Button mono variant="ghost" onClick={() => onResearch(card)}>
                                 Research
@@ -518,39 +520,33 @@ function deriveThreads(card: MemoryCardData): string[] {
     return out.slice(0, 5);
 }
 
-export function reopenButtonLabel(card: MemoryCardData): string {
-    if (!card.reopen_page) {
-        return "Open source";
-    }
-    const target = (card.reopen_target ?? "").trim().toLowerCase();
-    const isHttp = target.startsWith("http://") || target.startsWith("https://");
-    if (isHttp) {
-        return "Open source";
-    }
-    return `Open source (page ${card.reopen_page})`;
+/** "Open in Figma", "Open page 112 in Preview": a source button says where it goes. */
+export function reopenDestinationLabel(card: MemoryCardData): string {
+    const app = card.app_name?.trim() || "source";
+    if (card.reopen_page) return `Open page ${card.reopen_page} in ${app}`;
+    return `Open in ${app}`;
 }
 
 function formatTime(timestamp: number): string {
     const d = new Date(timestamp);
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 function formatDay(timestamp: number): string {
     const d = new Date(timestamp);
     const now = new Date();
     // Compare calendar-day distance, not raw 24-hour buckets: a capture
-    // from yesterday at 23:00 should read "YESTERDAY", not "TODAY", even if
+    // from yesterday at 23:00 should read "Yesterday", not "Today", even if
     // it's less than 24 hours old.
     const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const dayDiff = Math.round((startOf(now) - startOf(d)) / (24 * 60 * 60 * 1000));
-    if (dayDiff === 0) return "TODAY";
-    if (dayDiff === 1) return "YESTERDAY";
-    if (dayDiff > 1 && dayDiff < 7) return `${dayDiff}D AGO`;
+    if (dayDiff === 0) return "Today";
+    if (dayDiff === 1) return "Yesterday";
+    if (dayDiff > 1 && dayDiff < 7) return `${dayDiff} days ago`;
     if (dayDiff >= 7 && dayDiff < 14) {
-        const wd = d.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase();
-        return `LAST ${wd}`;
+        return `Last ${d.toLocaleDateString(undefined, { weekday: "short" })}`;
     }
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }).toUpperCase();
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** Maps a surfacing-reason route to a single-letter glyph for the compact row.

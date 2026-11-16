@@ -60,7 +60,7 @@ export function StatusBar({ status }: StatusBarProps) {
                 )}
             </div>
             <div className="fndr-status-right">
-                <span className="fndr-status-local">LOCAL ONLY</span>
+                <span className="fndr-status-local">Local only</span>
             </div>
         </footer>
     );

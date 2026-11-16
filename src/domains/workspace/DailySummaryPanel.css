@@ -427,10 +427,8 @@
 .daily-followups-eyebrow {
     margin: 0 0 4px;
     color: var(--accent);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
 }
 
 .daily-followups-header h3 {
@@ -548,10 +546,8 @@
 .daily-followup-details dt {
     margin-bottom: 3px;
     color: var(--text-secondary);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
 }
 
 .daily-followup-details dd {

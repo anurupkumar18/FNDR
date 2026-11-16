@@ -1,5 +1,6 @@
 @import "../../shared/theme/film-paper.css";
 @import "../../shared/components/atoms/atoms.css";
+@import "./feel.css";
 
 /* =============================================================
    FNDR — global theme tokens (v2 handoff).
@@ -323,11 +324,6 @@ kbd {
     background: var(--surface-hover);
     border-color: var(--border-strong);
     box-shadow: 0 2px 6px var(--shadow-color);
-}
-
-.ui-action-btn:active:not(:disabled) {
-    transform: scale(0.97);
-    transition-duration: 0ms;
 }
 
 .ui-action-btn.active {

@@ -36,17 +36,17 @@ body,
     min-height: 58px;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 14px;
     padding: 14px 18px;
-    border: 1px solid rgba(116, 183, 255, 0.42);
+    border: 1px solid rgba(240, 123, 56, 0.42);
     border-radius: 14px;
-    color: #ecf6ff;
-    background: rgba(9, 17, 29, 0.88);
+    color: #fff5ea;
+    background: rgba(33, 24, 21, 0.92);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
     backdrop-filter: blur(18px) saturate(130%);
     transform: translateX(-50%);
-    animation: sg-overlay-enter 180ms ease-out both;
+    animation: sg-overlay-enter 560ms linear(0, 0.0697, 0.2211, 0.3947, 0.5578, 0.6951, 0.8024, 0.881, 0.9355, 0.971, 0.9924, 1.0042, 1.0096, 1.0111, 1.0105, 1.0088, 1.0069, 1.0051, 1.0035, 1.0023, 1.0014, 1.0008, 1.0004, 1.0001, 1) both;
 }
 
 .sg-overlay--error .sg-overlay-card {
@@ -67,21 +67,21 @@ body,
 }
 
 .sg-overlay-copy p {
-    color: #edf6ff;
+    color: #fff5ea;
     overflow-wrap: anywhere;
 }
 
 .sg-overlay-activity {
-    --hairline: rgba(116, 183, 255, 0.32);
-    --surface: rgba(8, 18, 31, 0.68);
-    --surface-hover: rgba(21, 42, 67, 0.82);
-    --fg: #ecf6ff;
-    --fg-2: #c9def0;
-    --fg-3: #a7bfd3;
-    --accent: #76baff;
+    --hairline: rgba(240, 123, 56, 0.32);
+    --surface: rgba(48, 34, 29, 0.7);
+    --surface-hover: rgba(66, 48, 41, 0.85);
+    --fg: #fff5ea;
+    --fg-2: #d9c0ad;
+    --fg-3: #b8a091;
+    --accent: #f07b38;
     --accent-2: #7ed6b2;
     --alarm: #ff8585;
-    --focus-ring: rgba(118, 186, 255, 0.6);
+    --focus-ring: rgba(240, 123, 56, 0.6);
     --film-radius-pill: 999px;
     margin: 0 0 7px;
 }
@@ -102,7 +102,7 @@ body,
 
 .sg-overlay-detail {
     display: block;
-    color: rgba(215, 234, 250, 0.72);
+    color: rgba(255, 236, 220, 0.72);
     font-size: 0.68rem;
     line-height: 1.35;
 }
@@ -110,10 +110,9 @@ body,
 .sg-overlay-eyebrow {
     display: block;
     margin-bottom: 5px;
-    color: #76baff;
-    font-size: 0.62rem;
-    font-weight: 750;
-    letter-spacing: 0.05em;
+    color: #f07b38;
+    font-size: 12px;
+    font-weight: 650;
 }
 
 .sg-overlay-wave {
@@ -128,7 +127,7 @@ body,
     width: 3px;
     height: 9px;
     border-radius: 4px;
-    background: #66afff;
+    background: #f07b38;
     animation: sg-wave 650ms ease-in-out infinite alternate;
 }
 
@@ -140,8 +139,8 @@ body,
     width: 18px;
     height: 18px;
     flex: 0 0 auto;
-    border: 2px solid rgba(111, 181, 255, 0.25);
-    border-top-color: #70b7ff;
+    border: 2px solid rgba(240, 123, 56, 0.25);
+    border-top-color: #f07b38;
     border-radius: 50%;
     animation: sg-spin 700ms linear infinite;
 }
@@ -165,7 +164,7 @@ body,
     height: 0;
     border-top: 9px solid transparent;
     border-bottom: 9px solid transparent;
-    border-left: 16px solid #48a7ff;
+    border-left: 16px solid #e65100;
     transform: rotate(42deg);
 }
 
@@ -175,10 +174,10 @@ body,
     left: 22px;
     max-width: min(220px, calc(100vw - 24px));
     padding: 5px 8px;
-    border: 1px solid rgba(121, 190, 255, 0.45);
+    border: 1px solid rgba(240, 123, 56, 0.45);
     border-radius: 7px;
-    color: #eff8ff;
-    background: rgba(10, 25, 45, 0.9);
+    color: #fff5ea;
+    background: rgba(33, 24, 21, 0.92);
     font-size: 0.68rem;
     font-weight: 650;
     white-space: nowrap;

@@ -1,19 +1,23 @@
+/* A quiet status strip: it reports what just happened without competing
+   with the panel's content. Finished traces recede further. */
 .activity-trace {
     width: 100%;
+    /* In a scrolling flex column the strip collapsed to its 2px border. */
+    flex-shrink: 0;
     border: 1px solid var(--hairline);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--fg) 3%, transparent);
     color: var(--fg);
     overflow: hidden;
 }
 
 .activity-trace-summary {
-    min-height: 48px;
+    min-height: 40px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    padding: 8px 10px 8px 12px;
+    padding: 5px 6px 5px 12px;
 }
 
 .activity-trace--summary-only .activity-trace-summary {
@@ -30,8 +34,8 @@
 
 .activity-trace-pulse,
 .activity-trace-step-marker {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
     border-radius: 999px;
     background: var(--accent);
     flex: 0 0 auto;
@@ -62,8 +66,20 @@
 
 .activity-trace-current {
     overflow-wrap: anywhere;
-    font-size: 13px;
-    font-weight: 650;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.activity-trace[data-status="completed"] .activity-trace-current {
+    color: var(--fg-2);
+    font-weight: 500;
+}
+
+.activity-trace-summary-copy {
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    column-gap: 8px;
 }
 
 .activity-trace-owner,
@@ -83,8 +99,8 @@
 
 .activity-trace-toggle {
     min-width: 58px;
-    min-height: 32px;
-    border: 1px solid var(--hairline);
+    min-height: 28px;
+    border: 1px solid transparent;
     border-radius: var(--film-radius-pill);
     background: transparent;
     color: var(--fg-2);
@@ -146,10 +162,8 @@
 
 .activity-trace-step-state {
     color: var(--fg-2);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
 }
 
 .activity-trace-step time {

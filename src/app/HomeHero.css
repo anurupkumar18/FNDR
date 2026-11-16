@@ -44,8 +44,6 @@
     font-family: var(--film-font-ui);
     font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--text-secondary);
     margin: 0 0 var(--s-3);
     animation: heroIn 0.55s var(--film-ease-shutter) 0.05s both;
@@ -95,7 +93,7 @@
     align-items: center;
     gap: 0;
     min-height: 60px;
-    border-radius: 18px;
+    border-radius: var(--r-card, 16px);
     padding: 0 8px 0 18px;
     background: var(--surface-elevated);
     border: 1px solid var(--border-strong);
@@ -186,12 +184,6 @@
 .home-hero__voice-btn.is-recording {
     background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
     color: var(--cp-accent, var(--accent));
-}
-
-.home-hero__voice-btn:active:not(:disabled),
-.home-hero__search-submit:active:not(:disabled) {
-    transform: scale(0.95);
-    transition-duration: 0ms;
 }
 
 .home-hero__voice-btn:disabled {

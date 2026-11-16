@@ -20,7 +20,7 @@ import { InsightLayers } from "./InsightLayers";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import { GRAPH_SIM_MAX_TICKS, useGraph } from "./useGraph";
 import { ExpandedMemoryCard } from "./ExpandedMemoryCard";
-import { VaultDayList } from "./VaultDayList";
+import { VaultDayList, type VaultReopenPhase } from "./VaultDayList";
 import { groupVaultMemories } from "./vaultGrouping";
 import { matchesPerspective, type Perspective } from "./perspectiveFilter";
 import { KnowledgeGraph3D, GraphErrorBoundary } from "@/features/graph/components";
@@ -172,6 +172,32 @@ export function MemoryCardsPanel({
     /** Currently-expanded card id (one modal at a time). */
     const [openExpandedId, setOpenExpandedId] = useState<string | null>(null);
     const [reopenStatusById, setReopenStatusById] = useState<Record<string, string>>({});
+    const [reopenPhaseById, setReopenPhaseById] = useState<Record<string, VaultReopenPhase>>({});
+    const [reopenNoteById, setReopenNoteById] = useState<Record<string, string>>({});
+    const reopenTimersRef = useRef<Map<string, number>>(new Map());
+
+    useEffect(() => {
+        const timers = reopenTimersRef.current;
+        return () => timers.forEach((timer) => window.clearTimeout(timer));
+    }, []);
+
+    const setReopenPhase = (memoryId: string, phase: VaultReopenPhase | null) => {
+        setReopenPhaseById((previous) => {
+            const next = { ...previous };
+            if (phase) next[memoryId] = phase;
+            else delete next[memoryId];
+            return next;
+        });
+    };
+
+    const setReopenNote = (memoryId: string, note: string | null) => {
+        setReopenNoteById((previous) => {
+            const next = { ...previous };
+            if (note) next[memoryId] = note;
+            else delete next[memoryId];
+            return next;
+        });
+    };
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     useModalFocus(isVisible, dialogRef, closeButtonRef, onClose);
@@ -418,15 +444,29 @@ export function MemoryCardsPanel({
     };
 
     const handleReopen = async (memoryId: string) => {
+        const pending = reopenTimersRef.current.get(memoryId);
+        if (pending) window.clearTimeout(pending);
+        setReopenNote(memoryId, null);
+        setReopenPhase(memoryId, "opening");
         try {
             const outcome = await reopenMemory(memoryId);
-            void recordOnboardingFunnelEvent(
-                outcome.kind === "opened" || outcome.kind === "opened_moved" ? "reopen_succeeded" : "reopen_failed",
-            ).catch(() => undefined);
-            setReopenStatusById((previous) => ({
-                ...previous,
-                [memoryId]: reopenOutcomeMessage(outcome),
-            }));
+            const opened = outcome.kind === "opened" || outcome.kind === "opened_moved";
+            void recordOnboardingFunnelEvent(opened ? "reopen_succeeded" : "reopen_failed").catch(() => undefined);
+            const message = reopenOutcomeMessage(outcome);
+            setReopenStatusById((previous) => ({ ...previous, [memoryId]: message }));
+            if (opened) {
+                // A plain "Opened." says nothing the button cannot; a moved file
+                // is worth a line.
+                if (outcome.kind === "opened_moved") setReopenNote(memoryId, message);
+                setReopenPhase(memoryId, "opened");
+                reopenTimersRef.current.set(
+                    memoryId,
+                    window.setTimeout(() => setReopenPhase(memoryId, null), 2200),
+                );
+            } else {
+                setReopenPhase(memoryId, null);
+                setReopenNote(memoryId, message);
+            }
         } catch (err) {
             void recordOnboardingFunnelEvent("reopen_failed").catch(() => undefined);
             const message = err instanceof Error ? err.message : String(err);
@@ -434,6 +474,8 @@ export function MemoryCardsPanel({
                 ...previous,
                 [memoryId]: `Could not open: ${message}`,
             }));
+            setReopenPhase(memoryId, null);
+            setReopenNote(memoryId, `Could not open: ${message}`);
         }
     };
 
@@ -598,7 +640,7 @@ export function MemoryCardsPanel({
                 titleId="memory-cards-title"
                 subtitle={isGraphFeature
                     ? "Hierarchical memory graph with project, session, memory, and entity links."
-                    : "Browse moments FNDR saved from your activity. Filter by app, time, or activity, then open a memory for its details."}
+                    : "What FNDR saved from your work. Open a memory for its details, or jump straight back to its source."}
                 closeLabel={`Close ${isGraphFeature ? "Knowledge Graph" : "Memory Vault"}`}
                 closeRef={closeButtonRef}
                 onClose={onClose}
@@ -861,6 +903,8 @@ export function MemoryCardsPanel({
                             focusMemoryId={focusMemoryId}
                             onOpen={(c) => setOpenExpandedId(c.id)}
                             onReopen={(c) => void handleReopen(c.id)}
+                            reopenPhaseById={reopenPhaseById}
+                            reopenNoteById={reopenNoteById}
                         />
                         {filteredCards.length > renderedCardLimit && (
                             <button

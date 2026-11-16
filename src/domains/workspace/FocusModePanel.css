@@ -107,8 +107,6 @@
 .fm-status-label {
     font-size: 0.72rem;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     font-weight: 600;
 }
 

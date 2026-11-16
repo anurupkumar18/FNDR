@@ -22,7 +22,15 @@ export type IconName =
     | "hard-drive"
     | "zap"
     | "network"
-    | "calendar";
+    | "calendar"
+    | "home"
+    | "archive"
+    | "bar-chart"
+    | "check-square"
+    | "file-text"
+    | "bot"
+    | "command"
+    | "pointer";
 
 const PATHS: Record<IconName, ReactNode> = {
     search: (
@@ -173,6 +181,43 @@ const PATHS: Record<IconName, ReactNode> = {
         <>
             <rect width="18" height="18" x="3" y="4" rx="2" />
             <path d="M16 2v4M8 2v4M3 10h18" />
+        </>
+    ),
+    home: (
+        <>
+            <path d="M3 10.5 12 3l9 7.5" />
+            <path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5" />
+        </>
+    ),
+    archive: (
+        <>
+            <rect width="20" height="5" x="2" y="3" rx="1" />
+            <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" />
+        </>
+    ),
+    "bar-chart": <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />,
+    "check-square": (
+        <>
+            <path d="m9 11 3 3L22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </>
+    ),
+    "file-text": (
+        <>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6M8 13h8M8 17h6" />
+        </>
+    ),
+    bot: (
+        <>
+            <rect width="16" height="12" x="4" y="8" rx="3" />
+            <path d="M12 8V4M9 13v1M15 13v1M2 14h2M20 14h2" />
+        </>
+    ),
+    command: <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />,
+    pointer: (
+        <>
+            <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
         </>
     ),
 };

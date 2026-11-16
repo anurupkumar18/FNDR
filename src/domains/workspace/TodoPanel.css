@@ -76,10 +76,8 @@
 
 .todo-briefing-label {
     margin: 0;
-    font-size: 0.7rem;
+    font-size: 12px;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .todo-briefing-text {
@@ -282,9 +280,7 @@
     margin-bottom: 6px;
     border-radius: var(--film-radius-pill);
     padding: 2px 8px;
-    font-size: 0.67rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: 12px;
     border: 1px solid var(--border);
     color: var(--text-secondary);
 }
@@ -317,5 +313,190 @@
 
     .todo-row-actions {
         justify-content: flex-end;
+    }
+}
+
+/* ── Layout pass ────────────────────────────────────────────────────────
+   One readable column (760px) instead of edge-to-edge strips; the new-task
+   form is a single composer; each task leads with a check. */
+.todo-page :is(.todo-briefing-row, .todo-create-row, .todo-page-body, .todo-action-notice) {
+    padding-inline: max(16px, calc((100% - 760px) / 2));
+    border-bottom: 0;
+}
+
+.todo-page .todo-briefing-row {
+    padding-top: 24px;
+    padding-bottom: 4px;
+    gap: 14px;
+}
+
+.todo-page .todo-briefing-summary {
+    border: 0;
+    background: transparent;
+    padding: 0;
+}
+
+.todo-page .todo-briefing-label {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.todo-page .todo-briefing-text {
+    margin-top: 4px;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+/* Title, type and Add on one line, sharing one field colour. */
+.todo-page .todo-create-row {
+    --todo-composer-bg: color-mix(in srgb, var(--fg) 6%, transparent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 16px;
+    padding-bottom: 8px;
+}
+
+.todo-page .todo-create-field:first-child {
+    flex: 1;
+}
+
+.todo-page .todo-create-row input,
+.todo-page .todo-type-select-wrap select {
+    min-height: 42px;
+    height: 42px;
+    border: 1px solid transparent;
+    background: var(--todo-composer-bg);
+    font-size: 14px;
+}
+
+.todo-page .todo-create-row input:focus-visible,
+.todo-page .todo-type-select-wrap select:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.todo-page .todo-type-select-wrap {
+    width: 140px;
+}
+
+.todo-page .todo-add-btn {
+    min-height: 42px;
+    min-width: 72px;
+    border: 0;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+}
+
+.todo-page .todo-add-btn:disabled {
+    background: var(--todo-composer-bg);
+    color: var(--text-muted);
+}
+
+.todo-page .todo-page-body {
+    padding-top: 8px;
+    padding-bottom: 32px;
+}
+
+/* Rows: check, then the task, then a quiet Edit that shows on hover. */
+.todo-page .todo-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 12px 12px 10px;
+    border: 0;
+    background: transparent;
+    transition: background-color 150ms ease;
+}
+
+.todo-page .todo-row:hover,
+.todo-page .todo-row.is-editing {
+    background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+.todo-page .todo-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.todo-page .todo-row h4 {
+    font-size: 14.5px;
+    font-weight: 600;
+}
+
+.todo-check {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    padding: 0;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 50%;
+    background: transparent;
+    color: transparent;
+    cursor: pointer;
+    transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.todo-check:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.todo-check[aria-busy="true"] {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+}
+
+.todo-check:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.todo-page .todo-row-actions {
+    align-self: center;
+    opacity: 0;
+    transition: opacity 140ms ease;
+}
+
+.todo-page .todo-row:hover .todo-row-actions,
+.todo-page .todo-row:focus-within .todo-row-actions,
+.todo-page .todo-row--suggested .todo-row-actions {
+    opacity: 1;
+}
+
+.todo-row-ghost {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-control, 10px);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.todo-row-ghost:hover {
+    background: color-mix(in srgb, var(--fg) 8%, transparent);
+    color: var(--text-primary);
+}
+
+.todo-page .todo-row--suggested {
+    border: 1px dashed var(--border);
+    padding-left: 14px;
+}
+
+@media (hover: none) {
+    .todo-page .todo-row-actions {
+        opacity: 1;
     }
 }

@@ -21,11 +21,11 @@ interface StatsPanelProps {
 type CardId = "metrics" | "insights" | "ranks" | "composition" | "rhythms";
 const ALL_CARDS: CardId[] = ["metrics", "insights", "ranks", "composition", "rhythms"];
 const CARD_LABELS: Record<CardId, string> = {
-    metrics: "Live Pulse Board",
-    insights: "Intelligence Brief",
+    metrics: "Live pulse",
+    insights: "What stands out",
     ranks: "Activity Rankings",
-    composition: "Daypart Distribution",
-    rhythms: "Capture Timeline",
+    composition: "Time of day",
+    rhythms: "Capture timeline",
 };
 
 interface HourEntry {
@@ -370,7 +370,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
         if (id === "metrics") {
             return (
                 <div className="stats-card-scroller">
-                    <h3>Live Pulse Board</h3>
+                    <h3>Live pulse</h3>
                     <div className="stats-page-grid">
                         {quickStats.map((item) => (
                             <div key={item.label} className="stats-page-card stats-data-card">
@@ -428,7 +428,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
         if (id === "insights") {
             return (
                 <div className="stats-card-scroller">
-                    <h3>Intelligence Brief</h3>
+                    <h3>What stands out</h3>
                     <div className="stats-intel-strip">
                         {narrativeLines.map((line, index) => (
                             <p key={line}>
@@ -439,7 +439,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                     </div>
                     <div className="stats-wave-panel">
                         <div className="stats-chart-head">
-                            <h4>Daily Rhythm Wave</h4>
+                            <h4>Daily rhythm</h4>
                             <span>Capture cadence by hour</span>
                         </div>
                         <svg viewBox={`0 0 ${sparkline.width} ${sparkline.height}`} className="stats-wave-svg" role="img" aria-label="Daily rhythm wave">
@@ -456,7 +456,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                 <div className="stats-card-scroller stats-two-column">
                     <div>
                         <div className="stats-chart-head">
-                            <h4>Top Apps</h4>
+                            <h4>Top apps</h4>
                             <span>Where your time was captured</span>
                         </div>
                         <div className="stats-page-rank-list">
@@ -480,7 +480,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
                     </div>
                     <div>
                         <div className="stats-chart-head">
-                            <h4>Top Domains</h4>
+                            <h4>Top sites</h4>
                             <span>Most captured web neighborhoods</span>
                         </div>
                         <div className="stats-page-rank-list">
@@ -510,16 +510,16 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
             const daypartTotal = daypartSlices.reduce((sum, slice) => sum + slice.value, 0);
             return (
                 <div className="stats-card-scroller stats-composition-grid">
-                    {renderDonut("Daypart Distribution", "When your captures cluster during the day", daypartSlices, daypartTotal)}
+                    {renderDonut("Time of day", "When your captures cluster during the day", daypartSlices, daypartTotal)}
                 </div>
             );
         }
 
         return (
             <div className="stats-card-scroller">
-                <h3>Capture Timeline</h3>
+                <h3>Capture timeline</h3>
                 <div className="stats-chart-head">
-                    <h4>Hourly Distribution</h4>
+                    <h4>By hour</h4>
                     <span>Integrated into your timeline, right up top</span>
                 </div>
                 <div className="stats-hourly-racks" aria-label="Hourly capture distribution bars">
@@ -562,7 +562,7 @@ export function StatsPanel({ isVisible, onClose }: StatsPanelProps) {
 
                 <div className="stats-weekday-bars">
                     <div className="stats-chart-head">
-                        <h4>Weekday Momentum</h4>
+                        <h4>By weekday</h4>
                         <span>Workweek capture bar graph</span>
                     </div>
                     {weekdaySorted.map((entry) => {

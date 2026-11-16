@@ -57,14 +57,10 @@ function salutationFor(name: string, now: Date, greeting?: string): string {
 }
 
 function formatHeroDate(now: Date): string {
-    const weekday = now
-        .toLocaleDateString("en-US", { weekday: "long" })
-        .toUpperCase();
-    const month = now
-        .toLocaleDateString("en-US", { month: "long" })
-        .toUpperCase();
+    const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
+    const month = now.toLocaleDateString("en-US", { month: "long" });
     const day = now.toLocaleDateString("en-US", { day: "numeric" });
-    return `${weekday} • ${month} ${day}`;
+    return `${weekday}, ${month} ${day}`;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

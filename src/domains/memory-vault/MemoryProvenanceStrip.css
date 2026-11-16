@@ -1,12 +1,13 @@
 /* MemoryProvenanceStrip — mono caps key/value grid used inside the
    expanded MemoryCard variant. */
 
+/* A plain key/value list: sentence-case keys on the left, values beside. */
 .fndr-mc-provenance {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px 24px;
-    margin: 18px 0 18px;
-    padding: 14px 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    margin: 16px 0;
+    padding: 14px 0;
     border-top: 1px solid var(--hairline);
     border-bottom: 1px solid var(--hairline);
     font-family: var(--font-body);
@@ -14,17 +15,20 @@
 }
 
 .fndr-mc-provenance > div {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
 }
 
 .fndr-mc-provenance dt {
-    font-size: 9px;
-    letter-spacing: var(--film-track-stamp);
-    text-transform: uppercase;
-    color: var(--fg-4);
+    font-size: 13px;
+    color: var(--text-muted);
     margin: 0;
+}
+
+.fndr-mc-provenance dt::first-letter {
+    text-transform: uppercase;
 }
 
 .fndr-mc-provenance dd {
@@ -34,4 +38,13 @@
     color: var(--fg);
     line-height: 1.3;
     word-break: break-word;
+}
+
+/* The status value arrives in capitals ("DEVELOPED"); read it as a word. */
+.fndr-mc-provenance > div:last-child dd {
+    text-transform: lowercase;
+}
+
+.fndr-mc-provenance > div:last-child dd::first-letter {
+    text-transform: uppercase;
 }

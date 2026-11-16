@@ -47,10 +47,8 @@
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
     font-weight: 600;
-    font-size: 9px;
-    letter-spacing: 0.05em;
+    font-size: 12px;
     line-height: 1;
-    text-transform: uppercase;
     padding: 5px 9px;
     border: 1px solid var(--alarm);
     color: var(--alarm);
@@ -78,10 +76,8 @@
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
     font-weight: 500;
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     padding: 6px 11px;
     border-radius: var(--film-radius-pill);
     border: 1px solid var(--hairline-strong);
@@ -157,7 +153,6 @@
     outline-offset: 2px;
 }
 .fndr-button:active {
-    transform: scale(0.985);
     opacity: 0.92;
 }
 .fndr-button--primary {
@@ -199,9 +194,7 @@
 .fndr-button--mono {
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
-    font-size: 10px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
+    font-size: 12px;
     padding: 8px 14px;
 }
 

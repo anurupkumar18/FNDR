@@ -58,7 +58,9 @@
 .wrapped-selection-header h2,
 .wrapped-results-title h2 {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 
 .wrapped-selection-header p {
@@ -67,7 +69,6 @@
     font-size: 0.82rem;
 }
 
-.wrapped-close-btn,
 .wrapped-change-week-btn,
 .wrapped-refresh-btn,
 .wrapped-export-btn {
@@ -76,10 +77,9 @@
     font-size: 0.76rem;
 }
 
+/* The round close shared with every other panel (PanelHeader.css). */
 .wrapped-close-btn {
-    width: 44px;
-    padding: 0;
-    font-size: 1.35rem;
+    flex-shrink: 0;
 }
 
 .wrapped-week-selector {
@@ -87,22 +87,18 @@
     box-sizing: border-box;
     margin: clamp(48px, 9vh, 100px) auto 48px;
     padding: clamp(24px, 5vw, 38px);
-    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-    border-radius: var(--film-radius-lg);
-    background:
-        radial-gradient(circle at top right, color-mix(in srgb, var(--accent-light) 52%, transparent), transparent 45%),
-        var(--surface-translucent);
+    border: 1px solid var(--border);
+    border-radius: var(--r-card, 16px);
+    background: var(--surface-translucent);
     text-align: center;
 }
 
 .wrapped-eyebrow,
 .wrapped-card-label {
-    color: var(--accent);
+    color: var(--text-primary);
     font-family: var(--font-body);
-    font-variant-numeric: tabular-nums;
-    font-size: 0.74rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
+    font-size: 15px;
+    font-weight: 650;
 }
 
 .wrapped-week-selector h3 {
@@ -237,12 +233,15 @@
     min-width: 0;
 }
 
+/* "FNDR Review" is the page title, like every other panel; the period it
+   covers reads as the subtitle. */
 .wrapped-results-title > strong {
     display: block;
     margin-top: 4px;
     font-family: var(--font-display, inherit);
-    font-size: 1.15rem;
+    font-size: 15px;
     font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .wrapped-results-title > div {
@@ -284,16 +283,16 @@
     animation: wrapped-fade-in 260ms ease both;
 }
 
+/* The period's one-line story reads as a headline, not another card. */
 .wrapped-hero {
-    padding: 25px;
-    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
-    border-radius: var(--film-radius-lg);
-    background: var(--surface-translucent);
+    padding: 12px 4px 8px;
+    border: 0;
+    background: transparent;
 }
 
 .wrapped-hero h3 {
     max-width: 760px;
-    margin: 10px 0 0;
+    margin: 0;
     font-family: var(--font-display, inherit);
     font-size: clamp(1.4rem, 3.2vw, 2.15rem);
     font-weight: 500;
@@ -389,7 +388,7 @@
 }
 
 .wrapped-rank-time {
-    color: var(--accent);
+    color: var(--text-secondary);
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
     font-size: 0.72rem;

@@ -1,4 +1,6 @@
 .sg-panel-page {
+    /* Screen Guide speaks in the app's accent, like every other page. */
+    --info: var(--accent);
     position: fixed;
     inset: 0;
     z-index: 1040;
@@ -318,12 +320,11 @@
 
 .sg-hold-button:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--info) 65%, transparent);
-    background: rgba(40, 112, 202, 0.17);
+    background: color-mix(in srgb, var(--info) 17%, transparent);
 }
 
 .sg-hold-button.is-holding {
-    transform: scale(0.99);
-    background: rgba(40, 112, 202, 0.28);
+    background: color-mix(in srgb, var(--info) 28%, transparent);
 }
 
 .sg-hold-button:disabled,
@@ -567,19 +568,13 @@
 .sg-bento .sg-diagnostics-card,
 .sg-bento .sg-privacy-note,
 .sg-bento .sg-bento-voice > section {
-    border-radius: 20px;
+    border-radius: var(--r-card, 16px);
     border-color: color-mix(in srgb, var(--border) 80%, transparent);
     background:
         linear-gradient(160deg, color-mix(in srgb, var(--text-primary) 5%, transparent), transparent 62%),
         color-mix(in srgb, var(--surface-elevated, #202020) 70%, transparent);
     box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent) inset;
     transition: border-color 220ms ease, transform 220ms ease;
-}
-
-.sg-bento .sg-settings-card:hover,
-.sg-bento .sg-ask-card:hover,
-.sg-bento .sg-bento-voice > section:hover {
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
 
 .sg-bento .sg-readiness {
@@ -589,10 +584,8 @@
 .sg-tile-title {
     margin: 4px 4px -6px;
     color: var(--text-muted);
-    font-size: 0.68rem;
+    font-size: 12px;
     font-weight: 650;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
 }
 
 .sg-bento .sg-setting-row {
@@ -708,4 +701,182 @@
         opacity: 1;
         transform: none;
     }
+}
+
+/* ── Focused layout ─────────────────────────────────────────────────────
+   One column: is it on, ask, then everything else folded into four groups
+   that open only when someone wants them. */
+.sg-focused {
+    width: min(640px, calc(100% - 32px));
+    padding-top: 28px;
+}
+
+.sg-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.sg-focused .sg-readiness {
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: var(--r-card, 16px);
+}
+
+.sg-focused .sg-readiness.is-ready {
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.sg-readiness-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.sg-focused .sg-readiness strong {
+    font-size: 15px;
+    font-weight: 650;
+}
+
+.sg-focused .sg-readiness span {
+    font-size: 13px;
+}
+
+.sg-readiness-toggle {
+    display: inline-flex;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+/* Asking is the job, so the ask card leads and reads larger. */
+.sg-focused .sg-ask-card {
+    gap: 12px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-card, 16px);
+    background: var(--surface-translucent);
+}
+
+.sg-focused .sg-ask-card > label {
+    font-size: 17px;
+    font-weight: 650;
+}
+
+.sg-focused .sg-ask-hint {
+    font-size: 13px;
+}
+
+.sg-focused .sg-question-row input {
+    min-height: 44px;
+    font-size: 15px;
+}
+
+.sg-focused .sg-hold-button {
+    min-height: 46px;
+    font-size: 14px;
+}
+
+/* Collapsed groups: a title and one line saying what is inside. */
+.sg-group {
+    border: 1px solid var(--border);
+    border-radius: var(--r-card, 16px);
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
+}
+
+.sg-group > summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title chevron" "hint chevron";
+    column-gap: 12px;
+    row-gap: 2px;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: var(--r-card, 16px);
+    list-style: none;
+    cursor: pointer;
+    transition: background-color 150ms ease;
+}
+
+.sg-group > summary::-webkit-details-marker {
+    display: none;
+}
+
+.sg-group > summary::after {
+    content: "";
+    grid-area: chevron;
+    width: 9px;
+    height: 9px;
+    border-right: 2px solid var(--text-muted);
+    border-bottom: 2px solid var(--text-muted);
+    transform: rotate(-45deg);
+    transition: transform var(--spring-soft-dur, 300ms) var(--spring-soft, ease);
+}
+
+.sg-group[open] > summary::after {
+    transform: rotate(45deg);
+}
+
+.sg-group > summary:hover {
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.sg-group > summary:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.sg-group-title {
+    grid-area: title;
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.sg-group-hint {
+    grid-area: hint;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.sg-group > :not(summary) {
+    margin: 0 16px 16px;
+}
+
+.sg-group .sg-settings-card,
+.sg-group .sg-diagnostics-card,
+.sg-group .sg-bento-voice > section {
+    border: 0;
+    background: transparent;
+    padding: 0;
+}
+
+.sg-group .sg-setting-row {
+    padding: 12px 0;
+    border-top: 1px solid var(--hairline);
+}
+
+.sg-focused .sg-privacy-note {
+    margin-top: 4px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.sg-focused .sg-privacy-note strong {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.sg-group .sg-shortcut-row {
+    padding: 12px 0;
+}
+
+/* Inside the Labs group the per-row Labs tag says nothing new. */
+.sg-group .sg-labs-tag {
+    display: none;
 }

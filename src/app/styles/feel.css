@@ -1,0 +1,224 @@
+/* =============================================================
+   FNDR feel layer: one physics for every surface.
+
+   Springs are sampled into CSS `linear()` so CSS-driven state changes
+   (switches, tab thumbs, hover lifts) settle like the Framer springs in
+   src/shared/motion/motionTokens.ts. Press feedback for every button lives
+   in src/shared/motion/pressFeedback.ts and animates `scale`, so these
+   rules use `transform`/`translate` freely without fighting it.
+   ============================================================= */
+
+:root {
+    /* Bounce 0, response 0.3 s: settles without overshoot. */
+    --spring-snap: linear(0, 0.0667, 0.2048, 0.3577, 0.4991, 0.6189, 0.7154, 0.7905, 0.8475, 0.89, 0.9213, 0.9441, 0.9605, 0.9722, 0.9805, 0.9864, 0.9905, 0.9934, 0.9955, 0.9969, 0.9978, 0.9985, 0.999, 0.9993, 0.9995);
+    --spring-snap-dur: 480ms;
+    /* Bounce 0.18, response 0.35 s: selections that travel, press release. */
+    --spring-soft: linear(0, 0.0697, 0.2211, 0.3947, 0.5578, 0.6951, 0.8024, 0.881, 0.9355, 0.971, 0.9924, 1.0042, 1.0096, 1.0111, 1.0105, 1.0088, 1.0069, 1.0051, 1.0035, 1.0023, 1.0014, 1.0008, 1.0004, 1.0001, 1);
+    --spring-soft-dur: 560ms;
+    /* Bounce 0.3, response 0.4 s: switch knobs and small badges only. */
+    --spring-lively: linear(0, 0.0718, 0.2332, 0.4233, 0.6045, 0.7571, 0.8737, 0.9551, 1.0063, 1.0339, 1.0449, 1.0451, 1.0393, 1.0309, 1.0222, 1.0145, 1.0083, 1.0038, 1.0007, 0.999, 0.9981, 0.9979, 0.998, 0.9984, 0.9988);
+    --spring-lively-dur: 640ms;
+
+    /* One radius scale. Controls (buttons, fields, rows inside a card) are
+       10px, cards 16px, sheets and dialogs 20px. Pills (999px) are reserved
+       for chips, tags and segmented tracks. */
+    --r-inset: 10px;
+    --r-control: 10px;
+    --r-card: 16px;
+    --r-sheet: 20px;
+}
+
+/* ── Switches: the knob has mass. It stretches toward its travel while
+   held and lands with a small overshoot; the track cross-fades. ───── */
+.fndr-switch::after {
+    transition:
+        transform var(--spring-lively-dur) var(--spring-lively),
+        width 200ms var(--film-ease-shutter);
+}
+
+.settings-switch {
+    transition:
+        background-color 220ms var(--film-ease-shutter),
+        border-color 220ms var(--film-ease-shutter);
+}
+
+.settings-switch::before {
+    transition:
+        transform var(--spring-lively-dur) var(--spring-lively),
+        width 200ms var(--film-ease-shutter),
+        background-color 220ms var(--film-ease-shutter);
+}
+
+.settings-switch:not(:disabled):active::before {
+    width: 22px;
+}
+
+.settings-switch:checked:not(:disabled):active::before {
+    transform: translateX(12px);
+}
+
+/* ── The settings sheet follows a horizontal drag (EdgeSheet). Vertical
+   scrolling inside it stays native. ─────────────────────────────── */
+.settings-panel {
+    transition: none;
+    touch-action: pan-y;
+}
+
+/* ── Hover lift: rows and cards rise a pixel and gain a shadow, only on
+   devices that can hover. `translate` composes with the press `scale`. ── */
+@media (hover: hover) {
+    :root .fndr-mc[role="button"],
+    :root .work-set-open,
+    :root .vault-row-link {
+        transition-property: translate, box-shadow, border-color, background-color, color;
+        transition-duration: var(--spring-soft-dur), 200ms, 200ms, 150ms, 150ms;
+        transition-timing-function: var(--spring-soft), ease, ease, ease, ease;
+    }
+
+    :root .fndr-mc[role="button"]:hover,
+    :root .work-set-open:hover {
+        translate: 0 -2px;
+        box-shadow: 0 10px 28px color-mix(in srgb, #000 28%, transparent);
+    }
+
+    :root .fndr-os-chrome-btn {
+        transition-property: translate, background-color, box-shadow, color;
+        transition-duration: var(--spring-soft-dur), 150ms, 150ms, 150ms;
+        transition-timing-function: var(--spring-soft), ease, ease, ease;
+    }
+
+    :root .fndr-os-chrome-btn:hover {
+        translate: 0 -1px;
+    }
+}
+
+/* ── Radius: one scale across every page ─────────────────────────────
+   Pages were mixing 0, 5, 6, 7, 8, 9, 12 and 999px on the same kind of
+   control. `:root` lifts these over each component's own rule. */
+:root :is(
+    .ui-action-btn, .fndr-button, .rcpt-primary, .rcpt-quiet, .rcpt-danger,
+    .aw-new-chat, .aw-peer-nav, .aw-primary, .codex-btn, .codex-link,
+    .wrapped-start-btn, .work-set-open, .work-set-primary,
+    .thread-changes-toggle, .thread-changes-dismiss, .palette-option,
+    .cp-item, .ask-source, .sg-hold-button, .profile-save-btn
+) {
+    border-radius: var(--r-control);
+}
+
+:root :is(
+    input[type="text"], input[type="search"], input[type="email"], input[type="url"],
+    input[type="number"], input[type="password"], input[type="date"],
+    input[type="datetime-local"], input:not([type]), select, textarea
+) {
+    border-radius: var(--r-control);
+}
+
+:root :is(
+    .panel-section, .pipeline-panel-card, .stats-playing-card, .codex-card,
+    .smart-fill-setting, .aw-disclosure, .ask-result, .daily-followups-card,
+    .daily-narrative-card, .summary-bullets, .wrapped-card,
+    .wrapped-week-selector, .sg-ask-card, .sg-diagnostics-card, .sg-readiness,
+    .sg-settings-card, .sg-privacy-note, .notch-do-settings-item, .todo-row,
+    .home-deadlines, .home-routine, .home-sets, .meeting-brief, .resume-work,
+    .activity-trace
+) {
+    border-radius: var(--r-card);
+}
+
+/* Panels nested inside a card take the inner radius. */
+:root :is(.stats-donut-panel, .stats-wave-panel, .stats-weekday-bars, .stats-meter-card, .stats-page-card) {
+    border-radius: var(--r-control);
+}
+
+:root .cp-modal {
+    border-radius: var(--r-sheet);
+}
+
+/* ── Sliders: WebKit's default range thumb clipped inside FNDR's cards.
+   One accent track with a knob that swells while dragged. ────────── */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 22px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--fg) 16%, transparent);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    margin-top: -7px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+    transition: transform var(--spring-lively-dur) var(--spring-lively);
+}
+
+input[type="range"]:active::-webkit-slider-thumb {
+    transform: scale(1.18);
+}
+
+input[type="range"]:focus-visible {
+    outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px var(--focus-ring), 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+input[type="range"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* ── Vault days rise in, top to bottom, when they first mount. Uses
+   `translate` so it composes with the Framer layout transforms on cards. ── */
+@keyframes feel-rise {
+    from {
+        opacity: 0;
+        translate: 0 10px;
+    }
+    to {
+        opacity: 1;
+        translate: none;
+    }
+}
+
+.vault-day {
+    animation: feel-rise var(--spring-snap-dur) var(--spring-snap) both;
+}
+
+.vault-day:nth-of-type(2) { animation-delay: 40ms; }
+.vault-day:nth-of-type(3) { animation-delay: 80ms; }
+.vault-day:nth-of-type(n + 4) { animation-delay: 120ms; }
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --spring-snap-dur: 0ms;
+        --spring-soft-dur: 0ms;
+        --spring-lively-dur: 0ms;
+    }
+
+    .fndr-switch::after,
+    .settings-switch::before {
+        transition-duration: 0ms;
+    }
+
+    .vault-day {
+        animation: none;
+    }
+
+    :root .fndr-mc[role="button"]:hover,
+    :root .work-set-open:hover,
+    :root .fndr-os-chrome-btn:hover {
+        translate: none;
+    }
+}

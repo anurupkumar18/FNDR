@@ -141,10 +141,8 @@
 
 /* ── Section label ───────────────────────────────────────────────────────── */
 .tt-section-label {
-    font-size: 0.7rem;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: var(--text-muted);
     padding: 0 2px;
 }

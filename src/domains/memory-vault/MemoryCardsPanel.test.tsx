@@ -424,12 +424,12 @@ describe("MemoryCardsPanel", () => {
 
         renderVault();
 
-        fireEvent.click(await screen.findByRole("button", { name: "Open source: Read the rubric" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Open in Google Chrome: Read the rubric" }));
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-1");
         await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("reopen_succeeded"));
 
         fireEvent.click(screen.getByRole("button", { name: /^1 more moment/ }));
-        fireEvent.click(screen.getAllByRole("button", { name: "Open source: Read the rubric" })[1]);
+        fireEvent.click(screen.getAllByRole("button", { name: "Open in Google Chrome: Read the rubric" })[1]);
         expect(reopenMemory).toHaveBeenLastCalledWith("memory-2");
     });
 

@@ -76,8 +76,11 @@
     color: var(--fg-3);
 }
 
+/* minmax(0, 1fr) lets long titles ellipsize inside the rail instead of
+   pushing the row past its right edge. */
 .aw-chat-list {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     margin: 0;
     padding: 0;
@@ -88,7 +91,8 @@
     position: relative;
     display: flex;
     align-items: center;
-    border-radius: 8px;
+    min-width: 0;
+    border-radius: var(--r-control, 10px);
 }
 
 .aw-chat-list li:hover,
@@ -334,8 +338,8 @@
 }
 
 .aw-input-row:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--focus-ring);
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline-2));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .aw-memories-btn {
@@ -394,10 +398,6 @@
 .aw-send:disabled {
     opacity: 0.35;
     cursor: not-allowed;
-}
-
-.aw-send:active:not(:disabled) {
-    transform: scale(0.92);
 }
 
 /* Memory picker */
@@ -528,6 +528,11 @@
 /* Setup */
 .aw-setup {
     display: grid;
+    /* Rows keep their content height and the column scrolls. Without it the
+       grid squeezed the overflow-hidden ChatGPT card to fit, cutting off its
+       Sign in button. */
+    grid-auto-rows: max-content;
+    align-content: start;
     gap: 14px;
     width: 100%;
     max-width: 560px;

@@ -107,7 +107,9 @@ describe("TodoPanel", () => {
 
         expect(await screen.findByRole("alert")).toHaveTextContent("Could not save that title");
         expect(screen.getByText(todoTask.title)).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: `Edit ${todoTask.title}` })).toBeInTheDocument();
+        // The edit stays open with the person's text so they can retry or cancel.
+        expect(screen.getByRole("textbox", { name: `Task title for ${todoTask.title}` })).toHaveValue("Updated title");
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     });
 
     it("keeps what FNDR noticed apart from the person's own tasks, with the words it saw", async () => {

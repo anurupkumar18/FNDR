@@ -77,11 +77,6 @@
     color: var(--fg);
 }
 
-.fndr-panel-close:active {
-    transform: scale(0.92);
-    transition-duration: 0ms;
-}
-
 .fndr-panel-close:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { MemoryCard } from "@/shared/ipc/tauri";
 import { Icon, type IconName } from "@/shared/components/atoms";
-import { MemoryCard as MemoryCardComponent, pickPreviewText, reopenButtonLabel } from "./MemoryCard";
+import { MemoryCard as MemoryCardComponent, pickPreviewText, reopenDestinationLabel } from "./MemoryCard";
 import { sessionDigest, sessionDigestFacts, sessionDigestLabel, type SessionDigest } from "./sessionDigest";
 import { linkSessions, type SessionLink } from "./sessionLinks";
 import { vaultSourceKind, type VaultDay, type VaultRow, type VaultSourceKind } from "./vaultGrouping";
@@ -80,16 +80,46 @@ function threadCountHint(card: MemoryCard): number | undefined {
     );
 }
 
+/** Where a row's source button is in its press: idle, waiting on the OS, or
+ *  just landed. Anything that did not open is a note under the row instead. */
+export type VaultReopenPhase = "opening" | "opened";
+
 interface VaultDayListProps {
     days: VaultDay[];
     /** A memory to reveal even when it is folded under a near-duplicate. */
     focusMemoryId?: string | null;
     onOpen: (card: MemoryCard) => void;
     onReopen: (card: MemoryCard) => void;
+    reopenPhaseById?: Record<string, VaultReopenPhase>;
+    /** A one-line outcome to show under a row when its source did not open. */
+    reopenNoteById?: Record<string, string>;
+}
+
+function ArrowUpRight() {
+    return (
+        <svg viewBox="0 0 24 24" width={11} height={11} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M7 17 17 7M9 7h8v8" />
+        </svg>
+    );
+}
+
+function Check() {
+    return (
+        <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m5 12 5 5 9-10" />
+        </svg>
+    );
 }
 
 /** The Vault list: day sections, thread headings, and one row per session. */
-export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: VaultDayListProps) {
+export function VaultDayList({
+    days,
+    focusMemoryId = null,
+    onOpen,
+    onReopen,
+    reopenPhaseById = {},
+    reopenNoteById = {},
+}: VaultDayListProps) {
     const [openSimilarIds, setOpenSimilarIds] = useState<Set<string>>(new Set());
 
     const toggleSimilar = (leadId: string) => {
@@ -113,71 +143,97 @@ export function VaultDayList({ days, focusMemoryId = null, onOpen, onReopen }: V
         similarOpen = false,
         digest: SessionDigest | null = null,
         links: SessionLink[] = [],
-    ) => (
-        <div className="vault-row">
-            <MemoryCardComponent
-                card={card}
-                variant="compact"
-                onOpen={onOpen}
-                sourceIcon={<SourceIcon kind={vaultSourceKind(card)} />}
-                threadCountHint={threadCountHint(card)}
-            />
-            <div className="vault-row-actions">
-                {row && row.similar.length > 0 && (
-                    <span className="vault-row-session-range" aria-label="Session time range">
-                        {sessionRange(row)}
-                    </span>
-                )}
+    ) => {
+        const phase = reopenPhaseById[card.id];
+        const note = reopenNoteById[card.id];
+        const hasSession = Boolean(row && row.similar.length > 0);
+        return (
+            <div className={`vault-row${card.reopen_target ? " vault-row--reopenable" : ""}${phase ? ` is-${phase}` : ""}`}>
+                <MemoryCardComponent
+                    card={card}
+                    variant="compact"
+                    onOpen={onOpen}
+                    sourceIcon={<SourceIcon kind={vaultSourceKind(card)} />}
+                    threadCountHint={threadCountHint(card)}
+                />
                 {card.reopen_target ? (
                     <button
                         type="button"
-                        className="ui-action-btn vault-row-action"
-                        aria-label={`${reopenButtonLabel(card)}: ${card.title}`}
+                        className="vault-row-open"
+                        data-phase={phase ?? "idle"}
+                        aria-label={`${reopenDestinationLabel(card)}: ${card.title}`}
+                        aria-busy={phase === "opening" || undefined}
                         onClick={() => onReopen(card)}
                     >
-                        Open source
+                        {phase === "opening" ? (
+                            <>
+                                <span className="vault-row-open-spinner" aria-hidden="true" />
+                                Opening…
+                            </>
+                        ) : phase === "opened" ? (
+                            <>
+                                <Check />
+                                Opened
+                            </>
+                        ) : (
+                            <>
+                                {reopenDestinationLabel(card)}
+                                <ArrowUpRight />
+                            </>
+                        )}
                     </button>
                 ) : null}
-                {row && row.similar.length > 0 && (
+                {note ? (
+                    <p className="vault-row-note" role="status">
+                        {note}
+                    </p>
+                ) : null}
+                {hasSession && row && (
                     <button
                         type="button"
-                        className="ui-action-btn vault-row-action vault-row-similar"
+                        className="vault-row-similar"
                         aria-expanded={similarOpen}
                         aria-label={`${row.similar.length} more ${row.similar.length === 1 ? "moment" : "moments"} from this session: ${card.title}`}
                         onClick={() => toggleSimilar(card.id)}
                     >
+                        <svg className="vault-row-similar-chevron" viewBox="0 0 24 24" width={11} height={11} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                            <path d="m9 6 6 6-6 6" />
+                        </svg>
                         {digest ? sessionDigestLabel(digest) : `${row.similar.length + 1} moments`}
+                        <span className="vault-row-session-range" aria-label="Session time range">
+                            {sessionRange(row)}
+                        </span>
                     </button>
                 )}
+                {digest && sessionDigestFacts(digest) && (
+                    <p className="vault-row-earlier">
+                        <span className="vault-row-earlier-label">In this session</span> {sessionDigestFacts(digest)}
+                    </p>
+                )}
+                {digest?.earlier && (
+                    <p className="vault-row-earlier">
+                        <span className="vault-row-earlier-label">Earlier in this session</span> {digest.earlier}
+                    </p>
+                )}
+                {links.length > 0 && (
+                    <p className="vault-row-earlier">
+                        <span className="vault-row-earlier-label">Same stretch of work</span>
+                        {links.map((link) => (
+                            <button
+                                key={link.leadId}
+                                type="button"
+                                className="vault-row-link"
+                                onClick={() => showRow(link.leadId)}
+                            >
+                                {link.label}
+                                {link.moments > 1 ? ` (${link.moments} moments)` : ""}
+                            </button>
+                        ))}
+                    </p>
+                )}
             </div>
-            {digest && sessionDigestFacts(digest) && (
-                <p className="vault-row-earlier">
-                    <span className="vault-row-earlier-label">In this session</span> {sessionDigestFacts(digest)}
-                </p>
-            )}
-            {digest?.earlier && (
-                <p className="vault-row-earlier">
-                    <span className="vault-row-earlier-label">Earlier in this session</span> {digest.earlier}
-                </p>
-            )}
-            {links.length > 0 && (
-                <p className="vault-row-earlier">
-                    <span className="vault-row-earlier-label">Same stretch of work</span>
-                    {links.map((link) => (
-                        <button
-                            key={link.leadId}
-                            type="button"
-                            className="vault-row-link"
-                            onClick={() => showRow(link.leadId)}
-                        >
-                            {link.label}
-                            {link.moments > 1 ? ` (${link.moments} moments)` : ""}
-                        </button>
-                    ))}
-                </p>
-            )}
-        </div>
-    );
+        );
+    };
 
     const linksByDay = new Map(days.map((day) => [day.key, linkSessions(day)]));
 

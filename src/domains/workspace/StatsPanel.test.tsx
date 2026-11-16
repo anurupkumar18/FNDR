@@ -76,17 +76,17 @@ describe("StatsPanel", () => {
     it("does not expose static grid cards as fake buttons", async () => {
         render(<StatsPanel isVisible onClose={vi.fn()} />);
 
-        expect(await screen.findByText("Live Pulse Board")).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: /bring live pulse board to front/i })).toBeNull();
+        expect(await screen.findByText("Live pulse")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /bring live pulse to front/i })).toBeNull();
     });
 
     it("makes stacked cards keyboard-operable and names the active card", async () => {
         render(<StatsPanel isVisible onClose={vi.fn()} />);
 
-        await screen.findByText("Live Pulse Board");
+        await screen.findByText("Live pulse");
         fireEvent.click(screen.getByRole("button", { name: "Stack" }));
 
-        const insightsCard = screen.getByRole("button", { name: /bring intelligence brief to front/i });
+        const insightsCard = screen.getByRole("button", { name: /bring what stands out to front/i });
         fireEvent.keyDown(insightsCard, { key: "Enter" });
 
         expect(insightsCard).toHaveAttribute("aria-pressed", "true");
@@ -97,7 +97,7 @@ describe("StatsPanel", () => {
         render(<StatsPanel isVisible onClose={vi.fn()} />);
 
         expect(await screen.findByText(/no captured activity yet/i)).toBeInTheDocument();
-        expect(screen.queryByText("Live Pulse Board")).toBeNull();
+        expect(screen.queryByText("Live pulse")).toBeNull();
     });
 
     it("traps focus, closes on Escape, and restores the invoking control", async () => {
@@ -112,7 +112,7 @@ describe("StatsPanel", () => {
         const closeButton = screen.getByRole("button", { name: /close activity stats/i });
         expect(dialog).toHaveAttribute("aria-modal", "true");
         await waitFor(() => expect(closeButton).toHaveFocus());
-        await screen.findByText("Live Pulse Board");
+        await screen.findByText("Live pulse");
 
         const focusable = dialog.querySelectorAll<HTMLElement>("button:not([disabled])");
         focusable[focusable.length - 1].focus();

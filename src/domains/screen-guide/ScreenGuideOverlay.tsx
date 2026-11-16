@@ -708,7 +708,7 @@ export function ScreenGuideOverlay() {
                     <span className="sg-overlay-spinner" aria-hidden="true" />
                 )}
                 <div className="sg-overlay-copy">
-                    <span className="sg-overlay-eyebrow">SCREEN GUIDE</span>
+                    <span className="sg-overlay-eyebrow">Screen Guide</span>
                     {activityTrace && (
                         <ActivityTrace
                             trace={activityTrace}

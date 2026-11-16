@@ -23,6 +23,7 @@ import {
     type ActivityTraceStatus,
 } from "@/shared/activity/activityTrace";
 import { ActivityTrace } from "@/shared/components/ActivityTrace";
+import { Icon } from "@/shared/components/atoms/Icon";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const CLIP_DEBOUNCE_MS = 150;
@@ -649,7 +650,7 @@ export function OmnibarApp() {
         >
             <div className="omnibar-input-row">
                 <span className="omnibar-glyph" aria-hidden>
-                    ⌕
+                    <Icon name="search" size={18} />
                 </span>
                 <input
                     ref={inputRef}

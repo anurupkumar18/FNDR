@@ -303,7 +303,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                 <section className="todo-briefing-row">
                     {briefingActivity && <ActivityTrace trace={briefingActivity} />}
                     <section className="todo-briefing-summary" aria-live="polite">
-                        <p className="todo-briefing-label">Today&apos;s Briefing</p>
+                        <h3 className="todo-briefing-label">Today&apos;s briefing</h3>
                         <p className="todo-briefing-text">
                             {dailyBriefingLoading
                                 ? "Generating your summary…"
@@ -317,7 +317,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
 
             <section className="todo-create-row">
                 <label className="todo-create-field" htmlFor="todo-new-title">
-                    <span>New task title</span>
+                    <span className="sr-only">New task title</span>
                     <input
                         id="todo-new-title"
                         type="text"
@@ -333,7 +333,7 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                     />
                 </label>
                 <label className="todo-create-field todo-type-select-wrap" htmlFor="todo-new-type">
-                    <span>Task type</span>
+                    <span className="sr-only">Task type</span>
                     <select
                         id="todo-new-type"
                         value={newType}
@@ -391,7 +391,19 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                         </h3>
                         <div className="todo-page-list">
                         {myTasks.map((task) => (
-                            <article key={task.id} className="todo-row">
+                            <article key={task.id} className={`todo-row${editingTaskId === task.id ? " is-editing" : ""}`}>
+                                <button
+                                    className="todo-check"
+                                    type="button"
+                                    aria-label={`Mark ${task.title} done`}
+                                    aria-busy={pendingTaskId === task.id || undefined}
+                                    disabled={pendingTaskId === task.id || savingTaskId === task.id}
+                                    onClick={() => void handleComplete(task)}
+                                >
+                                    <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                        <path d="m5 12 5 5 9-10" />
+                                    </svg>
+                                </button>
                                 <div className="todo-row-main">
                                     <h4>{task.title}</h4>
                                     <p className="todo-row-meta">{metaLine(task)}</p>
@@ -435,29 +447,22 @@ export function TodoPanel({ isVisible, onClose }: TodoPanelProps) {
                                         </div>
                                     )}
                                 </div>
-                                <div className="todo-row-actions">
-                                    <button
-                                        className="ui-action-btn todo-row-btn"
-                                        type="button"
-                                        aria-label={`Edit ${task.title}`}
-                                        disabled={pendingTaskId === task.id || savingTaskId === task.id}
-                                        onClick={() => {
-                                            setEditingTaskId(task.id);
-                                            setEditingTitle(task.title);
-                                        }}
-                                    >
-                                        Edit
-                                    </button>
-                                    <button
-                                        className="ui-action-btn todo-row-btn todo-done-btn"
-                                        type="button"
-                                        aria-label={`Mark ${task.title} done`}
-                                        disabled={pendingTaskId === task.id || savingTaskId === task.id}
-                                        onClick={() => void handleComplete(task)}
-                                    >
-                                        {pendingTaskId === task.id ? "Saving…" : "Done"}
-                                    </button>
-                                </div>
+                                {editingTaskId !== task.id && (
+                                    <div className="todo-row-actions">
+                                        <button
+                                            className="todo-row-ghost"
+                                            type="button"
+                                            aria-label={`Edit ${task.title}`}
+                                            disabled={pendingTaskId === task.id || savingTaskId === task.id}
+                                            onClick={() => {
+                                                setEditingTaskId(task.id);
+                                                setEditingTitle(task.title);
+                                            }}
+                                        >
+                                            Edit
+                                        </button>
+                                    </div>
+                                )}
                             </article>
                         ))}
                         </div>

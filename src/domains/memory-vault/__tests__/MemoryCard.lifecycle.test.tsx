@@ -224,7 +224,7 @@ describe("MemoryCard — compact preview priority", () => {
     it.each(["compact", "preview", "expanded"] as const)("labels agent authorship in %s cards and never offers reopen", (variant) => {
         render(<MemoryCard variant={variant} onReopen={vi.fn()} card={{ ...makeCard({ reopen_target: "https://example.com" }), ...{ source_type: "agent", added_by: "Claude Code" } }} />);
         expect(screen.getByText(/Agent note · Added by Claude Code/)).toBeTruthy();
-        expect(screen.queryByRole("button", { name: /open source|reopen/i })).toBeNull();
+        expect(screen.queryByRole("button", { name: /open source|open in|open page|reopen/i })).toBeNull();
     });
 
     it("reviewed summary wins over raw OCR / window title", () => {

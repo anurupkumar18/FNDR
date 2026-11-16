@@ -164,3 +164,21 @@
         pointer-events: auto;
     }
 }
+
+/* One primary action per thread. Continue stays filled; the rest read as
+   quiet text buttons so a thread no longer offers four equal boxes. */
+:root .resume-work-list li button:not(.work-set-primary):not(.thread-changes-toggle):not(.thread-changes-dismiss) {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    box-shadow: none;
+}
+
+:root .resume-work-list li button:not(.work-set-primary):not(.thread-changes-toggle):not(.thread-changes-dismiss):hover {
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
+    color: var(--text-primary);
+}
+
+.resume-work-next > span {
+    font-weight: 600;
+}

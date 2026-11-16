@@ -37,10 +37,8 @@
 .meeting-brief-eyebrow {
     margin-bottom: 4px;
     color: var(--accent);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
 }
 
 .meeting-brief-time,
@@ -86,7 +84,6 @@
 }
 
 .meeting-brief-list button:hover { background: var(--surface-hover); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
-.meeting-brief-list button:active { transform: scale(0.992); }
 .meeting-brief-list button:focus-visible,
 .meeting-brief-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
