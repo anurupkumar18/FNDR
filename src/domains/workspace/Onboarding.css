@@ -611,3 +611,153 @@
 .ob-card .pipeline-muted,
 .ob-card .pipeline-privacy-note,
 .ob-card .pipeline-egress-hosts { color: var(--ob-text-muted); font-size: 13px; }
+
+/* ── Theme pass ─────────────────────────────────────────────────────────
+   Onboarding now wears the same theme as the app it introduces: a dark
+   card in dark mode, the accent for the one primary action, the shared
+   radius scale, and icons you can actually see. */
+.onboarding-overlay {
+    background:
+        radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+        var(--bg-primary);
+}
+
+.ob-card {
+    --ob-card-bg: var(--bg-2);
+    --ob-surface-muted: color-mix(in srgb, var(--fg) 6%, transparent);
+    --ob-surface-strong: color-mix(in srgb, var(--fg) 14%, transparent);
+    --ob-border: var(--border);
+    --ob-text-primary: var(--fg);
+    --ob-text-secondary: var(--fg-2);
+    --ob-text-muted: var(--fg-3);
+    --ob-accent: var(--accent);
+    --ob-accent-light: color-mix(in srgb, var(--accent) 14%, transparent);
+    --ob-success: #3f9a5c;
+    --ob-success-light: color-mix(in srgb, #3f9a5c 14%, transparent);
+    --ob-danger: var(--alarm, #e5484d);
+    --ob-danger-light: color-mix(in srgb, var(--alarm, #e5484d) 12%, transparent);
+    max-width: 560px;
+    max-height: calc(100vh - 64px);
+    padding: 36px 40px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sheet, 20px);
+    animation: ob-slide-up var(--spring-soft-dur, 420ms) var(--spring-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.ob-icon {
+    width: 56px;
+    height: 56px;
+    margin-bottom: 20px;
+    border: 0;
+    border-radius: var(--r-card, 16px);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
+    box-shadow: none;
+}
+
+.ob-icon svg {
+    color: var(--accent);
+    stroke: currentColor;
+}
+
+.ob-title {
+    font-size: 26px;
+    letter-spacing: -0.02em;
+}
+
+.ob-subtitle {
+    margin-bottom: 24px;
+    font-size: 15px;
+    line-height: 1.55;
+}
+
+.ob-name-input {
+    border-radius: var(--r-control, 10px);
+    border-color: transparent;
+}
+
+.ob-name-input:focus {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.ob-btn-primary {
+    min-height: 46px;
+    padding: 0 20px;
+    border: 0;
+    border-radius: var(--r-control, 10px);
+    background: var(--accent);
+    color: #fff;
+    backdrop-filter: none;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 8px 22px color-mix(in srgb, var(--accent) 26%, transparent);
+    letter-spacing: 0;
+}
+
+.ob-btn-primary:hover:not(:disabled) {
+    background: var(--accent);
+    border-color: transparent;
+    transform: none;
+    filter: brightness(1.07);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 10px 26px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.ob-btn-secondary {
+    min-height: 44px;
+    border-radius: var(--r-control, 10px);
+    border-color: transparent;
+    backdrop-filter: none;
+}
+
+.ob-btn-secondary:hover:not(:disabled) {
+    border-color: transparent;
+    transform: none;
+}
+
+.ob-btn-ghost {
+    border-radius: var(--r-control, 10px);
+}
+
+.ob-step-dot.active,
+.ob-step-dot.done {
+    background: var(--accent);
+}
+
+.ob-model-card {
+    border-width: 1px;
+    border-radius: var(--r-card, 16px);
+    background: var(--ob-surface-muted);
+}
+
+.ob-model-badge {
+    border-radius: 999px;
+}
+
+.ob-card .pipeline-panel-card {
+    border-radius: var(--r-card, 16px);
+}
+
+/* In a card taller than the window the children were shrinking (squashed
+   icon tiles, clipped counters); the card scrolls instead. */
+.ob-card > * {
+    flex-shrink: 0;
+}
+
+.ob-proof {
+    margin: -12px 0 20px;
+    font-size: 13px;
+    color: var(--ob-text-secondary);
+}
+
+.ob-proof > summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.ob-proof > summary:hover {
+    color: var(--ob-text-primary);
+}
+
+.ob-proof[open] > summary {
+    margin-bottom: 12px;
+}

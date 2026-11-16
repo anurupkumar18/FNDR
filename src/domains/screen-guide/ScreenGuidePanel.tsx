@@ -454,14 +454,14 @@ export function ScreenGuidePanel({
             <PanelHeader
                 title="Screen Guide"
                 titleId="sg-panel-title"
-                subtitle="Ask about your current main display or explicitly find a file by name. FNDR can point you toward a next step without clicking or typing for you."
+                subtitle="Ask about what is on your screen, or find a file by name. FNDR points the way; it does not click for you."
                 subtitleId="sg-panel-description"
                 closeLabel="Close Screen Guide"
                 closeRef={closeButtonRef}
                 onClose={onClose}
             />
 
-            <div className="sg-panel-body sg-bento">
+            <div className="sg-panel-body sg-focused">
                 {error && (
                     <PanelState
                         kind="error"
@@ -498,8 +498,7 @@ export function ScreenGuidePanel({
                     </aside>
                 )}
 
-                <div className="sg-bento-grid">
-                    <div className="sg-bento-col">
+                <div className="sg-stack">
                 <section
                     className={`sg-readiness ${enabled && !isPrivateMode ? "is-ready" : "is-off"}`}
                     role={activityOwnsLiveStatus ? undefined : "status"}
@@ -507,7 +506,7 @@ export function ScreenGuidePanel({
                     aria-atomic={activityOwnsLiveStatus ? undefined : "true"}
                 >
                     <span className="sg-readiness-dot" aria-hidden="true" />
-                    <div>
+                    <div className="sg-readiness-copy">
                         <strong>{statusCopy(settings, status, loading, isPrivateMode)}</strong>
                         <span>
                             {isPrivateMode
@@ -517,15 +516,8 @@ export function ScreenGuidePanel({
                                 : `${settings?.shortcut ?? "Control+Alt+Space"} is available when enabled`}
                         </span>
                     </div>
-                </section>
-
-                <p className="sg-tile-title" aria-hidden="true">Basics</p>
-                <section className="sg-settings-card" aria-label="Screen Guide settings">
-                    <label className="sg-setting-row">
-                        <span>
-                            <strong>Enable Screen Guide</strong>
-                            <small>Keep FNDR ready beside the notch for hold-to-talk</small>
-                        </span>
+                    <label className="sg-readiness-toggle">
+                        <span className="sr-only">Enable Screen Guide</span>
                         <input
                             type="checkbox"
                             role="switch"
@@ -536,6 +528,77 @@ export function ScreenGuidePanel({
                             onChange={(event) => void updateSettings({ enabled: event.target.checked })}
                         />
                     </label>
+                </section>
+                <section className="sg-ask-card">
+                    <label htmlFor="sg-question">Ask about your display or find a named file</label>
+                    <p className="sg-ask-hint" id="sg-question-hint">
+                        Type a question now, or hold to talk. Screen Guide reads the display only for
+                        this question; explicit file lookups check names only in Documents, Desktop,
+                        and Downloads.
+                    </p>
+                    <div className="sg-question-row">
+                        <input
+                            id="sg-question"
+                            type="text"
+                            value={question}
+                            disabled={questionDisabled}
+                            aria-describedby="sg-question-hint"
+                            placeholder="Where is the setting I need? or Find my I-20 document"
+                            onChange={(event) => setQuestion(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    void submitQuestion();
+                                }
+                            }}
+                        />
+                        <button
+                            type="button"
+                            className="ui-action-btn sg-ask-button"
+                            disabled={questionDisabled || !question.trim()}
+                            onClick={() => void submitQuestion()}
+                            aria-label="Ask Screen Guide"
+                        >
+                            {submitting ? "Sending…" : "Ask"}
+                        </button>
+                    </div>
+
+                    <button
+                        type="button"
+                        className={`sg-hold-button ${holding ? "is-holding" : ""}`}
+                        data-no-press
+                        disabled={questionDisabled}
+                        aria-label={holding ? "Release to ask" : "Hold to talk"}
+                        aria-pressed={holding}
+                        onPointerDown={(event) => {
+                            event.currentTarget.setPointerCapture?.(event.pointerId);
+                            beginHold();
+                        }}
+                        onPointerUp={endHold}
+                        onPointerCancel={endHold}
+                        onKeyDown={(event) => {
+                            if (!event.repeat && (event.key === " " || event.key === "Enter")) {
+                                event.preventDefault();
+                                beginHold();
+                            }
+                        }}
+                        onKeyUp={(event) => {
+                            if (event.key === " " || event.key === "Enter") {
+                                event.preventDefault();
+                                endHold();
+                            }
+                        }}
+                    >
+                        <span className="sg-mic-dot" aria-hidden="true" />
+                        {holding ? "Release to ask" : "Hold to talk"}
+                    </button>
+                </section>
+                <details className="sg-group">
+                    <summary>
+                        <span className="sg-group-title">Shortcut and voice</span>
+                        <span className="sg-group-hint">How you start a question and how answers sound</span>
+                    </summary>
+                <section className="sg-settings-card" aria-label="Screen Guide settings">
                     <div className="sg-shortcut-row">
                         <label htmlFor="sg-shortcut">
                             <strong>Shortcut</strong>
@@ -607,74 +670,15 @@ export function ScreenGuidePanel({
                         />
                     </label>
                 </section>
-                <p className="sg-tile-title" aria-hidden="true">Ask</p>
-                <section className="sg-ask-card">
-                    <label htmlFor="sg-question">Ask about your display or find a named file</label>
-                    <p className="sg-ask-hint" id="sg-question-hint">
-                        Type a question now, or hold to talk. Screen Guide reads the display only for
-                        this question; explicit file lookups check names only in Documents, Desktop,
-                        and Downloads.
-                    </p>
-                    <div className="sg-question-row">
-                        <input
-                            id="sg-question"
-                            type="text"
-                            value={question}
-                            disabled={questionDisabled}
-                            aria-describedby="sg-question-hint"
-                            placeholder="Where is the setting I need? or Find my I-20 document"
-                            onChange={(event) => setQuestion(event.target.value)}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    void submitQuestion();
-                                }
-                            }}
-                        />
-                        <button
-                            type="button"
-                            className="ui-action-btn sg-ask-button"
-                            disabled={questionDisabled || !question.trim()}
-                            onClick={() => void submitQuestion()}
-                            aria-label="Ask Screen Guide"
-                        >
-                            {submitting ? "Sending…" : "Ask"}
-                        </button>
-                    </div>
-
-                    <button
-                        type="button"
-                        className={`sg-hold-button ${holding ? "is-holding" : ""}`}
-                        data-no-press
-                        disabled={questionDisabled}
-                        aria-label={holding ? "Release to ask" : "Hold to talk"}
-                        aria-pressed={holding}
-                        onPointerDown={(event) => {
-                            event.currentTarget.setPointerCapture?.(event.pointerId);
-                            beginHold();
-                        }}
-                        onPointerUp={endHold}
-                        onPointerCancel={endHold}
-                        onKeyDown={(event) => {
-                            if (!event.repeat && (event.key === " " || event.key === "Enter")) {
-                                event.preventDefault();
-                                beginHold();
-                            }
-                        }}
-                        onKeyUp={(event) => {
-                            if (event.key === " " || event.key === "Enter") {
-                                event.preventDefault();
-                                endHold();
-                            }
-                        }}
-                    >
-                        <span className="sg-mic-dot" aria-hidden="true" />
-                        {holding ? "Release to ask" : "Hold to talk"}
-                    </button>
-                </section>
-                    </div>
-                    <div className="sg-bento-col">
-                <p className="sg-tile-title" aria-hidden="true">Answers</p>
+                <div className="sg-bento-voice">
+                    <VoiceOutputSection />
+                </div>
+                </details>
+                <details className="sg-group">
+                    <summary>
+                        <span className="sg-group-title">How it answers</span>
+                        <span className="sg-group-hint">On-device or ChatGPT, and what is sent</span>
+                    </summary>
                 <section className="sg-settings-card" aria-labelledby="sg-model-title">
                     <div className="sg-setting-row sg-model-row">
                         <span>
@@ -721,6 +725,14 @@ export function ScreenGuidePanel({
                             />
                         </label>
                     )}
+                </section>
+                </details>
+                <details className="sg-group">
+                    <summary>
+                        <span className="sg-group-title">Labs</span>
+                        <span className="sg-group-hint">OpenClicky pointing and Operate my Mac</span>
+                    </summary>
+                <section className="sg-settings-card" aria-label="Labs">
                     <label className="sg-setting-row">
                         <span>
                             <strong>
@@ -789,6 +801,12 @@ export function ScreenGuidePanel({
                     </details>
                     {canOperateComputer ? <OperatorPermissions /> : null}
                 </section>
+                </details>
+                <details className="sg-group">
+                    <summary>
+                        <span className="sg-group-title">Troubleshooting</span>
+                        <span className="sg-group-hint">Save one turn for diagnosis</span>
+                    </summary>
                 <section className="sg-diagnostics-card" aria-labelledby="sg-diagnostics-title">
                     <div>
                         <strong id="sg-diagnostics-title">Troubleshoot the next turn</strong>
@@ -885,11 +903,7 @@ export function ScreenGuidePanel({
                         )}
                     </div>
                 </section>
-                    </div>
-                    <div className="sg-bento-col">
-                <div className="sg-bento-voice">
-                    <VoiceOutputSection />
-                </div>
+                </details>
                 <aside className="sg-privacy-note">
                     <strong>{privacyHeading}</strong>
                     <p>
@@ -909,11 +923,6 @@ export function ScreenGuidePanel({
                         deletable local bundle.
                     </p>
                 </aside>
-
-
-
-
-                    </div>
                 </div>
 
             </div>

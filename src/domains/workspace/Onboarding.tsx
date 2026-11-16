@@ -184,7 +184,6 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
         <>
             <span className="ob-icon"><Icon name="lock" size={30} /></span>
             <h1 className="ob-title">How FNDR handles your data</h1>
-            {proof ? <PrivacyProof proof={proof} /> : <p>Privacy activity will appear here when the local counter is ready.</p>}
             <div className="ob-privacy-list">
                 {[
                     {
@@ -217,6 +216,10 @@ function StepPrivacyPromise({ state, onSave }: { state: OnboardingState; onSave:
                     </div>
                 ))}
             </div>
+            <details className="ob-proof">
+                <summary>See what FNDR did this session</summary>
+                {proof ? <PrivacyProof proof={proof} /> : <p>Privacy activity will appear here when the local counter is ready.</p>}
+            </details>
             <EncryptionStatus />
             <button
                 id="ob-accept-privacy"
