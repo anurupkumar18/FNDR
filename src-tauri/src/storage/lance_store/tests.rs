@@ -156,6 +156,139 @@ fn normalize_record_for_index_repairs_vector_dimensions() {
     assert!(normalized.image_embedding.iter().all(|value| *value == 0.0));
 }
 
+fn primary_status(
+    record: &MemoryRecord,
+) -> Option<crate::memory_embedding_document::EmbeddingStatus> {
+    use crate::memory_embedding_document::{search_embedding_provenance, EmbeddingRole};
+    search_embedding_provenance(&record.raw_evidence).and_then(|provenance| {
+        provenance
+            .role(EmbeddingRole::Primary)
+            .map(|role| role.status)
+    })
+}
+
+#[test]
+fn zero_primary_vector_is_marked_pending_embedding() {
+    use crate::memory_embedding_document::EmbeddingStatus;
+    let source = record(
+        None,
+        "Download",
+        "Downloaded report.pdf to the Downloads folder.",
+    );
+
+    let normalized = normalize_record_for_index(&source);
+
+    assert_eq!(
+        primary_status(&normalized),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+}
+
+#[test]
+fn wrong_sized_primary_vector_is_marked_pending_embedding() {
+    use crate::memory_embedding_document::EmbeddingStatus;
+    let mut source = record(None, "Note", "A note whose vector had the wrong size.");
+    source.embedding = vec![0.5; 8];
+
+    let normalized = normalize_record_for_index(&source);
+
+    assert_eq!(
+        primary_status(&normalized),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+}
+
+#[test]
+fn real_primary_vector_is_not_marked_pending() {
+    use crate::memory_embedding_document::EmbeddingStatus;
+    let mut source = record(None, "Note", "A note with a real vector.");
+    source.embedding = vec![0.25; DEFAULT_TEXT_EMBEDDING_DIM];
+
+    let normalized = normalize_record_for_index(&source);
+
+    assert_ne!(
+        primary_status(&normalized),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+}
+
+#[test]
+fn pending_marker_keeps_an_existing_manifest_and_is_cleared_by_a_real_vector() {
+    use crate::memory_embedding_document::{read_embedding_manifest, EmbeddingStatus};
+    let mut source = record(None, "Note", "A note that is embedded on a second attempt.");
+    // Attempt 1: the embedder failed, so the vector is zero.
+    let pending = normalize_record_for_index(&source);
+    assert_eq!(
+        primary_status(&pending),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+    let manifest_before = read_embedding_manifest(&pending.raw_evidence).expect("manifest");
+
+    // Attempt 2: same row, now with a real vector.
+    source = pending;
+    source.embedding = vec![0.25; DEFAULT_TEXT_EMBEDDING_DIM];
+    let ready = normalize_record_for_index(&source);
+
+    assert_ne!(
+        primary_status(&ready),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+    let manifest_after = read_embedding_manifest(&ready.raw_evidence).expect("manifest");
+    assert_eq!(manifest_after.contracts, manifest_before.contracts);
+}
+
+#[test]
+fn pending_marker_preserves_other_raw_evidence_keys() {
+    let mut source = record(None, "Note", "A note with other evidence attached.");
+    source.raw_evidence = r#"{"source_kind":"download","other":{"keep":1}}"#.to_string();
+
+    let normalized = normalize_record_for_index(&source);
+
+    let evidence: serde_json::Value = serde_json::from_str(&normalized.raw_evidence).unwrap();
+    assert_eq!(evidence["source_kind"], "download");
+    assert_eq!(evidence["other"]["keep"], 1);
+}
+
+#[tokio::test]
+async fn embedder_failure_then_success_moves_a_stored_memory_from_pending_to_ready() {
+    use crate::memory_embedding_document::EmbeddingStatus;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    let store = tokio::task::spawn_blocking(move || Store::new(&path).unwrap())
+        .await
+        .unwrap();
+
+    // The embedder fails once: the writer hands the store zero vectors.
+    let failed = record(
+        None,
+        "Download",
+        "Downloaded quarterly-report.pdf for review.",
+    );
+    store
+        .add_batch(&[failed.clone()])
+        .await
+        .expect("store pending");
+    let stored = store.list_all_memories().await.expect("list");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        primary_status(&stored[0]),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+
+    // The retry succeeds and replaces the row.
+    let mut retried = stored[0].clone();
+    retried.embedding = vec![0.25; DEFAULT_TEXT_EMBEDDING_DIM];
+    store
+        .replace_memory_preserving_chunks(&retried)
+        .await
+        .expect("replace");
+    let after = store.list_all_memories().await.expect("list");
+    assert_ne!(
+        primary_status(&after[0]),
+        Some(EmbeddingStatus::PendingEmbedding)
+    );
+}
+
 #[test]
 fn memory_schema_migration_covers_current_writer_columns() {
     let existing = HashSet::from([

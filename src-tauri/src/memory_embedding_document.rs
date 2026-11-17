@@ -49,6 +49,9 @@ pub enum EmbeddingStatus {
     Ready,
     ZeroVectorFallback,
     Unavailable,
+    /// The row was stored without a usable text vector (embedder failed or
+    /// absent). It stays out of semantic search until a real vector replaces it.
+    PendingEmbedding,
     StaleSourceText,
     DimensionMismatch,
     LegacyUnverified,
@@ -420,6 +423,7 @@ pub fn embedding_retrieval_adjustment(
         EmbeddingStatus::StaleSourceText => 0.74,
         EmbeddingStatus::DimensionMismatch => 0.50,
         EmbeddingStatus::Unavailable => 0.45,
+        EmbeddingStatus::PendingEmbedding => 0.0,
         EmbeddingStatus::ZeroVectorFallback => 0.45,
     };
     let reason_labels = if score_multiplier < 1.0 {
@@ -532,7 +536,7 @@ pub fn text_embedding_status(embedding: &[f32]) -> EmbeddingStatus {
     if embedding.len() != DEFAULT_TEXT_EMBEDDING_DIM {
         EmbeddingStatus::DimensionMismatch
     } else if embedding.iter().all(|value| *value == 0.0) {
-        EmbeddingStatus::Unavailable
+        EmbeddingStatus::PendingEmbedding
     } else {
         EmbeddingStatus::Ready
     }
@@ -626,6 +630,7 @@ fn status_severity(status: EmbeddingStatus) -> u8 {
         EmbeddingStatus::LegacyUnverified => 1,
         EmbeddingStatus::ZeroVectorFallback => 2,
         EmbeddingStatus::Unavailable => 3,
+        EmbeddingStatus::PendingEmbedding => 3,
         EmbeddingStatus::StaleSourceText => 4,
         EmbeddingStatus::DimensionMismatch => 5,
     }
@@ -647,6 +652,7 @@ fn status_label(status: EmbeddingStatus) -> &'static str {
         EmbeddingStatus::Ready => "ready",
         EmbeddingStatus::ZeroVectorFallback => "zero_vector_fallback",
         EmbeddingStatus::Unavailable => "unavailable",
+        EmbeddingStatus::PendingEmbedding => "pending_embedding",
         EmbeddingStatus::StaleSourceText => "stale_source_text",
         EmbeddingStatus::DimensionMismatch => "dimension_mismatch",
         EmbeddingStatus::LegacyUnverified => "legacy_unverified",
