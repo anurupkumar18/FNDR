@@ -49,6 +49,8 @@ describe("journeys through the real app shell", () => {
         expect(await screen.findByRole("heading", { name: "Grant a few permissions" })).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
         fireEvent.click(await screen.findByRole("button", { name: "Skip imports" }));
+        expect(await screen.findByRole("heading", { name: "Search your files" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Not now" }));
         expect(await screen.findByRole("textbox", { name: "Search your memories" })).toBeInTheDocument();
     });
 

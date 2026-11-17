@@ -127,6 +127,7 @@ Related-memory links are persisted references with source identity. A deleted or
 | Surface | What it owns | Boundary |
 |---|---|---|
 | Search | Query filters, ranked memory hits, match reasons, open/reopen actions | Uses shared retrieval; weak matches remain visibly weak |
+| Files | Selected-folder search in Search, Quick Find, and the notch; `file:` and `code:` scopes | Separate SQLite/FTS5 indexes and EmbeddingGemma 2 process; no capture or memory writes |
 | Ask | Evidence collection, verification, cited answer or refusal | No unsupported completion claims |
 | Memory Vault | Browse, inspect, and manage persisted memory records and relationships | Current visibility is checked for direct and nested reads |
 | Home and Resume | Recent work context and supported return targets | Resume state is derived from currently visible records |
@@ -205,7 +206,7 @@ Local model initialization and inference can block on filesystem, tokenizer, or 
 
 ## Build and run
 
-FNDR is a macOS application. A development build requires macOS 13 or later, Xcode Command Line Tools, Node.js with npm, and the Rust toolchain.
+FNDR is a macOS application. A development build requires Xcode Command Line Tools, Node.js with npm, the Rust toolchain, and CMake. The main app targets macOS 13; the optional Files model helper currently targets macOS 14. Files has been verified on Apple Silicon, not on macOS 13 or Intel.
 
 ```bash
 npm install
@@ -213,6 +214,24 @@ npm run tauri dev
 ```
 
 On first run, onboarding obtains the required local embedding assets. macOS may request Screen Recording, Accessibility, or microphone permission for the enabled feature being used. Permission denial should leave an explicit unavailable state; it should not be represented as a successful capture or voice turn.
+
+Files is a separate onboarding opt-in: choose folders and download EmbeddingGemma 2 from Hugging Face (about 865 MB), or select "Not now". Settings keeps these controls available later. Debug builds enable Files with empty roots by default; they do not select personal folders or download weights automatically. Explicitly saved choices are respected. File text and vectors never enter the screen-memory pipeline.
+
+Development startup builds the Files helper with its own pinned llama.cpp; the first build fetches that source, not model weights. For a local packaged build, include the helper overlay, as release CI does:
+
+```bash
+make files-helper
+npm run tauri build -- --config src-tauri/tauri.files.conf.json
+```
+
+Files has independent real-model checks. Set `FILES_MODELS` to a directory containing both verified Q8_0 assets, and choose a new, empty `FILES_TESTBED` directory:
+
+```bash
+make files-check FILES_MODELS=/path/to/models
+make files-eval FILES_MODELS=/path/to/models FILES_TESTBED=/tmp/fndr-files-testbed-new
+```
+
+See [ADR 039](docs/decisions/039-native-file-recall-boundary.md) for isolation, consent, and vector-contract details.
 
 ## Verification
 
@@ -249,6 +268,7 @@ src/
 src-tauri/src/
   capture/                     Screen sampling and memory assembly
   context_runtime/             Query planning, routes, fusion and answer evidence
+  files/                       Independent folder crawling, extraction, SQLite indexes and search
   inference/                   Embedding and local generation runtimes
   ipc/                         Tauri command handlers and native API boundary
   mcp/                         MCP server, tools, resources, authorization

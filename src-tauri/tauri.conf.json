@@ -4,7 +4,7 @@
     "version": "0.5.0",
     "identifier": "com.fndr.app",
     "build": {
-        "beforeDevCommand": "npm run dev -- --host 127.0.0.1 --port 1420",
+        "beforeDevCommand": "make files-helper && npm run dev -- --host 127.0.0.1 --port 1420",
         "devUrl": "http://127.0.0.1:1420",
         "beforeBuildCommand": "npm run build",
         "frontendDist": "../dist"
@@ -54,7 +54,8 @@
         "externalBin": [
             "binaries/fndr-speech",
             "binaries/fndr-auth",
-            "binaries/fndr-foundation"
+            "binaries/fndr-foundation",
+            "binaries/fndr-files-reader"
         ],
         "icon": [
             "icons/icon.png",

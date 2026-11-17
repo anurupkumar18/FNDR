@@ -37,11 +37,13 @@
 
     <!-- Files and Folders Permissions -->
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>FNDR searches file names in Documents only when you ask Screen Guide, and may move an older FNDR speech runtime from Documents into private app storage once.</string>
+    <string>FNDR indexes content in Documents when you select it for file search, searches names when you ask Screen Guide, and may move an older FNDR speech runtime into private app storage once. File search stays on this Mac.</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>FNDR searches file names on Desktop only when you ask Screen Guide to find a file.</string>
+    <string>FNDR indexes content on Desktop when you select it for file search, and searches names when you ask Screen Guide. File search stays on this Mac.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>FNDR searches file names in Downloads only when you ask Screen Guide to find a file.</string>
+    <string>FNDR indexes content in Downloads when you select it for file search, and searches names when you ask Screen Guide. File search stays on this Mac.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>FNDR indexes files on removable volumes only in folders selected for local file search.</string>
     
     <!-- Run as background agent (menu bar app) -->
     <key>LSUIElement</key>

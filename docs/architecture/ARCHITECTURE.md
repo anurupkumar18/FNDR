@@ -109,6 +109,19 @@ shortcut / panel -> text or local transcription -> privacy gate -> ephemeral cap
 
 The path reuses FNDR's capture, OCR, model lock, local inference, event, and hidden-window primitives, but it does not enter the capture-to-LanceDB pipeline. Raw pixels and guide turns remain ephemeral. Point cues must match normalized Apple Vision text-line centers supplied to the model; invented coordinates are discarded. The first implementation targets the primary display, while mixed-display capture and coordinate mapping remain an explicit follow-up rather than an implicit change to the stable capture loop. See ADR 014 and `docs/product/screen-guide.md`.
 
+## Native file finding
+
+Files search runs beside the memory pipeline under [ADR 039](../decisions/039-native-file-recall-boundary.md):
+
+```text
+selected folders -> Rust crawler -> native macOS readers -> EmbeddingGemma 2 helper
+                 -> separate SQLite/FTS5 indexes and 768-d fp16 vectors -> file results
+```
+
+The Rust engine is `src-tauri/src/files/`; `helpers/fndr-files-reader` extracts PDFs, pictures, recordings, and videos with macOS frameworks. `helpers/fndr-files` runs pinned llama.cpp b11461 in its own process for Gemma 2 text and media embeddings. Code has its own index. File parents and segments never enter memory storage or the capture/review pipeline.
+
+Onboarding offers the optional approximately 865 MB model download from Hugging Face after folder selection. Debug builds enable the feature with empty roots; saved choices override that default. Settings exposes exclusions, indexing times, power policy, pause/resume, retries, and index removal. Model assets have a pinned revision and SHA-256. Current folder policy and readability govern result and file-action access.
+
 ## Stable vs Experimental
 
 The stable search path is OCR text plus local text embeddings. Screen captures and imported photos additionally write a 512-d CLIP `image_embedding`, exposed through `find_visually_similar_memories` for image-to-image retrieval over the same LanceDB column. Cross-modal text->image retrieval, meeting diarization, external graph services, and autonomous agent surfaces remain adjacent or experimental features unless wired through the core path above.
