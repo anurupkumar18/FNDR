@@ -1,0 +1,20 @@
+stages:
+  - deploy
+
+deploy-download-site:
+  image: node:22-alpine
+  stage: deploy
+  timeout: 10m
+  script:
+    - node --test website/tests/*.test.mjs
+    - mkdir -p .gitlab-pages
+    - cp website/index.html website/styles.css website/release.js website/experience.js website/favicon.svg website/.nojekyll .gitlab-pages/
+  pages:
+    publish: .gitlab-pages
+    expire_in: never
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - website/**/*
+        - .gitlab-ci.yml
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
