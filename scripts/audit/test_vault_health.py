@@ -146,6 +146,58 @@ class VaultHealthTest(unittest.TestCase):
             "under_200_chars_pct": 50.0,
         }})
 
+    def test_pending_embedding_rows_are_not_counted_as_unmarked_zero_vectors(self):
+        pending = json.dumps(
+            {
+                "source_kind": "ax",
+                "private": SECRET,
+                "embedding_manifest": {
+                    "statuses": [
+                        {"role": "primary", "status": "pending_embedding"},
+                        {"role": "image", "status": "zero_vector_fallback"},
+                    ]
+                },
+            }
+        )
+        source = parent_rows(second_vector=[0.0, 0.0], second_reopen="app_bundle")
+        source = source.set_column(
+            source.schema.get_field_index("raw_evidence"),
+            "raw_evidence",
+            pa.array([json.dumps({"source_kind": "ax"}), pending]),
+        )
+        row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["zero_or_missing_vectors_pct"], 50.0)
+        self.assertEqual(row["pending_embedding_pct"], 50.0)
+        self.assertEqual(row["unmarked_zero_vectors_pct"], 0.0)
+        self.assertNotIn(SECRET, json.dumps(row))
+
+    def test_zero_vector_without_a_pending_marker_is_reported_as_unmarked(self):
+        source = parent_rows(second_vector=[0.0, 0.0], second_reopen="app_bundle")
+        row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["zero_or_missing_vectors_pct"], 50.0)
+        self.assertEqual(row["pending_embedding_pct"], 0.0)
+        self.assertEqual(row["unmarked_zero_vectors_pct"], 50.0)
+
+    def test_pending_marker_on_a_row_with_a_real_vector_is_not_unmarked(self):
+        # A stale marker must not hide or invent zero vectors: the vector decides.
+        source = parent_rows(second_vector=[0.3, 0.4], second_reopen="app_bundle")
+        row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
+                               "current parent", vh.PARENT_AGGREGATE_COLUMNS, "timestamp", True)
+        self.assertEqual(row["zero_or_missing_vectors_pct"], 0.0)
+        self.assertEqual(row["unmarked_zero_vectors_pct"], 0.0)
+
+    def test_report_and_render_show_pending_and_unmarked_shares(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.seed_all_tables(directory)
+            report = vh.summarize(directory)
+        self.assertEqual(report["unmarked_zero_vectors_pct"], 50.0)
+        self.assertEqual(report["pending_embedding_pct"], 0.0)
+        rendered = vh.render(report)
+        self.assertIn("pending embedding", rendered)
+        self.assertIn("unmarked zero", rendered)
+
     def test_text_source_median_preserves_fractional_character_counts(self):
         source = pa.table({"clean_text": ["x" * 199, "x" * 200]})
         row = vh._table_health(RecordingTable(source, []), vh.V4_PARENT_TABLE,
