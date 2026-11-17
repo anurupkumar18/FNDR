@@ -58,6 +58,7 @@ SUMMARY_SOURCE_CATEGORIES = frozenset(
         "vlm",
     )
 )
+PENDING_EMBEDDING_KEY = "pending_embedding"
 _TABLE_SPECS = (
     (V4_PARENT_TABLE, "current parent", PARENT_AGGREGATE_COLUMNS, "timestamp", True),
     (V5_PARENT_TABLE, "future parent", PARENT_AGGREGATE_COLUMNS, "timestamp", True),
@@ -124,6 +125,28 @@ def _safe_text_source(raw_evidence) -> str:
     return label if label in TEXT_SOURCE_CATEGORIES else "unknown"
 
 
+def _primary_embedding_pending(raw_evidence) -> bool:
+    """True when the embedding manifest marks the primary vector pending.
+
+    Reads one known status label and returns a boolean; the evidence itself is
+    never kept.
+    """
+    try:
+        evidence = json.loads(raw_evidence)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    manifest = evidence.get("embedding_manifest") if isinstance(evidence, dict) else None
+    statuses = manifest.get("statuses") if isinstance(manifest, dict) else None
+    if not isinstance(statuses, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and entry.get("role") == "primary"
+        and entry.get("status") == "pending_embedding"
+        for entry in statuses
+    )
+
+
 def _date_bucket(timestamp_ms) -> str | None:
     if timestamp_ms is None:
         return None
@@ -151,13 +174,22 @@ def _read_aggregate_columns(table, requested: tuple[str, ...]) -> tuple[int, dic
             elif column == "raw_evidence":
                 # Discard each raw JSON value immediately; retain categorical
                 # labels only, not a second Python list of sensitive blobs.
-                values[column] = [_safe_text_source(value.as_py()) for value in arrow.column(column)]
+                labels, pending = [], []
+                for value in arrow.column(column):
+                    evidence = value.as_py()
+                    labels.append(_safe_text_source(evidence))
+                    pending.append(_primary_embedding_pending(evidence))
+                values[column] = labels
+                values[PENDING_EMBEDDING_KEY] = pending
             else:
                 values[column] = arrow.column(column).to_pylist()
+        values.setdefault(PENDING_EMBEDDING_KEY, [False] * rows)
         return rows, values
 
     rows = table.count_rows()
-    return rows, {column: [None] * rows for column in requested}
+    values = {column: [None] * rows for column in requested}
+    values[PENDING_EMBEDDING_KEY] = [False] * rows
+    return rows, values
 
 
 def _empty_table_health(name: str, role: str) -> dict:
@@ -171,6 +203,8 @@ def _empty_table_health(name: str, role: str) -> dict:
         "active_days": 0,
         "rows_per_active_day": 0.0,
         "zero_or_missing_vectors_pct": None,
+        "pending_embedding_pct": None,
+        "unmarked_zero_vectors_pct": None,
         "clean_text_chars_p50": None,
         "structured_pct": None,
         "summary_source": None,
@@ -193,17 +227,21 @@ def _table_health(
         day for day in (_date_bucket(value) for value in values[time_column]) if day is not None
     )
     zero_or_missing = 0
-    for vector in values["embedding"]:
+    unmarked_zero = 0
+    pending_flags = values[PENDING_EMBEDDING_KEY]
+    for vector, marked_pending in zip(values["embedding"], pending_flags):
         if vector is None:
+            is_zero = True
+        else:
+            try:
+                array = np.asarray(vector, dtype=np.float32)
+                is_zero = array.size == 0 or not np.any(array)
+            except (TypeError, ValueError):
+                is_zero = True
+        if is_zero:
             zero_or_missing += 1
-            continue
-        try:
-            array = np.asarray(vector, dtype=np.float32)
-        except (TypeError, ValueError):
-            zero_or_missing += 1
-            continue
-        if array.size == 0 or not np.any(array):
-            zero_or_missing += 1
+            if not marked_pending:
+                unmarked_zero += 1
 
     health = {
         "table": name,
@@ -215,6 +253,14 @@ def _table_health(
         "active_days": len(days),
         "rows_per_active_day": round(rows / len(days), 1) if days else 0.0,
         "zero_or_missing_vectors_pct": _pct(zero_or_missing, rows) if rows else None,
+        # Rows the store marked pending_embedding, and zero vectors nobody marked.
+        # Only the manifest exists on parent tables; chunk rows have no marker.
+        "pending_embedding_pct": (
+            _pct(sum(pending_flags), rows) if rows and parent else None
+        ),
+        "unmarked_zero_vectors_pct": (
+            _pct(unmarked_zero, rows) if rows and parent else None
+        ),
         "clean_text_chars_p50": None,
         "structured_pct": None,
         "summary_source": None,
@@ -329,6 +375,8 @@ def summarize(db_path: str) -> dict:
                 "active_days": v4["active_days"],
                 "memories_per_active_day": v4["rows_per_active_day"],
                 "zero_or_missing_vectors_pct": v4["zero_or_missing_vectors_pct"],
+                "pending_embedding_pct": v4["pending_embedding_pct"],
+                "unmarked_zero_vectors_pct": v4["unmarked_zero_vectors_pct"],
                 "clean_text_chars_p50": v4["clean_text_chars_p50"],
                 "structured_pct": v4["structured_pct"],
                 "summary_source": v4["summary_source"],
@@ -359,8 +407,9 @@ def render(report: dict) -> str:
         "## Table health",
         "",
         "| table | role | present | rows | active days | date range | rows/active day | "
-        "zero/missing vectors | median clean chars | exact reopen |",
-        "|---|---|:---:|---:|---:|---|---:|---:|---:|---:|",
+        "zero/missing vectors | pending embedding | unmarked zero | "
+        "median clean chars | exact reopen |",
+        "|---|---|:---:|---:|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for name, _, _, _, _ in _TABLE_SPECS:
         row = report["table_health"][name]
@@ -374,6 +423,8 @@ def render(report: dict) -> str:
             f"{row['rows']} | {row['active_days']} | {date_range} | "
             f"{row['rows_per_active_day']} | "
             f"{_display(row['zero_or_missing_vectors_pct'], suffix='%')} | "
+            f"{_display(row['pending_embedding_pct'], suffix='%')} | "
+            f"{_display(row['unmarked_zero_vectors_pct'], suffix='%')} | "
             f"{_display(row['clean_text_chars_p50'])} | "
             f"{_display(row['exact_reopen_pct'], suffix='%')} |"
         )

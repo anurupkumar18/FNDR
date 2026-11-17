@@ -278,6 +278,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vector_route_skips_memories_pending_an_embedding() {
+        std::env::set_var("FNDR_ALLOW_MOCK_EMBEDDER", "1");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let store = tokio::task::spawn_blocking(move || Store::new(&path).expect("store"))
+            .await
+            .expect("store task");
+        let embedder = Embedder::new().expect("embedder");
+        let text = "planner graph route vector recall";
+        let embedding = embedder
+            .embed_batch(&[text.to_string()])
+            .expect("embedding")
+            .into_iter()
+            .next()
+            .expect("vector");
+        // `ready` has a real vector; `pending` is what a writer stores when its
+        // embedder failed: the same text with zero vectors.
+        store
+            .add_batch(&[
+                record("ready", text, embedding),
+                record("pending", text, vec![0.0; EMBEDDING_DIM]),
+            ])
+            .await
+            .expect("add");
+
+        let config = SearchConfig::default().normalized();
+        let plan = crate::context_runtime::query_plan::plan(
+            text,
+            &crate::context_runtime::query_plan::PlanHints::default(),
+        );
+        let ctx = RouteCtx::new(&store, &config)
+            .with_embedder(&embedder)
+            .allowing_mock_vectors();
+
+        let hits = VectorRoute.run(&plan, &ctx).await;
+        let ids: Vec<&str> = hits.hits.iter().map(|hit| hit.memory_id.as_str()).collect();
+        assert!(ids.contains(&"ready"), "ready memory missing: {ids:?}");
+        assert!(
+            !ids.contains(&"pending"),
+            "pending memory must not be returned by semantic search: {ids:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn vector_route_is_empty_without_embedder() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().to_path_buf();
