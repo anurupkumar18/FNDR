@@ -21,6 +21,9 @@ src-tauri/models/*.gguf
 !package-lock.json
 !tsconfig*.json
 !src-tauri/tauri.conf.json
+!src-tauri/tauri.files.conf.json
+!evals/files/queries.json
+!src-tauri/helpers/fndr-files/reference/reference.json
 *.json.migrated
 !src-tauri/capabilities/
 !src-tauri/capabilities/*.json
@@ -42,6 +45,7 @@ src-tauri/models/*.gguf
 /data/
 meetings/
 *.wav
+!src-tauri/helpers/fndr-files/reference/speech.wav
 *.mp3
 *.webm
 *.transcript.md
@@ -69,6 +73,8 @@ build/
 src-tauri/binaries/fndr-speech-*
 src-tauri/binaries/fndr-auth-*
 src-tauri/binaries/fndr-foundation-*
+src-tauri/binaries/fndr-files-helper-*
+src-tauri/binaries/fndr-files-reader-*
 src-tauri/binaries/FNDR Speech Helper.app/
 
 # iOS / Xcode

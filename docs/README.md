@@ -14,6 +14,7 @@ Use this index to find the right document quickly. **Authoritative agent vocabul
 | [`product/screen-guide.md`](product/screen-guide.md) | Local, ephemeral Screen Guide product contract |
 | [`product/memory-journey.md`](product/memory-journey.md) | Debug-only capture-to-answer evidence and quality-baseline contract |
 | [`product/quality-lab.md`](product/quality-lab.md) | Same-build native QA profile, synthetic corpus workflow, scorecards, and fixture-replay roadmap |
+| [`decisions/039-native-file-recall-boundary.md`](decisions/039-native-file-recall-boundary.md) | Native file finding, separate indexes, EmbeddingGemma 2 opt-in, and development defaults |
 | [`mcp.md`](mcp.md) | MCP tools, modes, privacy model, and agent-facing additions |
 | [`agent.md`](agent.md) | The Agent page (Hermes chat): providers, what is sent, commands; and the MCP `agent.*` tools |
 | [`agent-context-pack.md`](agent-context-pack.md) | Typed context pack schema, ranking, redaction, and provenance |

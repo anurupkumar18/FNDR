@@ -95,6 +95,10 @@ mailparse = "0.16"
 sha2 = "0.10"
 zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 rusqlite = "0.37"
+# Files search (ADR 039): fp16 vectors and NFKC for exact words.
+half = "2.7"
+base64 = "0.22"
+unicode-normalization = "0.1"
 url = "2.5.8"
 quick-xml = "0.39.4"
 tempfile = "3"
@@ -117,9 +121,11 @@ tauri-plugin-notification = "2"
 libc = "0.2"
 security-framework = "3"
 objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread", "NSURL"] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSData", "NSDictionary", "NSArray", "NSThread", "NSURL", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSImage", "NSPasteboard", "NSScreen", "libc"] }
 block2 = "0.5"
+# Files search: drag a found file out to Finder, Mail or a chat (ADR 039).
+drag = "2.1.1"
 
 [dev-dependencies]
 serial_test = "3"

@@ -96,6 +96,8 @@ pub use glasses_import::*;
 mod import;
 pub use import::*;
 
+pub mod files;
+
 mod daily_review;
 pub use daily_review::*;
 

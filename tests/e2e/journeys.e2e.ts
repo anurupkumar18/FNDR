@@ -31,10 +31,12 @@ test("a person can complete onboarding and reach their workspace", async ({ page
     await expect(page.getByRole("heading", { name: "Lock FNDR with Touch ID" })).toBeVisible();
     await activate(page.getByRole("button", { name: "Skip for now" }), keys);
     await expect(page.getByRole("heading", { name: "Select your local AI model" })).toBeVisible();
-    await activate(page.getByRole("button", { name: /^Skip for now/ }), keys);
+    await activate(page.getByRole("button", { name: "Use Qwen3-VL 2B" }), keys);
     await expect(page.getByRole("heading", { name: "Grant a few permissions" })).toBeVisible();
     await activate(page.getByRole("button", { name: "Skip for now" }), keys);
     await activate(page.getByRole("button", { name: "Skip imports" }), keys);
+    await expect(page.getByRole("heading", { name: "Search your files" })).toBeVisible();
+    await activate(page.getByRole("button", { name: "Not now" }), keys);
     await expect(page.getByRole("textbox", { name: "Search your memories" })).toBeVisible();
     await screenshot(page, testInfo, "onboarding-complete");
 });

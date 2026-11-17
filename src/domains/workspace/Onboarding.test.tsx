@@ -57,7 +57,8 @@ vi.mock("@/shared/ipc/tauri", () => ({
     getEncryptionStatement: (...args: unknown[]) => getEncryptionStatement(...args),
 }));
 vi.mock("@/domains/privacy-proof/PrivacyProof", () => ({ PrivacyProof: () => <div>Privacy Proof</div> }));
-vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: (skipped: boolean) => void }) => <button onClick={() => onContinue(true)}>Skip imports</button> }));
+vi.mock("@/domains/setup/ImportSources", () => ({ ImportSources: ({ onContinue }: { onContinue: (skipped: boolean) => void }) => <><button onClick={() => onContinue(true)}>Skip imports</button><button onClick={() => onContinue(false)}>Continue after imports</button></> }));
+vi.mock("@/domains/setup/FilesSetup", () => ({ FilesSetup: ({ onContinue }: { onContinue: () => void }) => <><h2>Search your files</h2><button onClick={() => onContinue()}>Not now</button><button onClick={() => onContinue()}>Search these folders</button></> }));
 
 vi.mock("@/shared/hooks/useModelDownloadStatus", () => ({
     useModelDownloadStatus: () => downloadStatusValue,
@@ -352,7 +353,12 @@ describe("Onboarding persistence", () => {
         await waitFor(() => expect(recordOnboardingFunnelEvent).toHaveBeenCalledWith("error", "welcome"));
     });
 
-    it("offers imports after permissions and allows skipping them", async () => {
+    it.each([
+        [true, true],
+        [true, false],
+        [false, true],
+        [false, false],
+    ])("offers imports then Files search and preserves skip choices (imports: %s, files: %s)", async (skipImports, skipFiles) => {
         getOnboardingState.mockResolvedValue({
             step: "permissions", biometric_enabled: false, screen_permission: false,
             accessibility_permission: false, model_downloaded: true, model_id: "minilm-l6-v2", display_name: null,
@@ -362,8 +368,17 @@ describe("Onboarding persistence", () => {
         fireEvent.click(await screen.findByRole("button", { name: "Skip for now" }));
         expect(await screen.findByRole("button", { name: "Skip imports" })).toBeInTheDocument();
         expect(onComplete).not.toHaveBeenCalled();
-        fireEvent.click(screen.getByRole("button", { name: "Skip imports" }));
+        fireEvent.click(screen.getByRole("button", { name: skipImports ? "Skip imports" : "Continue after imports" }));
+        expect(await screen.findByRole("heading", { name: "Search your files" })).toBeInTheDocument();
+        expect(onComplete).not.toHaveBeenCalled();
+        expect(saveOnboardingState).toHaveBeenLastCalledWith(
+            ...[expect.objectContaining({ step: "search_files" }), ...(skipImports ? [true] : [])],
+        );
+        fireEvent.click(screen.getByRole("button", { name: skipFiles ? "Not now" : "Search these folders" }));
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
+        expect(saveOnboardingState).toHaveBeenLastCalledWith(
+            expect.objectContaining({ step: "complete" }),
+        );
     });
 
     it("keeps model setup open when the saved state rejects completion after a model skip", async () => {

@@ -62,6 +62,8 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-14 | Notch Do's next step type is paste into the focused app: the exact text shown before one tap, checked by reading the field, never retried. | Reminders; run a Shortcut; reveal a file | Owner, in the second 2026-10-14 Q&A | `operator::plan::StepAction::Paste`, `scripts/operator/notch-do-policy-cases.json` |
 | 2026-10-22 | Notch Do asks only before an action that could destroy something; ordinary actions run without a tap. A setting, Ask before each action, restores the old behavior. Payments, passwords, force quit and unknown tools stay refused, and a link nobody asked for still waits for a tap. | Keep asking everywhere; let the model judge risk; per-app allowlists; make every destructive action Never | Requested by Kunj; not yet reviewed by the team | `docs/decisions/037-notch-do-asks-only-before-destructive-actions.md` |
 
+| 2026-11-17 | Add native file finding with independent indexes and EmbeddingGemma 2. Release onboarding offers an optional model download; development enables the feature with no selected folders. | Reuse the existing native Files engine and SQLite/helper contract; add new LanceDB file tables; use memory rows; load Gemma 2 in the current app runtime | Requested by Kunj in conversation; implementation choices delegated | [ADR 039](../decisions/039-native-file-recall-boundary.md) |
+
 ## Earlier accepted ADRs (background, before this log)
 
 These carry an "Accepted" status line and still shape the code. They predate the team process above, so they have no "who agreed".

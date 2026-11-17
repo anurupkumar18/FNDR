@@ -1,0 +1,261 @@
+.file-result .file-result-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result-kind {
+    flex: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--file-kind-bg, rgba(127, 127, 127, 0.18));
+    color: inherit;
+    opacity: 0.85;
+}
+
+.file-result-place {
+    flex: none;
+    margin-left: 6px;
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.file-result-excerpt {
+    display: block;
+    font-size: 12px;
+    opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result-excerpt mark {
+    background: transparent;
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+}
+
+.file-result-folder {
+    display: block;
+    font-size: 11px;
+    opacity: 0.6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-result[data-weaker] {
+    opacity: 0.75;
+}
+
+.file-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(127, 127, 127, 0.2);
+}
+
+.file-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.file-preview-close {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.file-preview-image {
+    max-width: 100%;
+    max-height: 320px;
+    object-fit: contain;
+    border-radius: 6px;
+    align-self: center;
+}
+
+.file-preview-loading {
+    height: 120px;
+    border-radius: 6px;
+    background: rgba(127, 127, 127, 0.12);
+}
+
+.file-preview-text {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 200px;
+    overflow: auto;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .file-preview-loading {
+        animation: file-preview-pulse 1.2s ease-in-out infinite;
+    }
+}
+
+@keyframes file-preview-pulse {
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.file-result[data-thumbnail] {
+    position: relative;
+    padding-left: 54px;
+}
+
+.file-result-thumbnail {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.file-group-heading {
+    padding: 6px 12px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.6;
+}
+
+.file-row-more,
+.file-row-weaker {
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.file-section-note {
+    margin-left: 8px;
+    font-weight: 400;
+    opacity: 0.75;
+}
+
+.file-preview-play {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.file-preview-media {
+    width: 100%;
+    max-height: 320px;
+    border-radius: 6px;
+}
+
+.file-preview-button {
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 12px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.file-preview-button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.file-preview-span {
+    font-size: 11px;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+
+.file-preview-code {
+    margin: 0;
+    max-height: 240px;
+    overflow: auto;
+    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: 6px;
+    background: rgba(127, 127, 127, 0.08);
+    padding: 6px 0;
+}
+
+.file-preview-line {
+    display: block;
+    padding: 0 10px 0 0;
+    white-space: pre;
+}
+
+.file-preview-line[data-focus] {
+    background: rgba(127, 127, 127, 0.18);
+}
+
+.file-preview-number {
+    display: inline-block;
+    width: 3.5em;
+    padding-right: 1em;
+    text-align: right;
+    opacity: 0.5;
+    user-select: none;
+}
+
+.file-preview-text mark,
+.file-preview-code mark,
+.file-preview-excerpt mark {
+    background: transparent;
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.file-preview-about {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.file-preview-folder {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    opacity: 0.75;
+    cursor: pointer;
+    text-align: left;
+}
+
+.file-preview-folder:hover {
+    text-decoration: underline;
+}
+
+.file-preview-why {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.file-preview-excerpt {
+    font-size: 12px;
+}

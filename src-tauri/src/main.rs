@@ -731,6 +731,8 @@ fn main() {
 
             app.manage(state.clone());
             app.manage(fndr_lib::voice::VoiceManager::for_app(app.handle().clone()));
+            // Files search (ADR 039): its own index and consent settings.
+            ipc::commands::files::start(app.handle().clone(), state.clone());
 
             // Restore the local MCP endpoint only when this app connected a client.
             {
@@ -942,6 +944,33 @@ fn main() {
             ipc::commands::import_status,
             ipc::commands::import_cancel,
             ipc::commands::import_forget,
+            ipc::commands::files::files_status,
+            ipc::commands::files::files_settings_get,
+            ipc::commands::files::files_settings_set,
+            ipc::commands::files::files_search,
+            ipc::commands::files::files_model_download,
+            ipc::commands::files::files_open,
+            ipc::commands::files::files_reveal,
+            ipc::commands::files::files_copy,
+            ipc::commands::files::files_preview,
+            ipc::commands::files::files_forget,
+            ipc::commands::files::files_estimate,
+            ipc::commands::files::files_open_code,
+            ipc::commands::files::files_editors,
+            ipc::commands::files::files_suggested_folders,
+            ipc::commands::files::files_pick_folder,
+            ipc::commands::files::files_thumbnails,
+            ipc::commands::files::files_quick_look,
+            ipc::commands::files::files_open_in_window,
+            ipc::commands::files::files_folders,
+            ipc::commands::files::files_subfolders,
+            ipc::commands::files::files_suggested_code_folders,
+            ipc::commands::files::files_model_links,
+            ipc::commands::files::files_model_import,
+            ipc::commands::files::files_open_privacy_settings,
+            ipc::commands::files::files_passage,
+            ipc::commands::files::files_clip,
+            ipc::commands::files::files_drag,
             ipc::commands::get_app_names,
             ipc::commands::get_storage_health,
             ipc::commands::clean_dev_build_cache,

@@ -62,6 +62,8 @@ pub enum OnboardingStep {
     ModelDownload,
     /// Optional local imports and guided retrieval
     BringPast,
+    /// Optional Files search: folders to search by what is in them (ADR 039)
+    SearchFiles,
     /// Indexing started, showing live counter
     IndexingStarted,
     /// Onboarding complete — show main app

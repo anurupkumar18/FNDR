@@ -22,6 +22,7 @@ Full documentation index (architecture, decisions, product notes, agent defaults
 - **Memory Vault**: full-screen browse surface for all memories, the global insight graph (Louvain-clustered layout), and per-project graph scopes (`src/domains/memory-vault/MemoryCardsPanel` + sidebar entry).
 - **Capture pipeline**: screen → OCR / text extraction → chunking → embedding → storage.
 - **Hybrid search**: vector + keyword retrieval with reranking as implemented in Rust.
+- **Files search**: optional local file finding in explicitly chosen folders. Its SQLite/FTS5 stores, 768-dimensional EmbeddingGemma 2 vectors, settings, indexing worker, and model helper are independent of screen memory. Available from onboarding, Settings, Quick Find, the notch, and Search. Debug builds enable it with empty roots; release builds require opt-in. See ADR 039.
 - **Parent-child RAG**: retrieval pattern where child chunks are searched first for precision, then matched chunks' parent records are fetched for full-context card synthesis. Governed by ADR 008.
 - **Sidecar**: Python helpers under `src-tauri/sidecars/` for transcription, agent, graph, TTS, etc.
 - **Status events**: backend → renderer push channels (`capture://status`, `privacy://alerts`, `meeting://status`, `proactive_suggestion`, model-download events). Always-on UI state subscribes via `useTauriEvent` after one initial fetch instead of polling. See ADR 011.

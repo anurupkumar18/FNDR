@@ -19,6 +19,7 @@ import {
 import { getPrivacyProof, ttsInstall, ttsStatus, type PrivacyProof as PrivacyProofData, type TtsStatus } from "@/shared/ipc/tauri";
 import { PrivacyProof } from "@/domains/privacy-proof/PrivacyProof";
 import { ImportSources } from "@/domains/setup/ImportSources";
+import { FilesSetup } from "@/domains/setup/FilesSetup";
 import { useModelDownloadStatus } from "@/shared/hooks/useModelDownloadStatus";
 import { usePolling } from "@/shared/hooks/usePolling";
 import { formatBytes } from "@/shared/utils/format";
@@ -42,6 +43,7 @@ const STEPS: OnboardingStep[] = [
     "model_download",
     "permissions",
     "bring_past",
+    "search_files",
 ];
 
 const DEFAULT_ONBOARDING_STATE: OnboardingState = {
@@ -1015,7 +1017,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 {(state.step === "permissions" || state.step === "indexing_started") && (
                     <StepPermissions state={state} onSave={save} />
                 )}
-                {state.step === "bring_past" && <ImportSources mode="onboarding" onContinue={(skipped) => void save({ ...state, step: "complete" }, skipped)} />}
+                {state.step === "bring_past" && <ImportSources mode="onboarding" onContinue={(skipped) => void save({ ...state, step: "search_files" }, skipped)} />}
+                {state.step === "search_files" && <FilesSetup mode="onboarding" onContinue={() => void save({ ...state, step: "complete" })} />}
             </div>
         </div>
     );

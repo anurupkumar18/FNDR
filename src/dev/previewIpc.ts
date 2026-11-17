@@ -24,6 +24,7 @@ import type {
     NotchDoSkill,
 } from "@/shared/ipc/tauri";
 import type { ModelInfo, OnboardingState } from "@/shared/ipc/onboarding";
+import { createPreviewFilesHandler } from "./previewFiles";
 
 type PreviewIpcHandler = (command: string, payload?: unknown) => Promise<unknown>;
 
@@ -867,6 +868,7 @@ function searchPreviewCards(
  * incomplete fixture for a working product flow.
  */
 export function createPreviewIpcHandler(): PreviewIpcHandler {
+    const files = createPreviewFilesHandler(emitPreviewEventIfAvailable);
     let previewCaptureStatus: CaptureStatus = {
         ...captureStatus,
         pipeline: { ...captureStatus.pipeline },
@@ -949,7 +951,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     const releasedScreenGuideGenerations = new Set<number>();
     const previewOnboardingStep = (): OnboardingState["step"] => {
         const requested = new URLSearchParams(window.location.search).get("onboarding");
-        const steps = ["welcome", "privacy_promise", "model_download", "bring_past"] as const;
+        const steps = ["welcome", "privacy_promise", "model_download", "bring_past", "search_files"] as const;
         return steps.find((step) => step === requested) ?? "complete";
     };
     let previewOnboardingState: OnboardingState = {
@@ -1089,6 +1091,7 @@ export function createPreviewIpcHandler(): PreviewIpcHandler {
     let pendingCodexLogin: { loginId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
     return async (command: string, payload?: unknown) => {
+        if (command.startsWith("files_")) return files(command, payload);
         switch (command) {
             case "import_list_sources":
                 return importKinds.map((kind) => ({
