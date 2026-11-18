@@ -43,6 +43,7 @@ try {
   const captionBox = await caption.boundingBox();
   const demoPosition = await page.locator(".tour-window").boundingBox();
   assert.ok(Math.abs((captionBox.x + captionBox.width / 2) - (demoPosition.x + demoPosition.width / 2)) < 2, "chapter caption should be centered above the demo");
+  assert.ok(Math.abs(captionBox.width - demoPosition.width) < 2, "chapter caption should match the demo width");
   for (const [value, heading] of [
     ["ask", "Search & Ask FNDR"], ["vault", "Memory Vault"], ["review", "FNDR Review"],
     ["todos", "To-dos"], ["outputs", "Daily outputs"], ["stats", "Activity Stats"],
@@ -55,6 +56,7 @@ try {
     const tab = { settings: "General", capture: "Capture", privacy: "Privacy", voice: "Voice", integrations: "AI" }[value];
     if (tab) await expect(app.getByRole("tab", { name: tab, selected: true })).toBeVisible({ timeout: 15000 });
     await expect(page.locator("[data-tour-status]")).not.toContainText("could not");
+    assert.ok(await caption.locator("[data-tour-description]").evaluate((element) => element.getBoundingClientRect().height <= parseFloat(getComputedStyle(element).lineHeight) + 2), `${value} explanation should fit on one line on desktop`);
   }
   await page.getByRole("button", { name: "Restart tour" }).click();
   await expect(app.getByRole("textbox", { name: "Search your memories" })).toBeVisible({ timeout: 20000 });

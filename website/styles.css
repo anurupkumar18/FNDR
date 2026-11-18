@@ -38,8 +38,8 @@ button[hidden], [hidden] { display: none !important; }
 .product-preview { display: grid; grid-template-columns: .8fr 1.2fr; gap: 6%; align-items: center; padding-block: 120px; }
 .product-preview-copy p { color: var(--muted); margin: 30px 0; max-width: 300px; }
 .product-preview figure { margin: 0; }
-.product-preview img, .tutorial-images img { display: block; width: 100%; border-radius: 14px; }
-.product-preview figcaption, .tutorial-images figcaption { color: var(--muted); font-size: 12px; margin-top: 12px; }
+.product-preview img { display: block; width: 100%; border-radius: 14px; }
+.product-preview figcaption { color: var(--muted); font-size: 12px; margin-top: 12px; }
 .tutorial-page { max-width: 1400px; margin: auto; padding: 30px 3% 110px; }
 .tutorial-page h1 { white-space: normal; }
 .tutorial-intro { text-align: center; color: var(--muted); margin: 28px auto 65px; }
@@ -64,8 +64,8 @@ button[hidden], [hidden] { display: none !important; }
 .chapter-menu button:hover, .chapter-menu button:focus-visible { background: #49364a; }
 .chapter-menu button[aria-current="step"] { background: var(--lilac); color: #30202f; font-weight: 650; }
 .chapter-menu button:focus-visible { outline-offset: -3px; }
-.tour-caption { width: min(900px, 100%); margin: 32px auto; padding: 24px clamp(24px, 4vw, 52px) 20px; border: 1px solid #f7e6f7; border-radius: 38px; background: var(--lilac); color: #30202f; text-align: center; box-shadow: 0 12px 40px #edc5ee14; }
-.tour-description { margin: 0; font-size: clamp(17px, 1.5vw, 21px); font-weight: 600; line-height: 1.45; letter-spacing: -.02em; text-align: center; }
+.tour-caption { width: 100%; margin: 32px auto; padding: 22px clamp(20px, 2vw, 32px) 18px; border: 1px solid #f7e6f7; border-radius: 38px; background: var(--lilac); color: #30202f; text-align: center; box-shadow: 0 12px 40px #edc5ee14; }
+.tour-description { margin: 0; font-size: clamp(16px, 1.15vw, 17px); font-weight: 600; line-height: 1.45; letter-spacing: -.02em; text-align: center; }
 .tour-description:empty { display: none; }
 .tour-status { margin: 12px 0 0; color: #624c60; font-size: 13px; font-weight: 600; }
 .tour-description:empty + .tour-status { margin-top: 0; }
@@ -80,11 +80,6 @@ button[hidden], [hidden] { display: none !important; }
 .guide-grid h3 { font-size: 19px; letter-spacing: -.03em; }
 .guide-grid p { font-size: 14px; }
 .guide-grid a { color: var(--lilac); }
-.tutorial-gallery h2 { font-size: 25px; letter-spacing: -.04em; margin: 25px 0 8px; }
-.tutorial-gallery > p { color: var(--muted); font-size: 14px; }
-.tutorial-gallery { margin-top: 70px; }
-.tutorial-images { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 30px; }
-.tutorial-images figure { margin: 0; }
 .button { min-height: 44px; padding: 13px 25px; display: inline-flex; align-items: center; justify-content: center; border-radius: 100px; color: var(--black); background: var(--lilac); font-size: 14px; font-weight: 650; text-decoration: none; transition: transform .3s var(--ease), background .2s, box-shadow .3s; text-align: center; }
 .button:hover { background: #f7def7; transform: translateY(-3px); box-shadow: 0 8px 24px #edc5ee24; }
 .button:active { transform: translateY(1px) scale(.96); }
@@ -326,8 +321,6 @@ body[data-motion="paused"] *, body[data-motion="paused"] *::before, body[data-mo
   .tour-heading { align-items: flex-start; }
   .tour-window iframe { height: 700px; }
   .tutorial-intro { margin-bottom: 40px; }
-  .tutorial-gallery { margin-top: 70px; }
-  .tutorial-images { grid-template-columns: 1fr; }
   .guide-grid { grid-template-columns: 1fr; gap: 18px; }
   .team-hero { padding-inline: 5%; padding-bottom: 60px; }
   .team-deck { height: auto; margin-top: 45px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
