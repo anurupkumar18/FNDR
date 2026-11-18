@@ -43,14 +43,14 @@ button[hidden], [hidden] { display: none !important; }
 .tutorial-page { max-width: 1400px; margin: auto; padding: 30px 3% 110px; }
 .tutorial-page h1 { white-space: normal; }
 .tutorial-intro { text-align: center; color: var(--muted); margin: 28px auto 65px; }
-.interactive-tour { max-width: 1150px; margin: auto; }
+.interactive-tour { max-width: 1400px; margin: auto; }
 .tour-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .tour-heading h2 { font-size: 26px; letter-spacing: -.04em; margin: 0; }
 .tour-heading p, .tour-note { color: var(--muted); font-size: 13px; }
 .tour-heading button { background: transparent; flex-shrink: 0; }
 .tour-status { min-height: 44px; margin: 20px 0 10px; color: var(--lilac); font-size: 14px; }
 .tour-window { overflow: hidden; border: 1px solid #66546a; border-radius: 16px; background: #171317; }
-.tour-window iframe { display: block; width: 100%; height: 740px; border: 0; background: #eee9e4; }
+.tour-window iframe { display: block; width: 100%; height: 820px; border: 0; background: #eee9e4; }
 .tour-note { margin-top: 14px; }
 .tutorial-gallery h2 { font-size: 25px; letter-spacing: -.04em; margin: 25px 0 8px; }
 .tutorial-gallery > p { color: var(--muted); font-size: 14px; }

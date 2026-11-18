@@ -8,9 +8,11 @@ try {
   const external = [];
   page.on("request", (request) => { if (!request.url().startsWith(new URL(base).origin)) external.push(request.url()); });
   await page.goto(new URL("tutorials.html", base).href);
+  const demoBox = await page.locator(".tour-window iframe").boundingBox();
+  assert.ok(demoBox.width >= 1200 && demoBox.height >= 800, "desktop demo must be large enough to use");
   const app = page.frameLocator(".tour-window iframe");
   await expect(app.getByRole("textbox", { name: "Search your memories" })).toBeVisible({ timeout: 20000 });
-  await expect(app.getByText(/Good (Morning|Afternoon|Evening), Visitor!/)).toBeVisible();
+  await expect(app.getByText(/Good (Morning|Afternoon|Evening|Night), Visitor!/)).toBeVisible();
   await expect(page.locator("[data-tour-status]")).toContainText("Tour complete", { timeout: 25000 });
   await expect(app.getByRole("button", { name: "Close memory details" })).toBeVisible();
   await page.getByRole("button", { name: "Restart tour" }).click();
