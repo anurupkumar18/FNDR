@@ -63,6 +63,7 @@ Seeded on 2026-10-04 from decisions already recorded in the repo as accepted or 
 | 2026-10-22 | Notch Do asks only before an action that could destroy something; ordinary actions run without a tap. A setting, Ask before each action, restores the old behavior. Payments, passwords, force quit and unknown tools stay refused, and a link nobody asked for still waits for a tap. | Keep asking everywhere; let the model judge risk; per-app allowlists; make every destructive action Never | Requested by Kunj; not yet reviewed by the team | `docs/decisions/037-notch-do-asks-only-before-destructive-actions.md` |
 
 | 2026-11-17 | Add native file finding with independent indexes and EmbeddingGemma 2. Release onboarding offers an optional model download; development enables the feature with no selected folders. | Reuse the existing native Files engine and SQLite/helper contract; add new LanceDB file tables; use memory rows; load Gemma 2 in the current app runtime | Requested by Kunj in conversation; implementation choices delegated | [ADR 039](../decisions/039-native-file-recall-boundary.md) |
+| 2026-11-18 | Publish a guided interactive tutorial using the real app shell with synthetic IPC and blocked outbound connections. | A recording; a separate imitation of the interface | Requested by Kunj; implementation choices delegated | [ADR 040](../decisions/040-public-interactive-demo.md) |
 
 ## Earlier accepted ADRs (background, before this log)
 

@@ -9,6 +9,10 @@ test("tutorials are reachable and presentation images are packaged", async () =>
   assert.match(home, /href="tutorials\.html"[^>]*>Tutorials</);
   assert.match(home, /images\/fndr-home\.png/);
   assert.doesNotMatch(page, /<video|fndr-demo-redacted/);
+  assert.match(page, /<iframe[^>]*src="demo\/demo-preview\.html/);
+  assert.match(page, /data-tour-toggle/);
+  assert.match(workflow, /npm ci/);
+  assert.match(workflow, /vite\.demo\.config/);
   for (const file of ["images/fndr-home.png", "images/fndr-recent-work.png"]) {
     assert.ok(page.includes(file));
     await access(new URL(`../${file}`, import.meta.url));

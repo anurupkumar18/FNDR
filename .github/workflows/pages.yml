@@ -5,6 +5,10 @@ on:
     branches: [ "main" ]
     paths:
       - "website/**"
+      - "src/**"
+      - "demo-preview.html"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,14 +30,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Test public release contract
         run: node --test website/tests/*.test.mjs
 
       - name: Stage static site
         run: |
           mkdir -p _site
-          cp website/index.html website/team.html website/tutorials.html website/team.js website/styles.css website/release.js website/experience.js website/favicon.svg website/.nojekyll _site/
+          cp website/index.html website/team.html website/tutorials.html website/team.js website/tutorial.js website/styles.css website/release.js website/experience.js website/favicon.svg website/.nojekyll _site/
           cp -R website/images _site/images
+          npx vite build --config website/vite.demo.config.ts --outDir _site/demo
+
+      - name: Exercise the public demo
+        run: |
+          python3 -m http.server 5195 --directory _site &
+          server=$!
+          trap 'kill "$server"' EXIT
+          node website/tests/tutorial-browser-check.mjs
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
