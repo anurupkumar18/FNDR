@@ -2,14 +2,13 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("tutorials are reachable and the demo and presentation images are packaged", async () => {
+test("tutorials are reachable and presentation images are packaged", async () => {
   const home = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const page = await readFile(new URL("../tutorials.html", import.meta.url), "utf8");
   const workflow = await readFile(new URL("../../.github/workflows/pages.yml", import.meta.url), "utf8");
   assert.match(home, /href="tutorials\.html"[^>]*>Tutorials</);
   assert.match(home, /images\/fndr-home\.png/);
-  assert.match(page, /<video[^>]*controls/);
-  assert.match(page, /https:\/\/github\.com\/anurupkumar18\/FNDR\/releases\/download\/v0\.3\.5\/fndr-demo-redacted\.mp4/);
+  assert.doesNotMatch(page, /<video|fndr-demo-redacted/);
   for (const file of ["images/fndr-home.png", "images/fndr-recent-work.png"]) {
     assert.ok(page.includes(file));
     await access(new URL(`../${file}`, import.meta.url));

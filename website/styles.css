@@ -43,11 +43,9 @@ button[hidden], [hidden] { display: none !important; }
 .tutorial-page { max-width: 1400px; margin: auto; padding: 30px 3% 110px; }
 .tutorial-page h1 { white-space: normal; }
 .tutorial-intro { text-align: center; color: var(--muted); margin: 28px auto 65px; }
-.tutorial-video { max-width: 1050px; margin: auto; }
-.tutorial-video video { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 14px; background: #1e1b1e; }
-.tutorial-video h2, .tutorial-gallery h2 { font-size: 25px; letter-spacing: -.04em; margin: 25px 0 8px; }
-.tutorial-video p, .tutorial-gallery > p { color: var(--muted); font-size: 14px; }
-.tutorial-gallery { margin-top: 110px; }
+.tutorial-gallery h2 { font-size: 25px; letter-spacing: -.04em; margin: 25px 0 8px; }
+.tutorial-gallery > p { color: var(--muted); font-size: 14px; }
+.tutorial-gallery { margin-top: 70px; }
 .tutorial-images { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 30px; }
 .tutorial-images figure { margin: 0; }
 .button { min-height: 44px; padding: 13px 25px; display: inline-flex; align-items: center; justify-content: center; border-radius: 100px; color: var(--black); background: var(--lilac); font-size: 14px; font-weight: 650; text-decoration: none; transition: transform .3s var(--ease), background .2s, box-shadow .3s; text-align: center; }
