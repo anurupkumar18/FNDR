@@ -10,6 +10,7 @@ try {
   await page.goto(new URL("tutorials.html", base).href);
   const app = page.frameLocator(".tour-window iframe");
   await expect(app.getByRole("textbox", { name: "Search your memories" })).toBeVisible({ timeout: 20000 });
+  await expect(app.getByText(/Good (Morning|Afternoon|Evening), Visitor!/)).toBeVisible();
   await expect(page.locator("[data-tour-status]")).toContainText("Tour complete", { timeout: 25000 });
   await expect(app.getByRole("button", { name: "Close memory details" })).toBeVisible();
   await page.getByRole("button", { name: "Restart tour" }).click();

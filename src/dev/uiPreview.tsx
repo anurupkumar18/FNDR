@@ -21,7 +21,16 @@ localStorage.setItem(STORAGE_KEYS.theme, preview.theme);
 localStorage.setItem(STORAGE_KEYS.palette, preview.palette);
 applyPalette(preview.palette, preview.theme);
 
-mockIPC(createPreviewIpcHandler(), { shouldMockEvents: true });
+const previewIpc = createPreviewIpcHandler();
+const visitorDemo = new URLSearchParams(window.location.search).get("visitor") === "1";
+mockIPC(async (command, payload) => {
+    const result = await previewIpc(command, payload);
+    if (visitorDemo && command === "get_onboarding_state" && result && typeof result === "object") {
+        return { ...result, display_name: "Visitor" };
+    }
+    if (visitorDemo && command === "get_fun_greeting") return "Welcome back, Visitor.";
+    return result;
+}, { shouldMockEvents: true });
 installPressFeedback();
 
 /** Direct entry for reviewing the real conversation panel with synthetic IPC. */
