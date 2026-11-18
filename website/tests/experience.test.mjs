@@ -5,10 +5,9 @@ import { DEMO_MEMORIES, searchMemories, springStep } from "../experience.js";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
-test("memory cards have keyboard controls and motion can be paused", async () => {
+test("memory cards have keyboard controls", async () => {
   const html = await read("../index.html");
   assert.match(html, /<button[^>]*data-memory-card/);
-  assert.match(html, /data-motion-toggle[\s\S]*?aria-pressed="false"/);
   assert.match(html, /data-deck/);
 });
 

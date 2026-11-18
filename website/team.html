@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Meet the team building FNDR.">
+    <meta name="theme-color" content="#000000">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <title>Team | FNDR</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="FNDR home"><span class="brand-mark" aria-hidden="true">⌘</span>FNDR</a>
+      <div class="header-actions"><a class="header-link" href="team.html" aria-current="page">Team</a><a class="header-link" href="tutorials.html">Tutorials</a><a class="button" href="index.html#install">Download for Mac</a></div>
+    </header>
+    <main id="main" class="team-hero">
+      <h1>Team FNDR.</h1>
+      <p class="team-intro">The people building a way back. Select a card to meet the team.</p>
+      <div class="team-deck">
+        <div class="card-back pattern-orange team-pattern-one" aria-hidden="true"><span>⌘</span><small>FNDR / a thread worth keeping</small></div>
+        <div class="card-back pattern-lilac team-pattern-two" aria-hidden="true"><span>✳</span><small>Something comes back.</small></div>
+        <figure class="team-photo group"><img src="images/team.jpg" alt="The FNDR team together on a staircase"></figure>
+        <button class="team-photo portrait one" data-person="Anurup Kumar" data-work="Co-founder. Led work on the Vault, search, retrieval and evaluation." data-linkedin="https://www.linkedin.com/in/anurupkumar" data-github="https://github.com/anurupkumar18" data-email="81anurup@gmail.com"><img src="images/portrait-1.jpg" alt=""><span>Anurup Kumar</span></button>
+        <button class="team-photo portrait two" data-person="Minh Le" data-work="Worked on reopening sources, embeddings and memory chunking." data-linkedin="https://www.linkedin.com/in/minhle7802" data-github="https://github.com/anonymousminh" data-email="anhminh7802@gmail.com"><img src="images/portrait-2.jpg" alt=""><span>Minh Le</span></button>
+        <button class="team-photo portrait three" data-person="Felipe Marin" data-work="Worked on voice, onboarding, product polish and tests." data-linkedin="https://www.linkedin.com/in/wilson-felipe-marin" data-github="https://github.com/felipemarin-16" data-email="felipe.marin.1697@gmail.com"><img src="images/portrait-3.jpg" alt=""><span>Felipe Marin</span></button>
+        <button class="team-photo portrait four" data-person="Kunj Rathod" data-work="Founder and team lead. Created the idea for FNDR and worked on the command surface, Screen Guide, skills and local models." data-linkedin="https://www.linkedin.com/in/rathodkunj" data-github="https://github.com/rathodkunj2005" data-email="kunj.rathod@utah.edu"><img src="images/portrait-4.jpg" alt=""><span>Kunj Rathod</span></button>
+      </div>
+    </main>
+    <dialog class="team-dialog" aria-labelledby="person-name" aria-describedby="person-work">
+      <div class="team-dialog-card">
+        <div class="team-dialog-front" aria-hidden="true"><img alt=""></div>
+        <div class="team-dialog-back">
+          <button class="team-dialog-close" type="button" aria-label="Close profile">×</button>
+          <span class="team-dialog-mark" aria-hidden="true">⌘</span>
+          <h2 id="person-name"></h2>
+          <div><p class="team-dialog-label">What they worked on</p><p id="person-work"></p></div>
+          <nav class="team-contact" aria-label="Contact"><a data-contact="linkedin">LinkedIn</a><a data-contact="github">GitHub</a><a data-contact="email">Email</a></nav>
+          <span class="team-dialog-foot">FNDR / the people behind it</span>
+        </div>
+      </div>
+    </dialog>
+    <footer class="site-footer"><div><a class="brand" href="index.html" aria-label="FNDR home"><span class="brand-mark" aria-hidden="true">⌘</span>FNDR</a><p>Good things are worth finding again.</p></div><div class="footer-links"><a href="index.html">Home</a><a href="https://github.com/anurupkumar18/FNDR">Source on GitHub</a></div><span class="footer-wordmark" aria-hidden="true">FNDR</span></footer>
+    <script src="team.js" defer></script>
+  </body>
+</html>

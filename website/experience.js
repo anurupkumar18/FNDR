@@ -64,13 +64,11 @@ function enableExperience() {
   enableDemo(signal);
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const finePointer = window.matchMedia("(pointer: fine)");
-  const toggle = document.querySelector("[data-motion-toggle]");
   const deck = document.querySelector("[data-deck]");
   const hero = document.querySelector(".hero");
   const dock = document.querySelector(".floating-dock");
   const scenes = [...document.querySelectorAll("[data-scroll-scene]")];
   const rail = document.querySelector("[data-memory-rail]");
-  let manualPause = false;
   let paused = reducedMotion.matches;
   let frame = 0;
   let lastTime = 0;
@@ -132,15 +130,8 @@ function enableExperience() {
   }
 
   function setMotion() {
-    paused = manualPause || reducedMotion.matches;
+    paused = reducedMotion.matches;
     document.body.dataset.motion = paused ? "paused" : "on";
-    if (toggle) {
-      toggle.hidden = false;
-      toggle.disabled = reducedMotion.matches;
-      toggle.setAttribute("aria-pressed", String(paused));
-      toggle.setAttribute("aria-label", reducedMotion.matches ? "Motion reduced by device settings" : paused ? "Resume motion" : "Pause motion");
-      toggle.firstElementChild.textContent = paused ? "▷" : "Ⅱ";
-    }
     if (paused) {
       Object.assign(tilt, { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 });
       deck?.style.setProperty("--deck-x", "0deg");
@@ -157,7 +148,6 @@ function enableExperience() {
     scrollDirty = true;
     schedule();
   }
-  toggle?.addEventListener("click", () => { manualPause = !manualPause; setMotion(); }, { signal });
   reducedMotion.addEventListener("change", setMotion, { signal });
   hero?.addEventListener("pointermove", (event) => {
     if (paused || !finePointer.matches) return;

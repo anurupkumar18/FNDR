@@ -37,10 +37,7 @@ try {
   await expect(card).toHaveAttribute("aria-pressed", "false");
   console.log("PASS: keyboard flip, pointer drag, spring return and drag/click separation");
 
-  await page.getByRole("button", { name: "Pause motion", exact: true }).click();
-  await expect(page.locator("body")).toHaveAttribute("data-motion", "paused");
-  assert.equal(await card.evaluate((node) => getComputedStyle(node).animationName), "none");
-  await page.getByRole("button", { name: "Resume motion", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Team", exact: true })).toHaveAttribute("href", "team.html");
   await page.locator("#how-it-works").scrollIntoViewIfNeeded();
   await expect(page.locator(".floating-dock")).toHaveClass(/is-visible/);
   const input = page.getByRole("searchbox", { name: "What do you remember?" });
@@ -60,7 +57,7 @@ try {
   await expect(page.locator("#privacy details").first()).toHaveAttribute("open", "");
   const remote = requests.filter((url) => !url.startsWith(new URL(base).origin));
   assert.deepEqual([...new Set(remote)], [releaseUrl]);
-  console.log("PASS: pause, dock, sample search, injection safety, carousel, disclosure and no demo egress");
+  console.log("PASS: team link, dock, sample search, injection safety, carousel, disclosure and no demo egress");
 
   const scrollPage = async (fraction) => {
     await page.evaluate((progress) => window.scrollTo({
@@ -103,7 +100,6 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(base);
   await expect(page.locator("body")).toHaveAttribute("data-motion", "paused");
-  await expect(page.locator("[data-motion-toggle]")).toBeDisabled();
   assert.equal(await card.evaluate((node) => getComputedStyle(node).animationName), "none");
   const reducedLeft = await scrollPage(.3);
   await scrollPage(1);
