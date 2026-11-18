@@ -13,8 +13,22 @@ try {
   const app = page.frameLocator(".tour-window iframe");
   await expect(app.getByRole("textbox", { name: "Search your memories" })).toBeVisible({ timeout: 20000 });
   await expect(app.getByText(/Good (Morning|Afternoon|Evening|Night), Visitor!/)).toBeVisible();
-  await expect(page.locator("[data-tour-status]")).toContainText("Tour complete", { timeout: 25000 });
-  await expect(app.getByRole("button", { name: "Close memory details" })).toBeVisible();
+  await expect(page.locator("[data-tour-status]")).toContainText("Search", { timeout: 25000 });
+  await page.getByRole("button", { name: "Pause tour" }).click();
+  const chapters = page.getByRole("combobox", { name: "Tutorial chapter" });
+  for (const [value, heading] of [
+    ["ask", "Search & Ask FNDR"], ["vault", "Memory Vault"], ["review", "FNDR Review"],
+    ["todos", "To-dos"], ["outputs", "Daily outputs"], ["stats", "Activity Stats"],
+    ["guide", "Screen Guide"], ["agent", "Agent"], ["activity", "Privacy activity"],
+    ["settings", "Settings"], ["capture", "Settings"], ["privacy", "Settings"],
+    ["voice", "Settings"], ["integrations", "Settings"],
+  ]) {
+    await chapters.selectOption(value);
+    await expect(app.getByRole("heading", { name: heading, exact: true })).toBeVisible({ timeout: 15000 });
+    const tab = { settings: "General", capture: "Capture", privacy: "Privacy", voice: "Voice", integrations: "AI" }[value];
+    if (tab) await expect(app.getByRole("tab", { name: tab, selected: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("[data-tour-status]")).not.toContainText("could not");
+  }
   await page.getByRole("button", { name: "Restart tour" }).click();
   await expect(app.getByRole("textbox", { name: "Search your memories" })).toBeVisible({ timeout: 20000 });
   await app.getByRole("textbox", { name: "Search your memories" }).click();
@@ -33,7 +47,7 @@ try {
   await expect(page.locator("[data-tour-status]")).toContainText("demo is ready");
   await expect(page.getByRole("button", { name: "Restart tour" })).toBeVisible();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  console.log("PASS: guided tour, interruption, interactive sample search and no external requests");
+  console.log("PASS: guided chapters, all app destinations, interruption, sample search and no external requests");
 } finally {
   await browser.close();
 }

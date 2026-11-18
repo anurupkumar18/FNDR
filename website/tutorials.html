@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#000000">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; frame-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=tutorial-2">
+    <link rel="stylesheet" href="styles.css?v=tutorial-3">
     <title>Tutorials | FNDR</title>
   </head>
   <body>
@@ -20,10 +20,21 @@
       <h1>See it work.</h1>
       <p class="tutorial-intro">Explore FNDR with sample memories, or follow the guided tour.</p>
       <section class="interactive-tour" aria-labelledby="tour-title">
-        <div class="tour-heading"><div><h2 id="tour-title">Try FNDR</h2><p>Everything here is sample data. No screen access or Mac actions.</p></div><button class="header-link" type="button" data-tour-toggle>Pause tour</button></div>
+        <div class="tour-heading"><div><h2 id="tour-title">Explore the app</h2><p>Follow the tour or take control at any time. This browser demo uses fictional data and cannot access your screen or perform Mac actions.</p></div></div>
+        <div class="tour-controls"><label>Jump to a chapter <select aria-label="Tutorial chapter" data-tour-chapter></select></label><div><button class="header-link" type="button" data-tour-previous>Previous</button><button class="header-link" type="button" data-tour-toggle>Pause tour</button><button class="header-link" type="button" data-tour-next>Next</button><button class="header-link" type="button" data-tour-restart>Restart tour</button></div></div>
         <p class="tour-status" data-tour-status role="status">Loading the demo…</p>
+        <p class="tour-description" data-tour-description></p>
         <div class="tour-window"><iframe src="demo/demo-preview.html?theme=light&amp;motion=off&amp;visitor=1" title="Interactive FNDR demo with sample data" sandbox="allow-scripts allow-same-origin"></iframe></div>
-        <p class="tour-note">Click inside to explore at your own pace. Refresh the demo with Restart tour.</p>
+        <p class="tour-note">Click inside the app to pause the tour and explore. Select a chapter to jump to a feature; Restart tour restores the sample demo.</p>
+      </section>
+      <section class="quick-guide" aria-labelledby="guide-title">
+        <div><p class="guide-kicker">THE SHORT VERSION</p><h2 id="guide-title">From setup to finding your way back.</h2><p>Start with the Mac app; use the interactive chapters above to see each destination.</p></div>
+        <div class="guide-grid">
+          <article><span>01 / SET UP</span><h3>Install &amp; choose what to capture</h3><p><a href="index.html#install">Download FNDR for Mac</a>, open the app and follow the permission prompts. Screen Recording permission lets FNDR capture context. In Settings, choose capture and privacy preferences; pause capture or exclude apps when needed.</p></article>
+          <article><span>02 / FIND</span><h3>Search what you remember</h3><p>On Home, search by a topic, app, person or phrase. Open a result for its context, or browse and filter memories in Memory Vault. Search &amp; Ask FNDR can answer questions using relevant memories and show their sources.</p></article>
+          <article><span>03 / REVIEW</span><h3>Return to your work</h3><p>Use FNDR Review for a view of recent activity, To-dos for tasks, and Daily outputs for a starting point for summaries. Stats shows activity patterns. These views help you orient yourself before picking work back up.</p></article>
+          <article><span>04 / CONTROL</span><h3>Explore with intention</h3><p>Settings covers capture, privacy, voice and AI. Privacy Activity shows privacy-related events. Screen Guide and Hermes Agent are experimental; integrations and actions require their own setup. The demo cannot exercise device permissions or real services.</p></article>
+        </div>
       </section>
       <section class="tutorial-gallery" aria-labelledby="gallery-title">
         <h2 id="gallery-title">A look inside FNDR</h2>
@@ -32,6 +43,6 @@
       </section>
     </main>
     <footer class="site-footer"><div><a class="brand" href="index.html" aria-label="FNDR home"><span class="brand-mark" aria-hidden="true">⌘</span>FNDR</a><p>Good things are worth finding again.</p></div><div class="footer-links"><a href="index.html">Home</a><a href="team.html">Team</a></div><span class="footer-wordmark" aria-hidden="true">FNDR</span></footer>
-    <script src="tutorial.js" defer></script>
+    <script src="tutorial.js?v=tutorial-3" defer></script>
   </body>
 </html>

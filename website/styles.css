@@ -48,10 +48,25 @@ button[hidden], [hidden] { display: none !important; }
 .tour-heading h2 { font-size: 26px; letter-spacing: -.04em; margin: 0; }
 .tour-heading p, .tour-note { color: var(--muted); font-size: 13px; }
 .tour-heading button { background: transparent; flex-shrink: 0; }
-.tour-status { min-height: 44px; margin: 20px 0 10px; color: var(--lilac); font-size: 14px; }
+.tour-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 15px; margin-top: 26px; }
+.tour-controls label { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
+.tour-controls select { min-height: 44px; min-width: 220px; padding: 0 12px; border: 1px solid #66546a; border-radius: 12px; background: #181219; color: var(--paper); }
+.tour-controls > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.tour-controls button { background: transparent; }
+.tour-status { margin: 25px 0 8px; color: var(--lilac); font-size: 15px; font-weight: 650; }
+.tour-description { color: var(--paper); line-height: 1.6; min-height: 48px; max-width: 850px; font-size: 14px; }
 .tour-window { overflow: hidden; border: 1px solid #66546a; border-radius: 16px; background: #171317; }
 .tour-window iframe { display: block; width: 100%; height: 820px; border: 0; background: #eee9e4; }
 .tour-note { margin-top: 14px; }
+.quick-guide { margin: 110px 0 0; padding-top: 45px; border-top: 1px solid #493d49; }
+.quick-guide h2 { font-size: clamp(32px, 4vw, 54px); letter-spacing: -.04em; max-width: 800px; margin: 12px 0; }
+.quick-guide > div > p, .guide-grid p { color: var(--muted); line-height: 1.7; }
+.guide-kicker, .guide-grid span { color: var(--lilac) !important; font-size: 11px; letter-spacing: .12em; }
+.guide-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin-top: 40px; }
+.guide-grid article { border-top: 1px solid #66546a; padding-top: 20px; }
+.guide-grid h3 { font-size: 19px; letter-spacing: -.03em; }
+.guide-grid p { font-size: 14px; }
+.guide-grid a { color: var(--lilac); }
 .tutorial-gallery h2 { font-size: 25px; letter-spacing: -.04em; margin: 25px 0 8px; }
 .tutorial-gallery > p { color: var(--muted); font-size: 14px; }
 .tutorial-gallery { margin-top: 70px; }
@@ -303,6 +318,7 @@ body[data-motion="paused"] *, body[data-motion="paused"] *::before, body[data-mo
   .tutorial-intro { margin-bottom: 40px; }
   .tutorial-gallery { margin-top: 70px; }
   .tutorial-images { grid-template-columns: 1fr; }
+  .guide-grid { grid-template-columns: 1fr; gap: 18px; }
   .team-hero { padding-inline: 5%; padding-bottom: 60px; }
   .team-deck { height: auto; margin-top: 45px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
   .team-photo, .team-photo.group, .team-photo.portrait { position: relative; inset: auto; width: 100%; height: auto; transform: none; }
