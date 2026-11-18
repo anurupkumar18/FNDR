@@ -49,10 +49,21 @@ button[hidden], [hidden] { display: none !important; }
 .tour-heading p, .tour-note { color: var(--muted); font-size: 13px; }
 .tour-heading button { background: transparent; flex-shrink: 0; }
 .tour-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 15px; margin-top: 26px; }
-.tour-controls label { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
-.tour-controls select { min-height: 44px; min-width: 220px; padding: 0 12px; border: 1px solid #66546a; border-radius: 12px; background: #181219; color: var(--paper); }
 .tour-controls > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .tour-controls button { background: transparent; }
+.chapter-picker, .chapter-picker:last-child { position: relative; z-index: 4; border: 0; }
+.chapter-picker summary { min-height: 48px; width: min(340px, 100%); padding: 0 8px 0 18px; border: 1px solid #66546a; border-radius: 100px; background: #211820; color: var(--paper); gap: 12px; font-size: 14px; transition: border-color .2s, background .2s; }
+.chapter-picker summary:hover, .chapter-picker[open] summary { background: #302431; border-color: #b48cb6; }
+.chapter-picker summary > span, .chapter-picker[open] summary > span { font-size: 14px; font-weight: 500; transform: none; }
+.chapter-picker .chapter-picker-label { color: var(--lilac); padding-right: 12px; border-right: 1px solid #725d71; }
+.chapter-picker .chapter-picker-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
+.chapter-picker summary svg { width: 32px; height: 32px; padding: 7px; flex: none; border-radius: 50%; color: #30202f; background: var(--lilac); transition: transform .25s var(--ease); }
+.chapter-picker[open] summary svg { transform: rotate(180deg); }
+.chapter-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(340px, calc(100vw - 40px)); max-height: min(380px, 50vh); overflow-y: auto; overscroll-behavior: contain; padding: 7px; border: 1px solid #66546a; border-radius: 20px; background: #211820; box-shadow: 0 20px 50px #000b; scrollbar-color: #806780 transparent; }
+.chapter-menu button { display: block; width: 100%; min-height: 44px; padding: 10px 14px; border-radius: 13px; color: var(--paper); text-align: left; font-size: 14px; }
+.chapter-menu button:hover, .chapter-menu button:focus-visible { background: #49364a; }
+.chapter-menu button[aria-current="step"] { background: var(--lilac); color: #30202f; font-weight: 650; }
+.chapter-menu button:focus-visible { outline-offset: -3px; }
 .tour-caption { width: min(900px, 100%); margin: 32px auto; padding: 24px clamp(24px, 4vw, 52px) 20px; border: 1px solid #f7e6f7; border-radius: 38px; background: var(--lilac); color: #30202f; text-align: center; box-shadow: 0 12px 40px #edc5ee14; }
 .tour-description { margin: 0; font-size: clamp(17px, 1.5vw, 21px); font-weight: 600; line-height: 1.45; letter-spacing: -.02em; text-align: center; }
 .tour-description:empty { display: none; }

@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#000000">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; frame-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=tutorial-4">
+    <link rel="stylesheet" href="styles.css?v=tutorial-5">
     <title>Tutorials | FNDR</title>
   </head>
   <body>
@@ -21,7 +21,7 @@
       <p class="tutorial-intro">Explore FNDR with sample memories, or follow the guided tour.</p>
       <section class="interactive-tour" aria-labelledby="tour-title">
         <div class="tour-heading"><div><h2 id="tour-title">Explore the app</h2><p>Follow the tour or take control at any time. This browser demo uses fictional data and cannot access your screen or perform Mac actions.</p></div></div>
-        <div class="tour-controls"><label>Jump to a chapter <select aria-label="Tutorial chapter" data-tour-chapter></select></label><div><button class="header-link" type="button" data-tour-previous>Previous</button><button class="header-link" type="button" data-tour-toggle>Pause tour</button><button class="header-link" type="button" data-tour-next>Next</button><button class="header-link" type="button" data-tour-restart>Restart tour</button></div></div>
+        <div class="tour-controls"><details class="chapter-picker"><summary role="button" aria-expanded="false" aria-controls="chapter-menu" aria-label="Choose tutorial chapter, current: Home"><span class="chapter-picker-label">Chapters</span><span class="chapter-picker-title" data-chapter-title>Home</span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 7.5 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></summary><div id="chapter-menu" class="chapter-menu" aria-label="Tutorial chapters" data-chapter-menu></div></details><div><button class="header-link" type="button" data-tour-previous>Previous</button><button class="header-link" type="button" data-tour-toggle>Pause tour</button><button class="header-link" type="button" data-tour-next>Next</button><button class="header-link" type="button" data-tour-restart>Restart tour</button></div></div>
         <div class="tour-caption"><p class="tour-description" data-tour-description></p><p class="tour-status" data-tour-status role="status">Loading the demo…</p></div>
         <div class="tour-window"><iframe src="demo/demo-preview.html?theme=light&amp;motion=off&amp;visitor=1" title="Interactive FNDR demo with sample data" sandbox="allow-scripts allow-same-origin"></iframe></div>
         <p class="tour-note">Click inside the app to pause the tour and explore. Select a chapter to jump to a feature; Restart tour restores the sample demo.</p>
@@ -42,6 +42,6 @@
       </section>
     </main>
     <footer class="site-footer"><div><a class="brand" href="index.html" aria-label="FNDR home"><span class="brand-mark" aria-hidden="true">⌘</span>FNDR</a><p>Good things are worth finding again.</p></div><div class="footer-links"><a href="index.html">Home</a><a href="team.html">Team</a></div><span class="footer-wordmark" aria-hidden="true">FNDR</span></footer>
-    <script src="tutorial.js?v=tutorial-4" defer></script>
+    <script src="tutorial.js?v=tutorial-5" defer></script>
   </body>
 </html>

@@ -1,7 +1,10 @@
 const frame = document.querySelector(".tour-window iframe");
 const status = document.querySelector("[data-tour-status]");
 const description = document.querySelector("[data-tour-description]");
-const chapterSelect = document.querySelector("[data-tour-chapter]");
+const picker = document.querySelector(".chapter-picker");
+const pickerButton = picker.querySelector("summary");
+const pickerTitle = document.querySelector("[data-chapter-title]");
+const chapterMenu = document.querySelector("[data-chapter-menu]");
 const toggle = document.querySelector("[data-tour-toggle]");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -26,7 +29,19 @@ const chapters = [
   { id: "voice", title: "Settings: Voice", target: "Trust & Settings", tab: "Voice", text: "Configure voice features in the Mac app. Microphone access and speech are not enabled in this browser demo." },
   { id: "integrations", title: "Settings: AI & integrations", target: "Trust & Settings", tab: "AI", text: "Review model and AI configuration. MCP connections, external services and actions must be configured separately; check their permissions before connecting." },
 ];
-for (const chapter of chapters) chapterSelect.add(new Option(chapter.title, chapter.id));
+for (const [chapterIndex, chapter] of chapters.entries()) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.chapterId = chapter.id;
+  button.textContent = chapter.title;
+  if (chapterIndex === 0) button.setAttribute("aria-current", "step");
+  button.addEventListener("click", () => {
+    picker.open = false;
+    choose(chapterIndex);
+    pickerButton.focus();
+  });
+  chapterMenu.append(button);
+}
 
 let index = 0;
 let running = false;
@@ -85,7 +100,12 @@ async function navigate(chapter, id) {
 async function showChapter(nextIndex, id) {
   index = nextIndex;
   const chapter = chapters[index];
-  chapterSelect.value = chapter.id;
+  pickerTitle.textContent = chapter.title;
+  pickerButton.setAttribute("aria-label", `Choose tutorial chapter, current: ${chapter.title}`);
+  for (const button of chapterMenu.querySelectorAll("button")) {
+    if (button.dataset.chapterId === chapter.id) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  }
   status.textContent = `${index + 1} / ${chapters.length} · ${chapter.title}`;
   description.textContent = chapter.text;
   if (!reducedMotion.matches) {
@@ -116,6 +136,7 @@ frame.addEventListener("load", () => {
   const doc = frame.contentDocument;
   if (!doc) { pause("The demo could not be loaded. Refresh the page to try again."); return; }
   for (const event of ["pointerdown", "keydown"]) doc.addEventListener(event, (input) => {
+    if (input.isTrusted && picker.open) picker.open = false;
     if (input.isTrusted && running) pause("Tour paused. Explore the demo at your own pace.");
   }, true);
   index = 0;
@@ -136,7 +157,28 @@ frame.addEventListener("load", () => {
 });
 
 toggle.addEventListener("click", () => running ? pause("Tour paused. Explore the demo at your own pace.") : void play());
-chapterSelect.addEventListener("change", () => choose(chapters.findIndex((chapter) => chapter.id === chapterSelect.value)));
+picker.addEventListener("toggle", () => {
+  pickerButton.setAttribute("aria-expanded", String(picker.open));
+  if (picker.open && running) pause("Tour paused. Choose a chapter or explore the demo.");
+});
+chapterMenu.addEventListener("keydown", (event) => {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const buttons = [...chapterMenu.querySelectorAll("button")];
+  const focused = buttons.indexOf(document.activeElement);
+  if (focused < 0) return;
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, focused + (event.key === "ArrowDown" ? 1 : -1)));
+  event.preventDefault();
+  buttons[next].focus();
+});
+document.addEventListener("pointerdown", (event) => {
+  if (picker.open && !picker.contains(event.target)) picker.open = false;
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && picker.open) {
+    picker.open = false;
+    pickerButton.focus();
+  }
+});
 document.querySelector("[data-tour-previous]").addEventListener("click", () => choose(index - 1));
 document.querySelector("[data-tour-next]").addEventListener("click", () => choose(index + 1));
 document.querySelector("[data-tour-restart]").addEventListener("click", () => {

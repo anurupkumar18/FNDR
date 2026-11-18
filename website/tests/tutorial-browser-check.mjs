@@ -15,8 +15,28 @@ try {
   await expect(app.getByText(/Good (Morning|Afternoon|Evening|Night), Visitor!/)).toBeVisible();
   await expect(page.locator("[data-tour-status]")).toContainText("Search", { timeout: 25000 });
   await page.getByRole("button", { name: "Pause tour" }).click();
-  const chapters = page.getByRole("combobox", { name: "Tutorial chapter" });
-  await chapters.selectOption("notch");
+  const picker = page.locator(".chapter-picker");
+  const pickerButton = page.getByRole("button", { name: /Choose tutorial chapter/ });
+  await expect(pickerButton).toHaveAttribute("aria-label", /Choose tutorial chapter/);
+  await pickerButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(picker).toHaveAttribute("open", "");
+  await expect(pickerButton).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(picker.locator("[data-chapter-id]").first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(picker.locator("[data-chapter-id]").nth(1)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(picker).not.toHaveAttribute("open");
+  await expect(pickerButton).toHaveAttribute("aria-expanded", "false");
+  await expect(pickerButton).toBeFocused();
+  const chooseChapter = async (id) => {
+    await pickerButton.click();
+    await picker.locator(`[data-chapter-id="${id}"]`).click();
+    await expect(picker).not.toHaveAttribute("open");
+    await expect(picker.locator(`[data-chapter-id="${id}"]`)).toHaveAttribute("aria-current", "step");
+  };
+  await chooseChapter("notch");
   const caption = page.locator(".tour-caption");
   await expect(caption.locator("[data-tour-description]")).toContainText("Notch Do");
   assert.equal(await caption.locator("[data-tour-description]").evaluate((element) => getComputedStyle(element).textAlign), "center");
@@ -30,7 +50,7 @@ try {
     ["settings", "Settings"], ["capture", "Settings"], ["privacy", "Settings"],
     ["voice", "Settings"], ["integrations", "Settings"],
   ]) {
-    await chapters.selectOption(value);
+    await chooseChapter(value);
     await expect(app.getByRole("heading", { name: heading, exact: true })).toBeVisible({ timeout: 15000 });
     const tab = { settings: "General", capture: "Capture", privacy: "Privacy", voice: "Voice", integrations: "AI" }[value];
     if (tab) await expect(app.getByRole("tab", { name: tab, selected: true })).toBeVisible({ timeout: 15000 });
@@ -53,7 +73,7 @@ try {
   await page.goto(new URL("tutorials.html", base).href);
   await expect(page.locator("[data-tour-status]")).toContainText("demo is ready");
   await expect(page.getByRole("button", { name: "Restart tour" })).toBeVisible();
-  await page.getByRole("combobox", { name: "Tutorial chapter" }).selectOption("notch");
+  await chooseChapter("notch");
   await expect(page.locator("[data-tour-description]")).toContainText("Notch Do");
   assert.equal(await page.locator("[data-tour-description]").evaluate((element) => element.getAnimations().length), 0, "reduced motion must disable the chapter transition");
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
