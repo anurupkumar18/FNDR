@@ -16,6 +16,13 @@ try {
   await expect(page.locator("[data-tour-status]")).toContainText("Search", { timeout: 25000 });
   await page.getByRole("button", { name: "Pause tour" }).click();
   const chapters = page.getByRole("combobox", { name: "Tutorial chapter" });
+  await chapters.selectOption("notch");
+  const caption = page.locator(".tour-caption");
+  await expect(caption.locator("[data-tour-description]")).toContainText("Notch Do");
+  assert.equal(await caption.locator("[data-tour-description]").evaluate((element) => getComputedStyle(element).textAlign), "center");
+  const captionBox = await caption.boundingBox();
+  const demoPosition = await page.locator(".tour-window").boundingBox();
+  assert.ok(Math.abs((captionBox.x + captionBox.width / 2) - (demoPosition.x + demoPosition.width / 2)) < 2, "chapter caption should be centered above the demo");
   for (const [value, heading] of [
     ["ask", "Search & Ask FNDR"], ["vault", "Memory Vault"], ["review", "FNDR Review"],
     ["todos", "To-dos"], ["outputs", "Daily outputs"], ["stats", "Activity Stats"],
@@ -46,6 +53,9 @@ try {
   await page.goto(new URL("tutorials.html", base).href);
   await expect(page.locator("[data-tour-status]")).toContainText("demo is ready");
   await expect(page.getByRole("button", { name: "Restart tour" })).toBeVisible();
+  await page.getByRole("combobox", { name: "Tutorial chapter" }).selectOption("notch");
+  await expect(page.locator("[data-tour-description]")).toContainText("Notch Do");
+  assert.equal(await page.locator("[data-tour-description]").evaluate((element) => element.getAnimations().length), 0, "reduced motion must disable the chapter transition");
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   console.log("PASS: guided chapters, all app destinations, interruption, sample search and no external requests");
 } finally {

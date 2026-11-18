@@ -53,15 +53,17 @@ button[hidden], [hidden] { display: none !important; }
 .tour-controls select { min-height: 44px; min-width: 220px; padding: 0 12px; border: 1px solid #66546a; border-radius: 12px; background: #181219; color: var(--paper); }
 .tour-controls > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .tour-controls button { background: transparent; }
-.tour-status { margin: 25px 0 8px; color: var(--lilac); font-size: 15px; font-weight: 650; }
-.tour-description { color: var(--paper); line-height: 1.6; min-height: 48px; max-width: 850px; font-size: 14px; }
+.tour-caption { width: min(900px, 100%); margin: 32px auto; padding: 24px clamp(24px, 4vw, 52px) 20px; border: 1px solid #f7e6f7; border-radius: 38px; background: var(--lilac); color: #30202f; text-align: center; box-shadow: 0 12px 40px #edc5ee14; }
+.tour-description { margin: 0; font-size: clamp(17px, 1.5vw, 21px); font-weight: 600; line-height: 1.45; letter-spacing: -.02em; text-align: center; }
+.tour-description:empty { display: none; }
+.tour-status { margin: 12px 0 0; color: #624c60; font-size: 13px; font-weight: 600; }
+.tour-description:empty + .tour-status { margin-top: 0; }
 .tour-window { overflow: hidden; border: 1px solid #66546a; border-radius: 16px; background: #171317; }
 .tour-window iframe { display: block; width: 100%; height: 820px; border: 0; background: #eee9e4; }
 .tour-note { margin-top: 14px; }
 .quick-guide { margin: 110px 0 0; padding-top: 45px; border-top: 1px solid #493d49; }
 .quick-guide h2 { font-size: clamp(32px, 4vw, 54px); letter-spacing: -.04em; max-width: 800px; margin: 12px 0; }
 .quick-guide > div > p, .guide-grid p { color: var(--muted); line-height: 1.7; }
-.guide-kicker, .guide-grid span { color: var(--lilac) !important; font-size: 11px; letter-spacing: .12em; }
 .guide-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin-top: 40px; }
 .guide-grid article { border-top: 1px solid #66546a; padding-top: 20px; }
 .guide-grid h3 { font-size: 19px; letter-spacing: -.03em; }
@@ -166,7 +168,6 @@ body[data-motion="on"] .card-slot.is-dragging { animation-play-state: paused; }
 .hero-bottom a { min-height: 44px; display: flex; align-items: center; gap: 20px; text-decoration: none; pointer-events: auto; }
 .hero-hint { text-align: right; }
 .chapter { padding: 30px 3% 90px; position: relative; }
-.chapter-label { position: relative; z-index: 2; display: flex; justify-content: space-between; gap: 20px; font-size: 12px; }
 .editorial { font-size: clamp(64px, 7.9vw, 130px); }
 .problem { min-height: 1050px; overflow: hidden; padding-top: 40px; }
 .problem .editorial { position: relative; z-index: 1; width: 83%; max-width: 1100px; text-align: right; margin: 130px 7% 75px auto; transform: translateY(var(--scene-lift, 0px)); }
@@ -224,7 +225,6 @@ body[data-motion="on"] .card-slot.is-dragging { animation-play-state: paused; }
 .story-paper { background: var(--paper); }
 .story-gold { background: var(--gold); }
 .story-symbol { font-size: 105px; line-height: 1; font-family: var(--display); }
-.story-card div > span { font-size: 12px; }
 .story-card h3 { font-size: clamp(29px,3.15vw,45px); line-height: 1.03; letter-spacing: -1.6px; margin: 10px 0 20px; }
 .story-card p { font-size: 14px; max-width: 290px; }
 .story-card small { font-size: 11px; border-top: 1px solid #27211e44; padding-top: 14px; margin-top: 25px; }
@@ -268,7 +268,6 @@ details > p { max-width: 670px; padding: 0 35px 23px 0; margin: 0; color: #b8b5b
 .release-details { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 11px; }
 .install-steps { display: grid; grid-template-columns: repeat(3,1fr); gap: 5%; list-style: none; text-align: left; padding: 0; margin: 0 auto 65px; }
 .install-steps li { border-top: 1px solid #59365355; padding-top: 16px; }
-.install-steps li > span { font-size: 12px; }
 .install-steps h3 { font-size: 26px; letter-spacing: -1px; margin: 30px 0 12px; }
 .install-steps p { max-width: 340px; font-size: 14px; }
 .gatekeeper-note { max-width: 900px; text-align: left; margin: auto; border-color: #59365355; }
@@ -353,7 +352,6 @@ body[data-motion="paused"] *, body[data-motion="paused"] *::before, body[data-mo
   .hero-bottom .hero-hint { display: none; }
   .hero-bottom a { gap: 8px; }
   .chapter { padding: 23px 5% 60px; }
-  .chapter-label { font-size: 10px; }
   .editorial { font-size: clamp(50px,12.5vw,83px); }
   .problem { min-height: 750px; }
   .problem .editorial { width: 100%; margin: 115px 0 60px; }

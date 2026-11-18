@@ -88,6 +88,10 @@ async function showChapter(nextIndex, id) {
   chapterSelect.value = chapter.id;
   status.textContent = `${index + 1} / ${chapters.length} · ${chapter.title}`;
   description.textContent = chapter.text;
+  if (!reducedMotion.matches) {
+    description.getAnimations().forEach((animation) => animation.cancel());
+    description.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }], { duration: 420, easing: "cubic-bezier(.22, 1, .36, 1)" });
+  }
   const success = await navigate(chapter, id);
   if (!success && id === generation) pause("The tour could not open this page. You can still explore the demo yourself.");
 }
